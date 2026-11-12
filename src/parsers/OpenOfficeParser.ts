@@ -2939,6 +2939,13 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
         }
         // ODP: Presentation
         else if (fileType === 'odp') {
+            /**
+             * The frame a notes page prints its slide number in (by `presentation:class`), which is not a note: as
+             * PPTX's notes page placeholder `sldNum`. LibreOffice writes the slide number's field as `<number>`, which
+             * was read as the last line of every slide's notes. The notes page's date, header and footer text stay in
+             * the notes, as they were.
+             */
+            const ODP_NOTES_FURNITURE: ReadonlySet<string> = new Set(['page-number']);
             const presentation = getFirstElementByTagName(body, "office:presentation");
             if (presentation) {
                 const pages = getDirectChildren(presentation, "draw:page");
@@ -2970,7 +2977,15 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                                                 noteId: `slide-note-${i + 1}`
                                             } as SlideMetadata
                                         };
-                                        traverse(element, noteNode.children!, false, xmlString);
+                                        // Child by child, leaving out the notes page's slide number (see
+                                        // ODP_NOTES_FURNITURE): the notes frame, other text frames and the slide's
+                                        // thumbnail are read as before.
+                                        for (const notesChild of Array.from(element.childNodes)) {
+                                            if (!isElement(notesChild)) continue;
+                                            const notesElement = notesChild as Element;
+                                            if (notesElement.tagName === 'draw:frame' && ODP_NOTES_FURNITURE.has(notesElement.getAttribute('presentation:class') ?? '')) continue;
+                                            traverse(notesElement, noteNode.children!, false, xmlString);
+                                        }
                                     }
                                     continue;
                                 }
@@ -2987,6 +3002,11 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                                 else placeOdpShape(element, slideNode.children!, xml, xmlString);
                             }
                         }
+                    }
+                    // A hidden slide (its page style's, or a parent's, presentation:visibility), read with
+                    // page geometry ignored too: it is what a slideshow and a printout leave out.
+                    if (styleProperty(xml, page.getAttribute("draw:style-name"), "style:drawing-page-properties", "presentation:visibility") === 'hidden') {
+                        (slideNode.metadata as SlideMetadata).hidden = true;
                     }
                     if (!config.ignorePageGeometry) {
                         const background = odpBackground(page, xml);

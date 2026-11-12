@@ -3236,7 +3236,8 @@ export interface SlideMetadata {
     /** The colour the slide is filled with (its own background, else its layout's or master's), `#RRGGBB`. */
     background?: string;
     /**
-     * The presentation hides the slide (PPTX `show="0"`). Its content is read as any slide's and
+     * The presentation hides the slide (PPTX `show="0"`, ODP `presentation:visibility="hidden"` in the
+     * page's style). Its content is read as any slide's and
      * `slideNumber` counts it; a slideshow and a printout leave it out, as PDF output does unless
      * `pdfConfig.printHidden` is set.
      */

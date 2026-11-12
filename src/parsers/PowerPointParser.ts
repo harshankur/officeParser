@@ -647,8 +647,8 @@ export const parsePowerPoint = async (buffer: Buffer, config: FullOfficeParserCo
     let placing: { layout?: TemplatePart; master?: TemplatePart; theme: Map<string, string> } | undefined;
     /** The theme's colours, under its colour maps, of the slide or master being read (empty elsewhere). */
     let partTheme = new Map<string, string>();
-    /** The placeholders a notes page prints around its notes (slide number, date, header, footer), which the notes pane does not show. */
-    const NOTES_PAGE_FURNITURE: ReadonlySet<string> = new Set(['sldNum', 'dt', 'hdr', 'ftr']);
+    /** The placeholder a notes page prints its slide number in, which is not a note (its date, header and footer text stay in the notes). */
+    const NOTES_PAGE_FURNITURE: ReadonlySet<string> = new Set(['sldNum']);
     /** The placeholder types whose shapes traverseSpTree skips in the part being read; undefined outside a notes page. */
     let skipPlaceholders: ReadonlySet<string> | undefined;
     /**

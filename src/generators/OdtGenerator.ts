@@ -397,8 +397,10 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
             case 'sheet': return this.sheet(node);
             case 'row': case 'cell': case 'text':
                 return `<text:p>${await this.renderInline([node])}</text:p>`;
-            case 'page': case 'slide': case 'drawing': case 'definitionList':
+            case 'page': case 'drawing': case 'definitionList':
                 return this.renderBlocks(node.children);
+            // (A slide's speaker notes after its content, see slideNotes.)
+            case 'slide': return (await this.renderBlocks(node.children)) + await this.slideNotes(node);
             // (Opened before any writer but HTML's and Markdown's sees it, see disclosures: its summary in bold, then its body.)
             case 'disclosure': return this.renderBlocks(openedDisclosure(node));
             // (A disclosure's summary is written by its disclosure; one standing alone is its blocks.)
@@ -410,6 +412,27 @@ export class OdtGenerator extends BaseGenerator<'odt'> {
                 return '';
             }
         }
+    }
+
+    /**
+     * A slide's speaker notes, after its content, as the HTML writer shows them: a block under a "Slide
+     * notes" title, set in from a grey rule. A document has no place of its own for them, and they were
+     * left out of ODT output with no warning.
+     */
+    private async slideNotes(slide: OfficeContentNode): Promise<string> {
+        let out = '';
+        const borderAttrs = ' fo:border-left="1.5pt solid #7F8C8D" fo:margin-left="0.14in" fo:padding-left="0.1in"';
+        for (const note of slide.notes ?? []) {
+            if (!note.children?.length && !note.text?.trim()) continue;
+            const prev = this.paraContextAttrs;
+            this.paraContextAttrs = borderAttrs;
+            let body: string;
+            try { body = await this.renderBlocks(this.bodyBlocks(note)); } finally { this.paraContextAttrs = prev; }
+            if (!body) continue;
+            const titleRun = this.activeStyles.intern('text', 'T', '<style:text-properties fo:font-weight="bold" style:font-weight-asian="bold" fo:color="#7F8C8D"/>');
+            out += `<text:p text:style-name="${this.internPara(borderAttrs)}"><text:span text:style-name="${titleRun}">Slide notes</text:span></text:p>` + body;
+        }
+        return out;
     }
 
     /** Body blocks of a note/comment: its children, or a synthesized paragraph from its `text`. */

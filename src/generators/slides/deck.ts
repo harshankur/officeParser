@@ -38,7 +38,11 @@ export type DeckItem =
     | { kind: 'table'; box: Box; rows: { cells: { paragraphs: DeckParagraph[]; colSpan: number; rowSpan: number; bold: boolean; fill?: string; col?: number }[] }[]; widths: number[]; heights?: number[] }
     | { kind: 'shape'; box: Box; shape: ShapeMetadata };
 
-export interface DeckSlide { items: DeckItem[]; background?: string; picture?: Uint8Array; notes?: DeckParagraph[] }
+export interface DeckSlide {
+    items: DeckItem[]; background?: string; picture?: Uint8Array; notes?: DeckParagraph[];
+    /** The presentation hides it (SlideMetadata.hidden): a slideshow skips it. */
+    hidden?: boolean;
+}
 export interface Deck { width: number; height: number; slides: DeckSlide[]; unrepresentable: Set<string> }
 
 /** At most this many slides are made. */
@@ -520,6 +524,7 @@ export async function buildDeck(content: OfficeContentNode[], metadata: OfficeMe
             const slide: DeckSlide = { items: [] };
             const background = (node.metadata as SlideMetadata | undefined)?.background;
             if (background) slide.background = background;
+            if ((node.metadata as SlideMetadata | undefined)?.hidden === true) slide.hidden = true;
             const picture = options.backgrounds?.[index];
             if (picture) slide.picture = picture;
             // A page's block in its place: its lines kept as the page broke and spaced them, a paragraph whose
@@ -964,6 +969,8 @@ async function flowDeck(content: OfficeContentNode[], metadata: OfficeMetadata, 
                     const last = slides[slides.length - 1];
                     if (last) last.notes = [...(last.notes ?? []), ...own];
                 }
+                // Each slide a hidden slide's content made is hidden.
+                if ((node.metadata as SlideMetadata | undefined)?.hidden === true) for (let i = before; i < slides.length; i++) slides[i].hidden = true;
                 continue;
             }
             if (depth < 16 && node.children?.length) await visit(node.children, depth + 1);

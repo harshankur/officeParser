@@ -10682,6 +10682,112 @@ async function testHiddenSlides(): Promise<void> {
 }
 
 /**
+ * DOCX and ODT output of a presentation write each slide's speaker notes after its content, under a "Slide
+ * notes" title, as the HTML writer shows them: they were left out, with no warning. Read back, every word of
+ * every slide's notes is there, after that slide's own text and before the next slide's.
+ */
+async function testSlideNotesInDocuments(): Promise<void> {
+    const words = (text: string) => text.split(/\s+/).map(w => w.replace(/[^\p{L}\p{N}]/gu, '')).filter(Boolean);
+    for (const deck of ['test.pptx', 'test.odp']) {
+        const ast = await OfficeParser.parseOffice(path.join(__dirname, 'files', deck), { onWarning: () => {} } as any) as OfficeParserAST;
+        const slides = ast.content.filter(n => n.type === 'slide');
+        const noted = slides.filter(s => s.notes?.length);
+        assert.ok(noted.length >= 3, `${deck} has slides with notes`);
+        const notesWords = noted.flatMap(s => words(s.notes!.map(note => collectAllNodes({ content: [note] } as any).filter(n => n.type === 'text').map(n => n.text).join(' ')).join(' ')));
+        for (const to of ['docx', 'odt'] as const) {
+            const written = Buffer.from((await ast.to(to)).value as unknown as Uint8Array);
+            const back = await OfficeParser.parseOffice(written, { fileType: to, onWarning: () => {} } as any) as OfficeParserAST;
+            const text = String((await back.to('text')).value);
+            const backWords = new Map<string, number>();
+            for (const w of words(text)) backWords.set(w, (backWords.get(w) ?? 0) + 1);
+            const missing = notesWords.filter(w => !backWords.has(w));
+            assert.deepStrictEqual(missing, [], `${deck} to ${to.toUpperCase()}: every word of the speaker notes is written`);
+            assert.strictEqual(text.split('Slide notes').length - 1, noted.length, `${deck} to ${to.toUpperCase()}: a "Slide notes" block for each slide with notes`);
+            // The first noted slide's notes follow its own text, and come before the next slide's.
+            const textOf = (nodes: OfficeContentNode[]) => collectAllNodes({ content: nodes } as any).filter(n => n.type === 'text').map(n => n.text).join(' ');
+            const firstNote = textOf(noted[0].notes!).trim();
+            const slideStart = words(textOf(noted[0].children ?? []))[0];
+            const nextStart = words(textOf(slides[slides.indexOf(noted[0]) + 1]?.children ?? []))[0];
+            const at = text.indexOf('Slide notes');
+            const noteAt = text.indexOf(firstNote, at + 11);
+            assert.ok(text.indexOf(slideStart) < at && noteAt > at && (!nextStart || text.indexOf(nextStart, noteAt) > noteAt),
+                `${deck} to ${to.toUpperCase()}: the notes come after their slide's text and before the next slide's`);
+        }
+    }
+}
+
+/**
+ * ODP marks a hidden slide too (its page style's `presentation:visibility="hidden"`, as LibreOffice writes
+ * it, or a parent style's), and PPTX and ODP output keep a slide hidden: a deck written again shows the
+ * slides it showed. The PDF of an ODP leaves its hidden slide out unless `printHidden`, and a link to a
+ * hidden slide is drawn without an error.
+ */
+async function testHiddenSlidesOdpAndRoundTrip(): Promise<void> {
+    const NS = 'xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" '
+        + 'xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0" xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0" '
+        + 'xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0" '
+        + 'xmlns:presentation="urn:oasis:names:tc:opendocument:xmlns:presentation:1.0"';
+    const page = (style: string | undefined, word: string) => `<draw:page draw:name="${word}"${style ? ` draw:style-name="${style}"` : ''}>`
+        + `<draw:frame svg:x="1cm" svg:y="1cm" svg:width="20cm" svg:height="3cm"><draw:text-box><text:p>${word}</text:p></draw:text-box></draw:frame></draw:page>`;
+    const odp = Buffer.from(zipSync({
+        mimetype: strToU8('application/vnd.oasis.opendocument.presentation'),
+        'styles.xml': strToU8(`<?xml version="1.0"?><office:document-styles ${NS}><office:styles><style:style style:name="HiddenParent" style:family="drawing-page"><style:drawing-page-properties presentation:visibility="hidden"/></style:style></office:styles></office:document-styles>`),
+        'content.xml': strToU8(`<?xml version="1.0"?><office:document-content ${NS}><office:automatic-styles>`
+            + '<style:style style:name="dp1" style:family="drawing-page"><style:drawing-page-properties presentation:background-visible="true" presentation:background-objects-visible="true"/></style:style>'
+            + '<style:style style:name="dp3" style:family="drawing-page"><style:drawing-page-properties presentation:background-visible="true" presentation:background-objects-visible="true" presentation:visibility="hidden"/></style:style>'
+            + '<style:style style:name="dp4" style:family="drawing-page" style:parent-style-name="HiddenParent"><style:drawing-page-properties presentation:background-visible="true"/></style:style>'
+            + `</office:automatic-styles><office:body><office:presentation>${page('dp1', 'SHOWNONE')}${page('dp3', 'HIDDENTWO')}${page(undefined, 'SHOWNTHREE')}${page('dp4', 'HIDDENFOUR')}</office:presentation></office:body></office:document-content>`),
+    }));
+    const words = ['SHOWNONE', 'HIDDENTWO', 'SHOWNTHREE', 'HIDDENFOUR'];
+    const marks = [undefined, true, undefined, true];
+    const shape = (ast: OfficeParserAST) => ast.content.filter(n => n.type === 'slide').map(s => [words.find(w => JSON.stringify(s).includes(w)), (s.metadata as any).hidden]);
+    const expected = words.map((w, i) => [w, marks[i]]);
+    for (const ignorePageGeometry of [false, true]) {
+        const read = await OfficeParser.parseOffice(odp, { fileType: 'odp', ignorePageGeometry } as any) as OfficeParserAST;
+        assert.deepStrictEqual(shape(read), expected, `ODP (ignorePageGeometry ${ignorePageGeometry}): a page style's visibility, or its parent's, marks the slide hidden`);
+    }
+    const fromOdp = await OfficeParser.parseOffice(odp, { fileType: 'odp' } as any) as OfficeParserAST;
+
+    // A PPTX deck of the same slides.
+    const P = 'xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"';
+    const rel = (id: string, type: string, target: string) => `<Relationship Id="${id}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/${type}" Target="${target}"/>`;
+    const rels = (...items: string[]) => strToU8(`<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${items.join('')}</Relationships>`);
+    const run = (text: string, link = '') => `<a:r><a:rPr lang="en-US">${link}</a:rPr><a:t>${text}</a:t></a:r>`;
+    const tree = (runs: string) => `<p:cSld><p:spTree><p:sp><p:nvSpPr><p:cNvPr id="2" name="Text"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr/><p:txBody><a:bodyPr/><a:p>${runs}</a:p></p:txBody></p:sp></p:spTree></p:cSld>`;
+    const pptx = Buffer.from(zipSync({
+        '[Content_Types].xml': strToU8('<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>'),
+        'ppt/presentation.xml': strToU8(`<?xml version="1.0"?><p:presentation ${P}><p:sldIdLst>${words.map((_, i) => `<p:sldId id="${256 + i}" r:id="rId${i + 1}"/>`).join('')}</p:sldIdLst></p:presentation>`),
+        'ppt/_rels/presentation.xml.rels': rels(...words.map((_, i) => rel(`rId${i + 1}`, 'slide', `slides/slide${i + 1}.xml`))),
+        ...Object.fromEntries(words.flatMap((word, i) => [
+            // Slide 1 links to hidden slide 2.
+            [`ppt/slides/slide${i + 1}.xml`, strToU8(`<?xml version="1.0"?><p:sld ${P}${marks[i] ? ' show="0"' : ''}>${tree(run(word) + (i === 0 ? run(' to two', '<a:hlinkClick r:id="rId7" action="ppaction://hlinksldjump"/>') : ''))}</p:sld>`)],
+            [`ppt/slides/_rels/slide${i + 1}.xml.rels`, rels(...(i === 0 ? [rel('rId7', 'slide', 'slide2.xml')] : []))],
+        ])),
+    }));
+    const fromPptx = await OfficeParser.parseOffice(pptx, { fileType: 'pptx' } as any) as OfficeParserAST;
+    assert.deepStrictEqual(shape(fromPptx), expected, 'PPTX: show="0" marks the slides hidden');
+
+    // Written as PPTX or ODP and read back: the same slides, hidden as they were, with their text.
+    for (const [from, ast] of [['PPTX', fromPptx], ['ODP', fromOdp]] as const) {
+        for (const to of ['pptx', 'odp'] as const) {
+            const written = Buffer.from((await ast.to(to)).value as unknown as Uint8Array);
+            const back = await OfficeParser.parseOffice(written, { fileType: to } as any) as OfficeParserAST;
+            assert.deepStrictEqual(shape(back), expected, `${from} to ${to.toUpperCase()}: every slide's text and its hidden mark are kept`);
+        }
+    }
+
+    const printed = async (ast: OfficeParserAST, printHidden: boolean) => {
+        const pdf = (await ast.to('pdf', { pdfConfig: { engine: 'native', printHidden } } as any)).value as Uint8Array;
+        const back = await OfficeParser.parseOffice(Buffer.from(pdf), { fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST;
+        const text = String((await back.to('text')).value);
+        return words.filter(w => text.includes(w));
+    };
+    assert.deepStrictEqual(await printed(fromOdp, false), ['SHOWNONE', 'SHOWNTHREE'], 'the PDF of an ODP leaves its hidden slides out');
+    assert.deepStrictEqual(await printed(fromOdp, true), words, 'printHidden prints them');
+    assert.deepStrictEqual(await printed(fromPptx, false), ['SHOWNONE', 'SHOWNTHREE'], 'a link to a hidden slide is drawn without an error, and the hidden slide is left out');
+}
+
+/**
  * A CSV file's delimiter is read from it by default: European spreadsheets write `;` with decimal commas,
  * which a comma split (`Müller;1.234,56` came out as `Müller;1.234 | 56`). An explicit one is used as
  * given, CSV output keeps the one read, and a byte order mark is no text of the first cell.
@@ -15677,6 +15783,8 @@ async function runTests(): Promise<void> {
         ['CSV delimiter detection', testCsvDelimiterDetection],
         ['Hidden sheet content', testHiddenSheetContent],
         ['Hidden slides', testHiddenSlides],
+        ['Hidden slides in ODP and written again', testHiddenSlidesOdpAndRoundTrip],
+        ['Slide notes in DOCX and ODT', testSlideNotesInDocuments],
         ['Speaker notes in PDF', testSpeakerNotesInPdf],
         ['Native PDF GIF and BMP', testNativePdfGifAndBmp],
         ['XLSX shown text', testXlsxShownText],

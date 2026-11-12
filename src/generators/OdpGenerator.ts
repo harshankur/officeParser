@@ -148,8 +148,12 @@ export class OdpGenerator extends BaseGenerator<'odp'> {
             const href = this.mediaFor(`background:${index}`, slide.picture, undefined);
             if (href) under = `<draw:frame svg:x="0pt" svg:y="0pt" svg:width="${pt(width)}" svg:height="${pt(height)}"><draw:image xlink:href="${xmlText(href)}" xlink:type="simple" xlink:show="embed" xlink:actuate="onLoad"/></draw:frame>`;
             else this.warn(OfficeWarningType.IMAGE_PROCESSING_FAILED, { reason: `ODP output does not take ${picturesOfKind(pictureKindOf(slide.picture))} as a slide's background (it takes PNG, JPEG, GIF, BMP, TIFF, EMF, WMF and SVG)` });
-        } else if (slide.background && hexColor(slide.background)) {
-            pageStyle = this.styleNamed(`dp|${hexColor(slide.background)}`, 'dp', name => `<style:style style:name="${name}" style:family="drawing-page"><style:drawing-page-properties draw:fill="solid" draw:fill-color="#${hexColor(slide.background)}" draw:background-size="border"/></style:style>`);
+        }
+        // The page's style: its colour (where no picture is under it), and whether the presentation hides it.
+        const fill = !slide.picture && slide.background ? hexColor(slide.background) : undefined;
+        if (fill || slide.hidden) {
+            const properties = (fill ? ` draw:fill="solid" draw:fill-color="#${fill}" draw:background-size="border"` : '') + (slide.hidden ? ' presentation:visibility="hidden"' : '');
+            pageStyle = this.styleNamed(`dp|${fill ?? ''}|${slide.hidden ? 'hidden' : ''}`, 'dp', name => `<style:style style:name="${name}" style:family="drawing-page"><style:drawing-page-properties${properties}/></style:style>`);
         }
         const items = slide.items.map(item => this.itemXml(item)).join('');
         const notes = slide.notes?.length ? `<presentation:notes><draw:frame svg:x="2cm" svg:y="14cm" svg:width="17cm" svg:height="10cm" presentation:class="notes"><draw:text-box>${slide.notes.map(p => this.paragraphXml(p)).join('')}</draw:text-box></draw:frame></presentation:notes>` : '';

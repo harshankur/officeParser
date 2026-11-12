@@ -288,8 +288,10 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
             case 'sheet': return this.sheet(node);
             case 'row': case 'cell': case 'text': // stray inline/table-part at block level: wrap
                 return this.wrapP(await this.renderInline([node]));
-            case 'page': case 'slide': case 'drawing': case 'definitionList':
+            case 'page': case 'drawing': case 'definitionList':
                 return this.renderBlocks(node.children); // containers: flatten (page/slide breaks handled by caller sequence)
+            // (A slide's speaker notes after its content, see slideNotes.)
+            case 'slide': return (await this.renderBlocks(node.children)) + await this.slideNotes(node);
             // (Opened before any writer but HTML's and Markdown's sees it, see disclosures: its summary in bold, then its body.)
             case 'disclosure': return this.renderBlocks(openedDisclosure(node));
             // (A disclosure's summary is written by its disclosure; one standing alone is its blocks.)
@@ -302,6 +304,24 @@ export class DocxGenerator extends BaseGenerator<'docx'> {
                 return '';
             }
         }
+    }
+
+    /**
+     * A slide's speaker notes, after its content, as the HTML writer shows them: a block under a "Slide
+     * notes" title, set in from a grey rule. A document has no place of its own for them, and they were
+     * left out of DOCX output with no warning.
+     */
+    private async slideNotes(slide: OfficeContentNode): Promise<string> {
+        let out = '';
+        const border = `<w:pBdr><w:left w:val="single" w:sz="12" w:space="4" w:color="${SLIDE_NOTES_COLOR}"/></w:pBdr>`;
+        for (const note of slide.notes ?? []) {
+            if (!note.children?.length && !note.text?.trim()) continue;
+            const body = await this.renderBlocks(this.bodyBlocks(note));
+            if (!body) continue;
+            out += `<w:p><w:pPr>${border}<w:ind w:left="360"/></w:pPr><w:r><w:rPr><w:b/><w:color w:val="${SLIDE_NOTES_COLOR}"/></w:rPr><w:t xml:space="preserve">Slide notes</w:t></w:r></w:p>`
+                + withParagraphProperties(body, { border, indentLeft: 360 });
+        }
+        return out;
     }
 
     /** Body blocks of a note/comment: its children, or a synthesized paragraph from its `text`. */
@@ -1342,6 +1362,9 @@ function withSectionEnd(out: string, from: number, sectPr: string): string | und
     const at = change >= 0 ? propsAt + change : close;
     return `${out.slice(0, at)}${sectPr}${out.slice(at)}`;
 }
+
+/** The grey of a slide's speaker notes' rule and title (see slideNotes). */
+const SLIDE_NOTES_COLOR = '7F8C8D';
 
 /**
  * Gives every paragraph of `body` a style where it has none, a border where it has none, or `indentLeft`

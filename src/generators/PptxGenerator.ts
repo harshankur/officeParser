@@ -192,7 +192,7 @@ export class PptxGenerator extends BaseGenerator<'pptx'> {
             bg = `<p:bg><p:bgPr><a:solidFill><a:srgbClr val="${hexColor(slide.background)}"/></a:solidFill><a:effectLst/></p:bgPr></p:bg>`;
         }
         const items = slide.items.map(item => this.itemXml(item, next, rel)).join('');
-        return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<p:sld ${NS}><p:cSld>${bg}<p:spTree>${GROUP}${items}</p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:sld>`;
+        return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<p:sld ${NS}${slide.hidden ? ' show="0"' : ''}><p:cSld>${bg}<p:spTree>${GROUP}${items}</p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:sld>`;
     }
 
     private xfrm(box: Box, rotation?: number, flipH?: boolean, flipV?: boolean, tag = 'a:xfrm'): string {

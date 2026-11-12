@@ -2867,8 +2867,8 @@ async function testPowerPointNonSlideParts(): Promise<FeatureTest[]> {
 
 /**
  * A notes page holds its notes (the `body` placeholder) and what PowerPoint prints around them: the
- * slide number, and the date, header and footer when they are switched on. A slide's notes hold
- * what the notes pane shows, and the slide keeps its own slide number.
+ * slide number, and the date, header and footer when they are switched on. A slide's notes hold the notes
+ * and the page's header, footer and date text, not its slide number (#137), and the slide keeps its own slide number.
  */
 async function testPowerPointNotesFurniture(): Promise<FeatureTest[]> {
     const results: FeatureTest[] = [];
@@ -2919,13 +2919,13 @@ async function testPowerPointNotesFurniture(): Promise<FeatureTest[]> {
         const slides = ast.content.filter((node: any) => node.type === 'slide');
         const notesText = (slide: any) => (slide?.notes ?? []).flatMap((note: any) => note.children.map((p: any) => p.text));
         const first = notesText(slides[0]);
-        const expected = ['Multi', 'Line', 'Notes', 'Extra box'];
-        record('Notes hold the notes pane text and other boxes, not the slide number, date, header or footer', expected, first,
-            JSON.stringify(first) === JSON.stringify(expected), 'A notes page\'s sldNum, dt, hdr and ftr placeholders are not notes', Date.now() - startTime);
+        const expected = ['Multi', 'Line', 'Notes', 'Header text', 'Date text', 'Footer text', 'Extra box'];
+        record('Notes hold the notes text, the header, date and footer text and other boxes, in page order, not the slide number', expected, first,
+            JSON.stringify(first) === JSON.stringify(expected) && !first.includes('1'), 'A notes page\'s sldNum placeholder is not a note; its hdr, dt and ftr text is', Date.now() - startTime);
 
         const slideText = (slides[0]?.children ?? []).map((node: any) => node.text);
         record('A slide keeps its own slide number', ['Slide body', '1'], slideText,
-            JSON.stringify(slideText) === JSON.stringify(['Slide body', '1']), 'Only notes pages drop their furniture');
+            JSON.stringify(slideText) === JSON.stringify(['Slide body', '1']), 'Only notes pages drop their slide number');
 
         record('A notes page holding only its slide number gives no notes, and its empty slide no node', 1, slides.length,
             slides.length === 1, `Slides: ${JSON.stringify(slides.map(notesText))}`);
@@ -2935,6 +2935,65 @@ async function testPowerPointNotesFurniture(): Promise<FeatureTest[]> {
         record('ignoreNotes still reads no notes', 0, ignoredNotes, ignoredNotes === 0, 'Notes pages are not read under ignoreNotes');
     } catch (err: any) {
         record('Notes pages with furniture placeholders parse', 'Parsed AST', `${err.name}: ${err.message}`, false,
+            `Threw instead of parsing: ${err.message}`, Date.now() - startTime);
+    }
+
+    return results;
+}
+
+/**
+ * An ODP notes page holds its notes (the `notes` frame) and what it prints around them: frames of
+ * `presentation:class` `page-number` (LibreOffice writes its field as `<number>`), `date-time`, `header`
+ * and `footer`. A slide's notes hold the notes, the page's date, header and footer text and any other frame
+ * added to the page, not its slide number (#137).
+ */
+async function testOdpNotesFurniture(): Promise<FeatureTest[]> {
+    const results: FeatureTest[] = [];
+    const record = (feature: string, expected: any, actual: any, condition: boolean, details: string, duration = 0): void => {
+        results.push({
+            category: 'ODP Notes Furniture',
+            feature,
+            fileType: 'odp',
+            result: { status: condition ? 'PASS' : 'FAIL', expected, actual, details, duration }
+        });
+    };
+
+    const fflate = require('fflate');
+    const NS = 'xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" '
+        + 'xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0" xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0" '
+        + 'xmlns:presentation="urn:oasis:names:tc:opendocument:xmlns:presentation:1.0"';
+    const frame = (cls: string | undefined, body: string) =>
+        `<draw:frame${cls ? ` presentation:class="${cls}"` : ''} svg:x="1cm" svg:y="1cm" svg:width="10cm" svg:height="2cm"><draw:text-box>${body}</draw:text-box></draw:frame>`;
+    const paragraphs = (...lines: string[]) => lines.map(line => `<text:p>${line}</text:p>`).join('');
+    const pageNumber = frame('page-number', '<text:p><text:page-number>&lt;number&gt;</text:page-number></text:p>');
+    const pages = [
+        `<draw:page draw:name="S1">${frame('title', paragraphs('Slide title'))}`
+        + `<presentation:notes><draw:page-thumbnail presentation:class="page"/>${frame('notes', paragraphs('Multi', 'Line', 'Notes'))}`
+        + `${frame('header', paragraphs('Header text'))}${frame('date-time', paragraphs('Date text'))}${frame('footer', paragraphs('Footer text'))}${pageNumber}`
+        + `${frame(undefined, paragraphs('Extra box'))}</presentation:notes></draw:page>`,
+        `<draw:page draw:name="S2">${frame('title', paragraphs('Second slide'))}<presentation:notes>${pageNumber}</presentation:notes></draw:page>`,
+    ];
+    const odp = Buffer.from(fflate.zipSync({
+        mimetype: fflate.strToU8('application/vnd.oasis.opendocument.presentation'),
+        'content.xml': fflate.strToU8(`<?xml version="1.0"?><office:document-content ${NS}><office:body><office:presentation>${pages.join('')}</office:presentation></office:body></office:document-content>`),
+    }));
+
+    const startTime = Date.now();
+    try {
+        const ast: any = await OfficeParser.parseOffice(odp, { fileType: 'odp', ignoreNotes: false });
+        const slides = ast.content.filter((node: any) => node.type === 'slide');
+        const notesText = (slide: any) => (slide?.notes ?? []).flatMap((note: any) => note.children.map((p: any) => p.text));
+        const first = notesText(slides[0]);
+        const expected = ['Multi', 'Line', 'Notes', 'Header text', 'Date text', 'Footer text', 'Extra box'];
+        record('Notes hold the notes, the header, date and footer text and other frames, in page order, not the slide number', expected, first,
+            JSON.stringify(first) === JSON.stringify(expected) && !first.some((text: string) => /number/.test(text)), 'A notes page\'s page-number frame is not a note; its header, date-time and footer frames are', Date.now() - startTime);
+        const second = notesText(slides[1]);
+        record('A notes page holding only its slide number gives no notes', [], second, second.length === 0 && !slides[1]?.notes, `Notes: ${JSON.stringify(second)}`);
+        const slideText = slides.map((slide: any) => (slide.children ?? []).map((node: any) => node.text).join(' '));
+        record('A slide keeps its own content', ['Slide title', 'Second slide'], slideText,
+            JSON.stringify(slideText) === JSON.stringify(['Slide title', 'Second slide']), 'Only notes pages drop their slide number');
+    } catch (err: any) {
+        record('Notes pages with furniture frames parse', 'Parsed AST', `${err.name}: ${err.message}`, false,
             `Threw instead of parsing: ${err.message}`, Date.now() - startTime);
     }
 
@@ -4604,6 +4663,7 @@ async function runAllTests() {
     allResults.push(...await testPowerPointNonSlideParts());
     console.log('Running PowerPoint notes furniture tests...');
     allResults.push(...await testPowerPointNotesFurniture());
+    allResults.push(...await testOdpNotesFurniture());
 
     // 8. ZIP type detection for archives that defeat magic-byte sniffing
     console.log('Running ZIP type detection tests...');

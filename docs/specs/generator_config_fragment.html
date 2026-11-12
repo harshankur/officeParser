@@ -638,7 +638,8 @@ await ast.to('md', {
         <code>Uint8Array</code>. Adds no dependencies (built on the bundled <code>fflate</code>), runs identically in
         Node and the browser, and produces reproducible bytes (honoring <code>metadataOverrides.modified</code>).
         Reproduces headings, styled runs, tables with merged cells, nested lists, images, hyperlinks,
-        footnotes/endnotes, comments, headers/footers and metadata.</p>
+        footnotes/endnotes, comments, headers/footers and metadata. A presentation's speaker notes follow each slide's
+        content, under a "Slide notes" title, as HTML output shows them.</p>
     <table>
         <thead>
             <tr>
@@ -680,7 +681,8 @@ await ast.to('md', {
         <code>Uint8Array</code>. Adds no dependencies (built on the bundled <code>fflate</code>), runs identically in
         Node and the browser, and produces reproducible bytes. It is the round-trip partner of the ODF parser:
         headings, styled runs, tables with merged cells, nested lists, images, hyperlinks, footnotes,
-        comments and headers/footers all re-parse. Formatting lives in ODF automatic styles.</p>
+        comments and headers/footers all re-parse. Formatting lives in ODF automatic styles. A presentation's speaker
+        notes follow each slide's content, under a "Slide notes" title, as HTML output shows them.</p>
     <table>
         <thead>
             <tr>
@@ -806,8 +808,8 @@ await ast.to('md', {
     <ul>
         <li><strong>A presentation</strong> (PPTX, ODP) is written slide for slide at its slide size: each text box, shape
             (its outline, fill, line, turn and mirroring, with the text in it), picture and table in its place
-            (<code>bounds</code>), the slide's background colour, and its speaker notes on the slide's notes page. A chart
-            is a table of its data in the chart's place.</li>
+            (<code>bounds</code>), the slide's background colour, and its speaker notes on the slide's notes page; a hidden
+            slide stays hidden. A chart is a table of its data in the chart's place.</li>
         <li><strong>A PDF</strong> becomes a slide for each page, at the pages' most common size (a page of another size is
             scaled into it, centred). Each paragraph is a text box where the page set it, its lines broken and spaced as on the page
             (each line on the baseline the page drew it on, where the runs' <code>bounds.baseline</code> give it),

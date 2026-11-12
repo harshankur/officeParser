@@ -958,9 +958,11 @@ change deleted or moved away (DOCX, ODT) is not read; insertions are.
 A PPTX's slides are read in the order its slide list (`p:sldIdLst`) shows them, not the order of their
 file names, and `slideNumber` is a slide's place in that order. Each slide has the notes page its own
 relationships name. A slide part the list no longer names (a deleted slide an editor left in the
-package) is not read. A hidden slide (`show="0"`) is read like any other and marked with
-`SlideMetadata.hidden`. It keeps its `slideNumber`, and PDF output leaves it out unless
-`pdfConfig.printHidden` is set. A slide list or presentation relationships that are not XML leave the slides in
+package) is not read. A hidden slide (PPTX `show="0"`, ODP `presentation:visibility="hidden"`) is read
+like any other and marked with `SlideMetadata.hidden`, and PPTX and ODP output keep it hidden. It keeps
+its `slideNumber`, and PDF output leaves it out unless `pdfConfig.printHidden` is set. A notes page's slide
+number (PPTX's `sldNum` placeholder, ODP's `page-number` frame) is what it prints beside the notes, not a
+note, and is not read; its date, header and footer text is read at the end of the notes, as before. A slide list or presentation relationships that are not XML leave the slides in
 the order of their file numbers, and relationships of a notes page or a slide master that are not XML
 leave its links and pictures unresolved; each is reported with a `CONTENT_PART_NOT_READ` warning.
 
@@ -1834,7 +1836,7 @@ Each font is the bytes of a TrueType, OpenType, WOFF or WOFF2 file (a web font, 
 
 ### DocxGeneratorConfig
 
-Pass as `docxConfig` inside `GeneratorConfig`. The DOCX generator writes a real WordprocessingML package (`.docx`) with zero extra dependencies, so it runs identically in Node and the browser and returns a `Uint8Array`. It reproduces headings, styled runs, tables (including merged cells), lists, images, hyperlinks, footnotes/endnotes, comments, headers/footers and metadata from any parsed source.
+Pass as `docxConfig` inside `GeneratorConfig`. The DOCX generator writes a real WordprocessingML package (`.docx`) with zero extra dependencies, so it runs identically in Node and the browser and returns a `Uint8Array`. It reproduces headings, styled runs, tables (including merged cells), lists, images, hyperlinks, footnotes/endnotes, comments, headers/footers and metadata from any parsed source. A presentation's speaker notes follow each slide's content, under a "Slide notes" title, as HTML output shows them.
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
@@ -1855,7 +1857,7 @@ writeFileSync('report.docx', value); // value is a Uint8Array
 
 ### OdtGeneratorConfig
 
-Pass as `odtConfig` inside `GeneratorConfig`. The ODT generator writes a real OpenDocument Text package (`.odt`) with zero extra dependencies, so it runs identically in Node and the browser and returns a `Uint8Array`. It is the round-trip partner of the ODF parser: headings, styled runs, tables (including merged cells), nested lists, images, hyperlinks, footnotes, comments and headers/footers all re-parse. Formatting is carried in ODF automatic styles, and the package is reproducible (pinned zip mtimes, deterministic style/id names).
+Pass as `odtConfig` inside `GeneratorConfig`. The ODT generator writes a real OpenDocument Text package (`.odt`) with zero extra dependencies, so it runs identically in Node and the browser and returns a `Uint8Array`. It is the round-trip partner of the ODF parser: headings, styled runs, tables (including merged cells), nested lists, images, hyperlinks, footnotes, comments and headers/footers all re-parse. A presentation's speaker notes follow each slide's content, under a "Slide notes" title, as HTML output shows them. Formatting is carried in ODF automatic styles, and the package is reproducible (pinned zip mtimes, deterministic style/id names).
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
@@ -1913,7 +1915,7 @@ writeFileSync('data.ods', value); // value is a Uint8Array
 
 Pass as `pptxConfig` inside `GeneratorConfig`. The PPTX generator writes a PowerPoint presentation (`.pptx`) with zero extra dependencies, so it runs identically in Node and the browser and returns a `Uint8Array`. What the slides hold depends on the source:
 
-- **A presentation** (PPTX, ODP) is written slide for slide at its slide size: each text box, shape (its outline, fill, line, turn and mirroring, with the text in it), picture and table in its place (`bounds`), the slide's background colour, and its speaker notes on the slide's notes page. A chart is a table of its data in the chart's place.
+- **A presentation** (PPTX, ODP) is written slide for slide at its slide size: each text box, shape (its outline, fill, line, turn and mirroring, with the text in it), picture and table in its place (`bounds`), the slide's background colour, and its speaker notes on the slide's notes page; a hidden slide stays hidden. A chart is a table of its data in the chart's place.
 - **A PDF** becomes a slide for each page, at the pages' most common size (a page of another size is scaled into it, centred). Each paragraph is a text box where the page set it, its lines broken and spaced as on the page (each line on the baseline the page drew it on, where the runs' `bounds.baseline` give it), in its runs' fonts, sizes and colours; a paragraph set beside a floating table or picture is a box for each group of its lines. Tables keep their measured row heights and their cells' shading, pictures their places, and footnotes and a page's notes are at the foot of their page. A page's invisible text (a scan's recognised words laid over its picture, `TextFormatting.invisible`) is written fully transparent: not seen, still there to select and search. A table whose text is all invisible is drawn without rules (its cells' text in their places where the page gave them).
 - **Any other document** flows onto 16:9 slides: a slide for each heading of the first two levels, titled by it, with the text under it as bullets (lower headings bold), carried on to more slides of the same title where it does not fit. Text before the first heading is under the document's title, from its metadata. Each table is on slides of its own, ten rows a slide with its header rows repeated, and each sheet of a workbook is a table under the sheet's name. Pictures (those in a table's cells too) are on slides of their own, charts are tables of their data, a presentation's speaker notes go with the slides its content made, and footnotes and endnotes, numbered where they are cited, are listed on slides at the end.
 
