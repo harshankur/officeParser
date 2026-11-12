@@ -23,6 +23,7 @@ import {
     escapeLatex, latexComment, sanitizeLatexUrl, sanitizeLatexMath, sanitizeLatexImagePath,
     sanitizeCommentText, latexSourceComment
 } from '../../src/utils/sanitize';
+import { archiveCancellationTests } from './archiveCancellation';
 import { extractFiles } from '../../src/utils/zipUtils';
 import { cssColorHex } from '../../src/utils/colorUtils';
 import { parseXmlString } from '../../src/utils/xmlUtils';
@@ -6244,6 +6245,7 @@ async function main() {
     await latexParserTests();
     await odfRepeatExpansionTests();
     await abortSignalTests();
+    await archiveCancellationTests();
     await corruptArchiveTests();
     await truncatedArchiveTests();
     await missingMainPartTests();
