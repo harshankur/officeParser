@@ -1333,7 +1333,8 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
                         text = vContent.trim() === '1' ? 'TRUE' : vContent.trim() === '0' ? 'FALSE' : vContent.trim();
                         if (text === 'TRUE' || text === 'FALSE') { valueType = 'boolean'; value = text === 'TRUE' ? 'true' : 'false'; } else valueType = 'text';
                     } else if (vContent !== undefined) {
-                        text = vContent.trim();
+                        // A formula's text result (t="str") is XML-escaped like any other text.
+                        text = type === 'str' ? decodeXmlEntities(vContent.trim()) : vContent.trim();
                         // A number in a date or time style is a day count: show the date or time instead
                         const dateFormatKind = type === 'n' && styleIdx !== undefined ? cellDateFormatMap[styleIdx] : undefined;
                         if (dateFormatKind) {
