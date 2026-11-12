@@ -2652,6 +2652,82 @@ async function testPowerPointNonSlideParts(): Promise<FeatureTest[]> {
 }
 
 /**
+ * A notes page holds its notes (the `body` placeholder) and what PowerPoint prints around them: the
+ * slide number, and the date, header and footer when they are switched on. A slide's notes hold
+ * what the notes pane shows, and the slide keeps its own slide number.
+ */
+async function testPowerPointNotesFurniture(): Promise<FeatureTest[]> {
+    const results: FeatureTest[] = [];
+    const record = (feature: string, expected: any, actual: any, condition: boolean, details: string, duration = 0): void => {
+        results.push({
+            category: 'PowerPoint Notes Furniture',
+            feature,
+            fileType: 'pptx',
+            result: { status: condition ? 'PASS' : 'FAIL', expected, actual, details, duration }
+        });
+    };
+
+    const fflate = require('fflate');
+    const P = 'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" '
+        + 'xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"';
+    const NOTES_REL = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/notesSlide';
+    const paragraphs = (...lines: string[]) => lines.map(line => `<a:p><a:r><a:t>${line}</a:t></a:r></a:p>`).join('');
+    const shape = (ph: string, body: string) =>
+        `<p:sp><p:nvSpPr><p:cNvPr id="1" name="s"/><p:cNvSpPr/><p:nvPr>${ph}</p:nvPr></p:nvSpPr><p:spPr/><p:txBody>${body}</p:txBody></p:sp>`;
+    const slideNumber = (n: number) => shape('<p:ph type="sldNum" sz="quarter" idx="5"/>',
+        `<a:p><a:fld id="{1}" type="slidenum"><a:t>${n}</a:t></a:fld></a:p>`);
+    const part = (root: string, shapes: string) =>
+        fflate.strToU8(`<?xml version="1.0"?><p:${root} ${P}><p:cSld><p:spTree>${shapes}</p:spTree></p:cSld></p:${root}>`);
+    const notesRels = (n: number) => fflate.strToU8('<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        + `<Relationship Id="rId2" Type="${NOTES_REL}" Target="../notesSlides/notesSlide${n}.xml"/></Relationships>`);
+
+    const entries: Record<string, Uint8Array> = {
+        'ppt/presentation.xml': fflate.strToU8(`<?xml version="1.0"?><p:presentation ${P}/>`),
+        'ppt/slides/slide1.xml': part('sld', shape('<p:ph type="body" idx="1"/>', paragraphs('Slide body')) + slideNumber(1)),
+        'ppt/slides/_rels/slide1.xml.rels': notesRels(1),
+        'ppt/notesSlides/notesSlide1.xml': part('notes',
+            shape('<p:ph type="sldImg"/>', '')
+            + shape('<p:ph type="body" idx="1"/>', paragraphs('Multi', 'Line', 'Notes'))
+            + shape('<p:ph type="hdr" sz="quarter"/>', paragraphs('Header text'))
+            + shape('<p:ph type="dt" idx="1"/>', paragraphs('Date text'))
+            + shape('<p:ph type="ftr" sz="quarter" idx="4"/>', paragraphs('Footer text'))
+            + slideNumber(1)
+            + shape('', paragraphs('Extra box'))),
+        // An empty slide whose notes page holds only its slide number.
+        'ppt/slides/slide2.xml': part('sld', ''),
+        'ppt/slides/_rels/slide2.xml.rels': notesRels(2),
+        'ppt/notesSlides/notesSlide2.xml': part('notes', slideNumber(2)),
+    };
+
+    const startTime = Date.now();
+    try {
+        const ast: any = await OfficeParser.parseOffice(Buffer.from(fflate.zipSync(entries)), { fileType: 'pptx', ignoreNotes: false });
+        const slides = ast.content.filter((node: any) => node.type === 'slide');
+        const notesText = (slide: any) => (slide?.notes ?? []).flatMap((note: any) => note.children.map((p: any) => p.text));
+        const first = notesText(slides[0]);
+        const expected = ['Multi', 'Line', 'Notes', 'Extra box'];
+        record('Notes hold the notes pane text and other boxes, not the slide number, date, header or footer', expected, first,
+            JSON.stringify(first) === JSON.stringify(expected), 'A notes page\'s sldNum, dt, hdr and ftr placeholders are not notes', Date.now() - startTime);
+
+        const slideText = (slides[0]?.children ?? []).map((node: any) => node.text);
+        record('A slide keeps its own slide number', ['Slide body', '1'], slideText,
+            JSON.stringify(slideText) === JSON.stringify(['Slide body', '1']), 'Only notes pages drop their furniture');
+
+        record('A notes page holding only its slide number gives no notes, and its empty slide no node', 1, slides.length,
+            slides.length === 1, `Slides: ${JSON.stringify(slides.map(notesText))}`);
+
+        const ignored: any = await OfficeParser.parseOffice(Buffer.from(fflate.zipSync(entries)), { fileType: 'pptx', ignoreNotes: true });
+        const ignoredNotes = ignored.content.filter((node: any) => node.notes).length;
+        record('ignoreNotes still reads no notes', 0, ignoredNotes, ignoredNotes === 0, 'Notes pages are not read under ignoreNotes');
+    } catch (err: any) {
+        record('Notes pages with furniture placeholders parse', 'Parsed AST', `${err.name}: ${err.message}`, false,
+            `Threw instead of parsing: ${err.message}`, Date.now() - startTime);
+    }
+
+    return results;
+}
+
+/**
  * Headers, footers and comments live in their own parts of a DOCX archive, so they reach the
  * AST only if the extraction filter asks for them. It did not, which left the code that parses
  * them unreachable and dropped all three from every document without a word of warning. These
@@ -4310,6 +4386,8 @@ async function runAllTests() {
     // 7. PowerPoint non-slide part handling
     console.log('Running PowerPoint non-slide part tests...');
     allResults.push(...await testPowerPointNonSlideParts());
+    console.log('Running PowerPoint notes furniture tests...');
+    allResults.push(...await testPowerPointNotesFurniture());
 
     // 8. ZIP type detection for archives that defeat magic-byte sniffing
     console.log('Running ZIP type detection tests...');
