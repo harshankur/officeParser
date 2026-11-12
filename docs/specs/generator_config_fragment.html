@@ -656,6 +656,20 @@ await ast.to('md', {
         </tbody>
     </table>
 
+    <blockquote>
+        [!NOTE]
+        <strong>Native engine (<code>engine: 'native'</code>) differences beyond fidelity:</strong> it ignores the
+        Puppeteer-only options above (and <code>tagged</code>), uses a non-zero default <code>margin</code> (the document's
+        own, where it sets one), draws a chart as a bar chart of its data (a scatter or bubble chart as points on its X and
+        Y axes, in any other chart a series on a right-hand axis scaled to that axis, a chart in a line of text between the line's parts,
+        categories of several levels as rows of labels), and does not apply <code>renderMetadata</code>. It draws the
+        document's own headers and footers on every page, footnotes at the foot of their page, clickable links, slides as
+        they are laid out, and text in a section's columns. It embeds PNG, JPEG, GIF and BMP pictures and SVG, and an EMF or WMF picture from the bitmap it holds (its lines, shapes
+        and text are reported; one with no bitmap is its alt text, reported), a picture's format read from its bytes, not
+        its name. A picture in a heading, a list item or a note is drawn in its line, as in a paragraph. Choose it to avoid
+        the headless browser; choose <code>'html'</code> for pixel-matching fidelity, other chart kinds and PDF/UA tags.
+    </blockquote>
+
     <h3 id="docxgeneratorconfig">DocxGeneratorConfig (<code>docxConfig</code>)</h3>
     <p>Writes a real WordprocessingML package (a <code>.docx</code> ZIP) from any parsed source and returns a
         <code>Uint8Array</code>. Adds no dependencies (built on the bundled <code>fflate</code>), runs identically in

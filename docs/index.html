@@ -4377,6 +4377,23 @@
                         filled PDF form's values. A scanned PDF's invisible text layer is read and marked.</p>
                 </div>
                 <div class="feature-card">
+                    <span class="feature-icon">🧮</span>
+                    <h3>Sheets and Slides as Shown</h3>
+                    <p>A cell keeps what the sheet holds and shows: its value and kind, its number format and shown text,
+                        and the formula it is calculated from (a filled-down formula with each cell's own references).
+                        Hidden sheets, rows, columns and slides are marked, kept as data, and left out of PDF output as a
+                        printout leaves them.</p>
+                </div>
+                <div class="feature-card">
+                    <span class="feature-icon">🖼️</span>
+                    <h3>Pictures as They Are</h3>
+                    <p>EMF and WMF pictures, RTF's included, are read and typed <code>image/emf</code> and <code>image/wmf</code>
+                        in every format, and kept by DOCX, ODT, RTF, PPTX and ODP output. The native PDF engine draws PNG, JPEG,
+                        GIF, BMP and SVG pictures, and an EMF or WMF from the bitmap it holds. Writers take a picture's
+                        format from its bytes, not its name, and an RTF equation's own picture stands in for it where an output
+                        cannot typeset math.</p>
+                </div>
+                <div class="feature-card">
                     <span class="feature-icon">⚡</span>
                     <h3>Extreme Performance</h3>
                     <p>Up to 23x speedup for ODP parsing; highly optimized engines for RTF, PDF, and large Excel
@@ -6057,6 +6074,11 @@
                 [
                     ['forms/legacy-fields.docx', 'Word legacy form fields: check boxes as ☒ or ☐, drop-downs as their selected entry'],
                     ['forms/controls.odt', 'ODT form controls read as they show: check boxes, text fields, list and combo boxes'],
+                    ['forms/placeholders.docx', 'Word content controls still showing their prompt: left out unless Placeholder Prompts is on'],
+                    ['objects/embedded.docx', 'Word embedded objects read as their preview pictures, EMF and WMF typed image/emf and image/wmf'],
+                    ['objects/embedded.rtf', 'RTF embedded objects, EMF and WMF pictures and an equation, read as they show'],
+                    ['objects/equations-libreoffice.rtf', 'RTF equations read as math, each naming its own picture (CodeMetadata.fallbackAttachmentName), which DOCX, ODT, RTF, PPTX, ODP and PDF output draw'],
+                    ['revisions/tracked-changes.rtf', 'RTF tracked changes: deletions left out, insertions read'],
                     ['page-numbers/restart.docx', 'Word sections that restart their page numbers (PageSetup.pageNumberStart)'],
                     ['page-numbers/restart.odt', 'ODT page styles that restart their page numbers'],
                     ['page-numbers/restart.rtf', 'RTF sections that restart their page numbers'],
