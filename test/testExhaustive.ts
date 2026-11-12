@@ -24,6 +24,7 @@ import { pictureKindOf, pictureKindOfBase64 } from '../src/utils/imageUtils';
 import { getWarningMessage, shownTo80 } from '../src/utils/errorUtils';
 import { markDroppedHyphen } from '../src/utils/lineJoins';
 import { runHyphenBreakGenerator } from './helpers/hyphenBreakGenerator';
+import { checkMarkdownCellPieces } from './helpers/markdownCellPieces';
 import { OfficeConverter } from '../src/OfficeConverter';
 import { zipSync, strToU8, unzipSync, unzlibSync, strFromU8 } from 'fflate';
 import { PDFDict, PDFDocument, PDFHexString, PDFName, PDFOperator, PDFRawStream, StandardFonts, TextAlignment, degrees, rgb } from 'pdf-lib';
@@ -12806,6 +12807,213 @@ async function testMarkdownCellBreaks(): Promise<void> {
 }
 
 /**
+ * Markdown in an HTML table's cells (GitHub's way of writing one: `<td>`, a blank line, Markdown, a blank
+ * line, `</td>`) is read into its cells, the table's lines are its HTML, and nothing is shown of the token a
+ * piece stands for while the table is read; a block lifted before the table is read (a fence, math, an
+ * admonition, a comment) and landing where text is read as written (a cell's `<pre>`, an attribute, a
+ * comment) is its source as written.
+ */
+async function testMarkdownCellPieces(): Promise<void> {
+    const md = (src: string) => OfficeParser.parseOffice(Buffer.from(src), { fileType: 'md', onWarning: () => { } } as any) as Promise<OfficeParserAST>;
+    const cellOf = (ast: OfficeParserAST): OfficeContentNode => ast.content[0]?.children?.[0]?.children?.[0] as OfficeContentNode;
+    const shown = (value: unknown) => JSON.stringify(value, (key, v) => key === 'parent' ? undefined : v);
+
+    // A lifted block in a cell's preformatted text, or in an attribute, is its source: it held a placeholder.
+    const pre = cellOf(await md('<table><tr><td><pre>w0\n\n```\nw1\n```\n\n</pre></td></tr></table>'));
+    assert.deepStrictEqual(pre.children?.map(n => [n.type, n.text]), [['code', 'w0\n\n```\nw1\n```\n\n']], `a fence in a cell's <pre> is its text as written; got ${shown(pre)}`);
+    const alt = cellOf(await md('<table><tr><td><img alt="\n\n:::note\nw1\n:::\n\n"></td></tr></table>'));
+    assert.strictEqual((alt.children?.[0]?.metadata as ImageMetadata | undefined)?.altText, '\n\n:::note\nw1\n:::\n\n', `an admonition in a cell's alt text is its text as written; got ${shown(alt)}`);
+    // A comment's body is read as written, whatever was lifted from it before comments are, and saved back so.
+    for (const source of ['<!--\n:::note\nw1\n:::\n-->', '<!--\n```\nw1\n```\n-->', '<!--\n$$\nx\n$$\n:::note\n```js\nw1\n```\n:::\n-->']) {
+        const ast = await md(source);
+        assert.deepStrictEqual(ast.content.map(n => [n.type, n.text]), [['comment', source.slice(4, -3)]], `${JSON.stringify(source)} is one comment holding its body as written; got ${shown(ast.content)}`);
+        let saved = source;
+        for (let k = 0; k < 3; k++) saved = String((await (await md(saved)).to('md')).value);
+        assert.strictEqual(saved, source, `${JSON.stringify(source)} is saved back as written, three times over`);
+    }
+
+    // The property (test/helpers/markdownCellPieces.ts): every marker word of a cell's Markdown and of the block
+    // starts beside it is read, and no token or placeholder is shown.
+    const started = performance.now();
+    const property = await checkMarkdownCellPieces(md, 1);
+    assert.ok(property.leaked === 0 && property.lost === 0, `Markdown cell pieces: ${property.leaked} documents show a token, ${property.lost} lose a word: ${property.failures.join('; ')}`);
+    assert.deepStrictEqual(property.undrawn, [], 'Markdown cell pieces: the random documents draw every block start');
+    console.log(`Markdown cell pieces: systematic=${property.systematic} random=${property.random} distinct=${property.distinct} quotes=${property.quotes} quotesDistinct=${property.quotesDistinct} leaked=${property.leaked} lost=${property.lost} in ${((performance.now() - started) / 1000).toFixed(1)}s`);
+
+    // Each way a piece was lost, by its shape. (A node's text is quoted after its type.)
+    const shape = (nodes: OfficeContentNode[] = []): string => nodes.map(node => node.type + (['text', 'comment', 'code'].includes(node.type) ? JSON.stringify(node.text) : '')
+        + (node.children?.length ? `(${shape(node.children)})` : '')).join(', ');
+    const reads = async (source: string, want: string, why: string): Promise<OfficeParserAST> => {
+        const ast = await md(source);
+        assert.strictEqual(shape(ast.content), want, `${why}: ${JSON.stringify(source)}`);
+        return ast;
+    };
+    const piece = 'paragraph(text"w0 ", text"w1")';
+    // The table's lines are its HTML: a `<div>`, heading, list, rule or underline line among them is text in its cell.
+    const divLine = await reads('<table><tr><td>\n\n<div>\n\nw0 *w1*\n\n</div>\n\n</td></tr></table>', `table(row(cell(${piece})))`, 'a <div> line in a cell keeps the piece in it');
+    assert.ok(cellOf(divLine).children![0].children![1].formatting?.italic, 'the piece is read as Markdown');
+    for (const start of ['# w0', '* w0', '***']) {
+        await reads(`<table><tr><td>\n${start}\n\nw1 *w2*\n\n</td></tr></table>`, `table(row(cell(text${JSON.stringify(start + ' ')}, paragraph(text"w1 ", text"w2"))))`, `${start} in the first piece is text in the cell`);
+    }
+    await reads('<table><tr><td>\n\nw0 *w1*\n\n</td></tr></table>\n---', `table(row(cell(${piece}))), break`, '--- after the table is a rule, not an underline');
+    await reads('<table><tr><td>\n\nw0 *w1*\n\n</td></tr></table>\nw2\n===', `table(row(cell(${piece}))), paragraph(text"w2 ===")`, 'text and === after the table are text');
+    await reads('<table><tr><td>\n-\n\nw0 *w1*\n\n</td></tr></table>', `table(row(cell(text"- ", ${piece})))`, 'a lone - in a cell is text');
+    // A comment on its own line in a table written with no blank line is the cell's.
+    await reads('<table><tr><th>\n<div>\n<!-- w0 -->\n</div>\n</th></tr></table>', 'table(row(cell(comment" w0 ")))', 'a comment line in a cell is its comment');
+    // A piece closing what an earlier piece opened (a quoted value, a tag, a script, a comment) is its text.
+    const altPiece = await reads('<table><tr><td>\n\n<img alt="\n\nw0 *w1*\n\n">\nw2 *w3*\n\n</td></tr></table>', 'table(row(cell(image, text" w2 *w3*")))', 'a piece closing an alt value');
+    assert.strictEqual((cellOf(altPiece).children![0].metadata as ImageMetadata).altText, '\n\nw0 *w1*\n\n', 'a piece in an alt value is its text as written');
+    await reads('<table><tr><td>\n\n<span\n\nh\n\n>w1</span>\nw2 *w3*\n\n</td></tr></table>', 'table(row(cell(text"w1", text" w2 *w3*")))', 'a piece closing a tag');
+    const script = await reads('<table><tr><td>\n\n<script>\n\nh </script> w1\n\n<b>w2</b>\n\n</td></tr></table>', 'table(row(cell(text"w1 ", text"w2")))', 'a piece closing a script');
+    assert.ok(cellOf(script).children![1].formatting?.bold, 'the HTML after a script a piece closes is read as HTML');
+    await reads('<table><tr><td>\n\n<!-- x\n\nw1 --> w2\n\n</td></tr></table>', 'table(row(cell(comment" x\\n\\nw1 ", text" w2")))', 'a piece closing a comment');
+    await reads('<table><tr><td>\n\n<!-- x\n\nw1 --!> w2\n\n</td></tr></table>', 'table(row(cell(comment" x\\n\\nw1 ", text" w2")))', 'a piece closing a comment with --!>');
+    await reads('<table><tr><td>\n\n<![CDATA[x\n\nw1 *w2*\n\n]]>\n\n</td></tr></table>', 'table(row(cell(text"x w1 *w2*")))', 'a piece in CDATA is its text');
+    await reads('<table><tr><td>\n\nw0\n\n<script/>\n\nw1 *w2*\n\n</td></tr></table>', 'table(row(cell(paragraph(text"w0"), paragraph(text"w1 ", text"w2"))))', 'a self-closed <script/> opens no script text');
+    // A piece is written into the table's HTML only where the HTML reader reads it as the join does. A quote the reader
+    // pairs only by its fallback (an unquoted value holding an apostrophe, a value missing its closing quote) leaves the
+    // later pieces their tokens, so their quotes and `>` cannot move where it ends the tag.
+    const unquoted = await reads("<table>\n<tr>\n<td><img src=avatar.png alt=Bob's width=40></td>\n<td>\n\nBob's **notes**\n\n</td>\n</tr>\n</table>",
+        'table(row(cell(image), cell(paragraph(text"Bob\'s ", text"notes"))))', 'an unquoted alt holding an apostrophe, then a cell holding one');
+    assert.strictEqual((cellOf(unquoted).children![0].metadata as ImageMetadata).altText, "Bob's", 'an unquoted alt holding an apostrophe is the alt');
+    assert.ok(unquoted.content[0].children![0].children![1].children![0].children![1].formatting?.bold, 'the cell after an unquoted alt is read as Markdown');
+    await reads("<table>\n<tr>\n<td title=it's>\n\nFirst *cell*\n\n</td>\n<td>\n\nIt's the **second**\n\n</td>\n</tr>\n</table>",
+        'table(row(cell(paragraph(text"First ", text"cell")), cell(paragraph(text"It\'s the ", text"second"))))', 'an unquoted title holding an apostrophe keeps both cells');
+    await reads('<table>\n<tr>\n<td align="center>\n\nSay "hi" *here*\n\n</td>\n<td>\n\nMore\n\n</td>\n</tr>\n</table>',
+        'table(row(cell(paragraph(text"Say \\"hi\\" ", text"here")), cell(paragraph(text"More"))))', 'a value missing its closing quote, then quoted words');
+    await reads("<table><tr><td><img src=a.png alt=Bob's></td>\n<td>\n\nBob's > Alice's *w0*\n\n</td></tr></table>",
+        'table(row(cell(image), cell(paragraph(text"Bob\'s > Alice\'s ", text"w0"))))', 'an unquoted alt holding an apostrophe, then a piece holding one and >');
+    // Only the text the HTML reader is given is scanned: not the Markdown lines before the table.
+    await reads('<table><tr><td class="x>\n\n**w0** *w1*\n\n</td><td>\n\n- w2\n- w3\n\n</td></tr></table>',
+        'table(row(cell(paragraph(text"w0", text" ", text"w1")), cell(list(text"w2"), list(text"w3"))))', 'a cell tag missing its closing quote keeps its cells\' Markdown');
+    await reads('<div align="center">\nUse `<!--` to open a comment.\n<table><tr><td>\n\n**w0** *w1*\n\n</td></tr></table>\n</div>',
+        'paragraph(text"Use ", text"<!--", text" to open a comment."), table(row(cell(paragraph(text"w0", text" ", text"w1"))))', '<!-- in a code span before the table');
+    await reads('<table><tr><td><![CDATA[x\n\n**w0** *w1*\n\n</td></tr></table>',
+        'table(row(cell(text"x ", paragraph(text"w0", text" ", text"w1"), text" </td></tr></table>")))', 'a piece in a CDATA section that never closes is Markdown');
+    // A raw-text end tag whose `>` the next piece holds.
+    const endTag = await reads('<table><tr><td><script>\n\nx </script\n\n<i>></i> w1 <img alt="\n\nw2 *w3*\n\n"> </script> w4\n\n</td></tr></table>',
+        'table(row(cell(text"> w1 ", image, text" w4")))', 'a script end tag whose > follows in the next piece');
+    assert.strictEqual((cellOf(endTag).children![1].metadata as ImageMetadata).altText, '\n\nw2 *w3*\n\n', 'a piece in an alt value after a script end tag is its text as written');
+    // What never closes keeps its pieces, read after the table (an attribute list after it ends nothing).
+    for (const [source, want, why] of [
+        ['<table><tr><td><!-- x\n\nw0 *w1*\n\n</td></tr></table>', 'table(row(cell)), paragraph(text"w0 ", text"w1")', 'a comment that never closes'],
+        ['<table><tr><td><!-- x\n\nw0 *w1*\n\n</td></tr></table>\n{: title="-->"}', 'table(row(cell)), paragraph(text"w0 ", text"w1")', 'a comment that never closes, then an attribute list holding -->'],
+        ['<table><tr><td><script>\n\n**w0** *w1*\n\n</td></tr></table>', 'table(row(cell)), paragraph(text"w0", text" ", text"w1")', 'a script that never closes'],
+    ] as const) {
+        const runs = (await reads(source, want, why)).content[1].children!;
+        assert.ok(runs[runs.length - 1].formatting?.italic && (source.includes('**') ? runs[0].formatting?.bold : !runs[0].formatting), `${why}: the piece is read as Markdown`);
+    }
+    // Lifted blocks are scanned as their source, as the HTML reader is given them.
+    const fencedAlt = await reads('<table><tr><td><img alt="\n\n```\nsay "hi"\n```\n\nw2 *w3*\n\n"></td></tr></table>', 'table(row(cell(image)))', 'a fence holding quotes in an alt value, then a piece');
+    assert.strictEqual((cellOf(fencedAlt).children![0].metadata as ImageMetadata).altText, '\n\n```\nsay "hi"\n```\n\nw2 *w3*\n\n', 'the alt holds the fence and the piece as written');
+    await reads('<table><tr><td><!-- x\n\n```\na --> w1\n```\n\nw2 *w3*\n\n</td></tr></table>', 'table(row(cell(comment" x\\n\\n```\\na ", text" w1 ``` ", paragraph(text"w2 ", text"w3"))))', 'a fence holding --> after a comment opener');
+    await reads('<table><tr><td><img alt="\n\n```\n"><script>x</script>\n```\n\n"></td></tr></table>', 'table(row(cell(image, text" ``` \\">")))', 'a fence holding a quote in an alt value');
+    // Markup the scan does not model (foreign content, a tag name the reader trims) keeps every piece's token.
+    for (const source of ['<table><tr><td><svg><title>\n\nw0 </title> w1\n\n</svg></td></tr></table>', '<table><tr><td><script' + String.fromCharCode(0xa0) + '>\n\nw0 *w1*\n\n</script></td></tr></table>']) {
+        const all = JSON.stringify((await md(source)).content);
+        assert.ok(['w0', 'w1'].every(word => all.includes(word)) && ![...all].some(c => c.charCodeAt(0) >= 0xe000 && c.charCodeAt(0) <= 0xf8ff), `markup the scan does not model keeps its pieces: ${JSON.stringify(source)}; got ${all}`);
+    }
+    // A piece in an element the HTML reader reads as nothing is read after the table, as it would be without it.
+    await reads('<table><tr><td><template>\n\nw0\n\n</template></td></tr></table>', 'table(row(cell)), paragraph(text"w0")', 'a piece in a <template>');
+    // The HTML around a piece is its runs': a link, bold, and the anchors of the paragraph it stood in.
+    const link = await reads('<table><tr><td><a href="http://x/w9">\n\nw2\n\n</a></td></tr></table>', 'table(row(cell(paragraph(text"w2"))))', 'a link around a piece');
+    assert.strictEqual((cellOf(link).children![0].children![0].metadata as any)?.link, 'http://x/w9', 'a link around a piece is its text\'s link');
+    // ...and its pictures', unless a picture has a link of its own.
+    const linkedPicture = await reads('<table><tr><td><a href="http://x/w9">\n\n![w0](i.png) w1\n\n</a></td></tr></table>', 'table(row(cell(paragraph(image, text" w1"))))', 'a link around a piece holding a picture');
+    const [picture, after] = cellOf(linkedPicture).children![0].children!;
+    assert.deepStrictEqual([(picture.metadata as ImageMetadata).link, (picture.metadata as ImageMetadata).linkType, (after.metadata as any)?.link], ['http://x/w9', 'external', 'http://x/w9'], `a link around a piece is its picture's link; got ${shown(picture)}`);
+    const ownLink = await reads('<table><tr><td><a href="http://x/w9">\n\n[![w0](i.png)](http://y/)\n\n</a></td></tr></table>', 'table(row(cell(paragraph(image))))', 'a link around a piece holding a linked picture');
+    assert.strictEqual((cellOf(ownLink).children![0].children![0].metadata as ImageMetadata).link, 'http://y/', 'a picture keeps its own link');
+    const bold = await reads('<table><tr><td><b>\n\nw0 *w1*\n\n</b></td></tr></table>', `table(row(cell(${piece})))`, 'bold around a piece');
+    assert.ok(cellOf(bold).children![0].children!.every(run => run.formatting?.bold), 'bold around a piece is its runs\'');
+    const anchored = await reads('<table><tr><th>\n\n<div align="center">\n\n<a id="w0"></a>\n\nw1 *w2*\n\n</div></th></tr></table>', 'table(row(cell(paragraph(text"w1 ", text"w2"))))', 'an anchor before a piece');
+    assert.deepStrictEqual((cellOf(anchored).children![0].metadata as any)?.anchorIds, ['w0'], 'an anchor before a piece is the first node\'s it became');
+    assert.strictEqual(JSON.stringify(anchored.content).split('"w0"').length - 1, 1, 'an anchor before a piece is kept once');
+
+    // What read right before reads the same.
+    for (const [source, want] of [
+        ['<p align="center">\n<table><tr><td>\n\nw0 *w1*\n\n</td></tr></table>\n</p>', `paragraph, table(row(cell(${piece})))`],
+        ['<div align="right">\n\n<div align="center">\n<table><tr><td>\n\nw0 *w1*\n\n</td></tr></table>\n</div>\n\n</div>', `table(row(cell(${piece})))`],
+        ['- w0\n\n  <table><tr><td>\n\n  w1 *w2*\n\n  </td></tr></table>', 'list(text"w0"), table(row(cell(paragraph(text"w1 ", text"w2"))))'],
+        ['> <table><tr><td>\n>\n> w0 *w1*\n>\n> </td></tr></table>\n>\n> ---', `table(row(cell(${piece}))), break`],
+        ['<div>\nw0\n<table><tr><td>\n\nw1 *w2*\n\n</td></tr></table>', 'paragraph(text"w0"), table(row(cell(paragraph(text"w1 ", text"w2"))))'],
+        ['| a | b |\n| - | - |\n| w0 | 2 |\n<table><tr><td>\n\nw1 *w2*\n\n</td></tr></table>', 'table(row(cell(text"a"), cell(text"b")), row(cell(text"w0"), cell(text"2"))), table(row(cell)), paragraph(text"w1 ", text"w2")'],
+        // A table joined under a list item is dedented with the item, and the item's blocks after it stay in it.
+        ['- item\n\n  <table><tr><td>\n\n  w0 *w1*\n\n  </td></tr></table>\n\n      code w2\n\n  para w3', 'list(text"item"), table(row(cell(paragraph(text"w0 ", text"w1")))), code"code w2", paragraph(text"para w3")'],
+        ['1. item\n\n   <table><tr><td>\n\n   w0\n\n   </td></tr></table>\n\n       code w2', 'list(text"item"), table(row(cell(paragraph(text"w0")))), code"code w2"'],
+        ['- a\n\n  <table><tr><td>\n\n  w0 *w1*\n\n  </td></tr></table>\n\n    code w2', 'list(text"a"), table(row(cell(paragraph(text"w0 ", text"w1")))), paragraph(text"code w2")'],
+    ] as const) await reads(source, want, 'read as before');
+    const itemPre = (await md('- a\n\n  <table><tr><td><pre>\n  x w2\n  </pre>\n\n  w0 *w1*\n\n  </td></tr></table>')).content[1]?.children?.[0]?.children?.[0];
+    assert.strictEqual(itemPre?.children?.find(n => n.type === 'code')?.text, 'x w2\n', `the <pre> text of a table joined under a list item is dedented with the item; got ${shown(itemPre)}`);
+    const aligned = await reads('<table><tr><td>\n\nw0 *w1*\n\n</td></tr></table>\n{align=right}', `table(row(cell(${piece})))`, 'an attribute list under the table');
+    assert.strictEqual((aligned.content[0].metadata as any)?.align, 'right', 'an attribute list under a joined table gives its align');
+    // (Fixed too: the same in a quote, with no blank line before its `---`.)
+    await reads('> <table><tr><td>\n>\n> w0 *w1*\n>\n> </td></tr></table>\n> ---', `table(row(cell(${piece}))), break`, 'a table in a quote, then ---');
+    // Disclosures around and in a joined table read as before.
+    const disclosed = 'disclosure(summary(paragraph(text"w8")), table(row(cell(paragraph(text"w0 ", text"w1")))), paragraph(text"w2")), paragraph(text"w3")';
+    const disclosedNoText = 'disclosure(summary(paragraph(text"w8")), table(row(cell(paragraph(text"w0 ", text"w1"))))), paragraph(text"w3")';
+    for (const [source, want] of [
+        ['<details>\n<summary>w8</summary>\n<table><tr><td>\n\nw0 *w1*\n\n</td></tr></table>\n\nw2\n\n</details>\n\nw3', disclosed],
+        ['<details>\n<summary>w8</summary>\n\n<table><tr><td>\n\nw0 *w1*\n\n</td></tr></table>\n\nw2\n\n</details>\n\nw3', disclosed],
+        ['<details><summary>w8</summary><table><tr><td>\n\nw0 *w1*\n\n</td></tr></table>\n\nw2\n\n</details>\n\nw3', disclosed],
+        ['<details>\n<summary>w8</summary>\n\n<table><tr><td>\n\nw0 *w1*\n\n</td></tr></table></details>\n\nw3', disclosedNoText],
+        ['<details>\n<summary>w8</summary>\n\n<table><tr><td>\n\nw0 *w1*\n\n</td></tr></table>\n</details>\n\nw3', disclosedNoText],
+        ['<table><tr><td>\n<details>\n<summary>w8</summary>\n\nw0 *w1*\n\n</td></tr></table>\n\nw2\n\n</details>\n\nw3', 'table(row(cell(disclosure(summary(paragraph(text"w8")), paragraph(text"w0 ", text"w1"))))), paragraph(text"w2"), paragraph(text"w3")'],
+        ['<div align="center"><details>\n<summary>w8</summary>\n<table><tr><td>\n\nw0 *w1*\n\n</td></tr></table>\n\nw2\n\n</details></div>\n\nw3', disclosed],
+        ['> <details>\n> <summary>w8</summary>\n> <table><tr><td>\n>\n> w0 *w1*\n>\n> </td></tr></table>\n>\n> w2\n>\n> </details>\n\nw3', disclosed],
+    ] as const) await reads(source, want, 'a disclosure around or in a joined table');
+
+    // Past what the HTML reader nests, a joined table is read as before tables joined (its piece after its cells),
+    // with nothing reported; nested so on one line, it is refused as before, and that reported once.
+    const reported: string[] = [];
+    const deep = await OfficeParser.parseOffice(Buffer.from('<table><tr><td>\n\nw0\n\n<td>\n' + '<div>\n'.repeat(300) + '</td></tr></table>'), { fileType: 'md', onWarning: (issue: any) => reported.push(issue.code) } as any) as OfficeParserAST;
+    assert.deepStrictEqual([shape(deep.content), reported], ['table(row(cell)), paragraph(text"w0")', []], 'a joined table nested past the HTML reader\'s depth is read, its piece kept');
+    await assert.rejects(OfficeParser.parseOffice(Buffer.from('<table><tr><td>\n\nw0\n\n<td>' + '<div>'.repeat(300) + '\n</td></tr></table>'), { fileType: 'md', onWarning: (issue: any) => reported.push(issue.code) } as any),
+        (error: any) => error.officeIssue?.code === 'MAX_NESTING_DEPTH_EXCEEDED', 'nesting written on one line is refused as before');
+    assert.deepStrictEqual(reported, ['MAX_NESTING_DEPTH_EXCEEDED'], 'the refusal is reported once');
+
+    // Linear time: each shape at n and at n / 4.
+    const timed = async (source: string) => { const at = performance.now(); await md(source); return performance.now() - at; };
+    for (const [name, make] of [
+        ['many joined tables', (n: number) => '<table><tr><td>\n\nw *x*\n\n</td></tr></table>\n\n'.repeat(n / 44)],
+        ['one piece of many lines', (n: number) => '<table><tr><td>\n\n' + 'w *x*\n'.repeat(n / 6) + '\n</td></tr></table>'],
+        ['block starts in an HTML piece, then ---', (n: number) => '<table><tr><td>\n\nw\n\n<td>\n' + '# h\n- l\n---\n<div>\n'.repeat(n / 20) + '</td></tr></table>\n---'],
+        ['lifted blocks in an alt value', (n: number) => '<table><tr><td>\n\nw\n\n<img alt="\n\n' + ':::note\nb\n:::\n\n```\nc\n```\n\n'.repeat(n / 26) + '">\n\n</td></tr></table>'],
+        ['a quoted value across pieces, then a run of <', (n: number) => '<table><tr><td>\n\nw\n\n<img alt="\n\n' + 'w *x*\n\n'.repeat(60) + '">' + '<'.repeat(n) + '\n\n</td></tr></table>'],
+        ['a run of < in a piece', (n: number) => '<table><tr><td>\n\nw\n\n<b>' + '<'.repeat(n) + '\n\n</td></tr></table>'],
+        ['a run of quotes in a tag', (n: number) => '<table><tr><td>\n\nw\n\n<b a=' + '"'.repeat(n) + '\n\nw\n\n</td></tr></table>'],
+        ['a run of </scrip in a script', (n: number) => '<table><tr><td>\n\nw\n\n<script>' + '</scrip'.repeat(n / 7) + '\n\nw\n\n</td></tr></table>'],
+        ['a run of -- in a comment', (n: number) => '<table><tr><td>\n\nw\n\n<!--' + '-'.repeat(n) + '\n\nw\n\n</td></tr></table>'],
+        ['tables opened and closed in the first piece', (n: number) => '<table><tr><td>x</td></tr></table>'.repeat(n / 34) + '<table><tr><td>\n\nw\n\n</td></tr></table>'],
+        ['the nesting fallback, repeated', (n: number) => ('<table><tr><td>\n\nw\n\n<td>\n' + '<div>\n'.repeat(300) + '</td></tr></table>\n\n').repeat(Math.max(1, n / 2000))],
+        ['disclosures beside tables', (n: number) => '<details><summary>s</summary><table><tr><td>\n\nw\n\n</td></tr></table></details>\n\n'.repeat(n / 80)],
+        ['comments wrapping fences', (n: number) => '<!--\n```\nc\n```\n-->\n\n'.repeat(n / 20)],
+        ['disclosures one after another in a cell', (n: number) => '<table><tr><td>\n\nw\n\n' + '<details><summary>s</summary>b</details>\n'.repeat(n / 45) + '\n\n</td></tr></table>'],
+        // Which pieces are written (see writeEndingPieces).
+        ['pieces after a tag a > in a quote may end', (n: number) => "<table><tr><td><img alt=Bob's width=40>\n\n" + "It's w *x*\n\n".repeat(Math.ceil(n / 14)) + '</td></tr></table>'],
+        ['pending pieces in a comment closed at the end', (n: number) => '<table><tr><td><!-- x\n\n' + 'w *x* --\n\n'.repeat(Math.ceil(n / 11)) + 'w --> y\n\n</td></tr></table>'],
+        ['pending pieces in a tag closed at the end', (n: number) => '<table><tr><td><span\n\n' + 'w x\n\n'.repeat(Math.ceil(n / 5)) + '>y</span></td></tr></table>'],
+        ['pending pieces never closed', (n: number) => '<table><tr><td><![CDATA[x\n\n' + 'w *x*\n\n'.repeat(Math.ceil(n / 7)) + '</td></tr></table>'],
+        ['pieces with a quote in an alt value', (n: number) => '<table><tr><td><img alt="\n\n' + 'w "x\n\n'.repeat(Math.ceil(n / 6)) + '"></td></tr></table>'],
+        ['a run of "x then > in a tag', (n: number) => '<table><tr><td><span a=' + '"x'.repeat(Math.ceil(n / 2)) + '>\n\nw *x*\n\n</td></tr></table>'],
+        ['a run of "x" pairs with no >', (n: number) => '<table><tr><td><span a=' + '"x"'.repeat(Math.ceil(n / 3)) + '\n\nw *x*\n\n>y</td></tr></table>'],
+        ['one long piece in a value', (n: number) => '<table><tr><td><span a="\n\n' + 'w x '.repeat(Math.ceil(n / 4)) + '">\n\n</td></tr></table>'],
+        ['many tables each with a closing piece', (n: number) => '<table><tr><td><span\n\nw > x\n\n</td></tr></table>\n\n'.repeat(Math.ceil(n / 40))],
+        ['a run of x> inside a quote', (n: number) => '<table><tr><td><span a="' + 'x>'.repeat(Math.ceil(n / 2)) + '\n\nw *x*\n\n</td></tr></table>'],
+        ['indented joined tables under list items, then code', (n: number) => '- item\n\n  <table><tr><td>\n\n  w *x*\n\n  </td></tr></table>\n\n      code\n\n'.repeat(Math.ceil(n / 70))],
+    ] as const) {
+        const n = 40000;
+        let small = await timed(make(n / 4));
+        let big = await timed(make(n));
+        if (big > 8 * small + 250) {
+            small = Math.max(small, await timed(make(n / 4)));
+            big = Math.min(big, await timed(make(n)));
+        }
+        assert.ok(big <= 8 * small + 250, `Markdown cell pieces, ${name}: ${n} in ${big.toFixed(0)} ms, ${n / 4} in ${small.toFixed(0)} ms`);
+    }
+}
+
+/**
  * Directive and attribute-list values may be quoted, and a size or video id is taken only as what it is.
  */
 async function testMarkdownAttributes(): Promise<void> {
@@ -15304,6 +15512,7 @@ async function runTests(): Promise<void> {
         ['Invisible text in writers', testInvisibleTextWriters],
         ['Slide text on its baselines', testSlideBaselines],
         ['Markdown cell breaks', testMarkdownCellBreaks],
+        ['Markdown cell pieces', testMarkdownCellPieces],
         ['Markdown attributes', testMarkdownAttributes],
         ['PDF warning pages', testPdfWarningPages],
         ['PDF pictures left out', testPdfPicturesLeftOut],

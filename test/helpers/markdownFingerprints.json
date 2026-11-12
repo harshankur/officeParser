@@ -1,5 +1,5 @@
 {
- "from": "15a4c7ec",
+ "from": "15a4c7ec, and document 138 as 8.8.0 reads Markdown in HTML table cells",
  "fingerprints": [
   "785177bf1c20290d",
   "4e68f02a1673ec1e",
@@ -139,7 +139,7 @@
   "4b807a7b55aee147",
   "5b81432775b2e334",
   "73437fed01ee61ae",
-  "fb3ff41954440b49",
+  "2e3118270ba343bc",
   "921058ab07ce1049",
   "b4aedb189e84f61e",
   "78a9ae5355822d07",

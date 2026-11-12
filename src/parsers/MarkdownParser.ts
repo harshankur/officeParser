@@ -1,7 +1,7 @@
-import { AdmonitionMetadata, BreakMetadata, CodeMetadata, CommentMetadata, EmbedMetadata, FullOfficeParserConfig, HeadingMetadata, ImageMetadata, ListMetadata, OfficeAttachment, OfficeContentNode, OfficeMetadata, OfficeParserAST, ParagraphMetadata, TextFormatting, TextMetadata } from '../types.js';
+import { AdmonitionMetadata, BreakMetadata, CodeMetadata, CommentMetadata, EmbedMetadata, FullOfficeParserConfig, HeadingMetadata, ImageMetadata, ListMetadata, OfficeAttachment, OfficeContentNode, OfficeError, OfficeErrorType, OfficeIssue, OfficeMetadata, OfficeParserAST, ParagraphMetadata, TextFormatting, TextMetadata } from '../types.js';
 import { anchorMark, resolveAnchorMarks } from '../utils/anchorUtils.js';
 import { createAST } from '../utils/astUtils.js';
-import { parseHtml } from './HtmlParser.js';
+import { ESCAPABLE_RAW_TEXT_ELEMENTS, RAW_TEXT_ELEMENTS as HTML_RAW_TEXT_ELEMENTS, parseHtml } from './HtmlParser.js';
 import { isSourceComment } from '../utils/commentUtils.js';
 import { checkAbortSignal } from '../utils/errorUtils.js';
 import { decodeCharacterReference, decodeCharacterReferences } from '../utils/htmlEntities.js';
@@ -662,6 +662,9 @@ const WRAPPER_CLOSE = /^<\/(?:div|p|center|section|article|aside|header|footer|m
 /** A table's own tags: a piece holding one is HTML, not Markdown in a cell (see splitIntoBlocks). */
 const TABLE_PART_TAG = /<\/?(?:table|thead|tbody|tfoot|tr|td|th|caption|colgroup|col)\b/i;
 
+/** A trailing attribute list under an HTML block (Pandoc's `{align=right}`, Kramdown's `{: align=right}`), see readHtmlInto. */
+const TRAILING_ATTRIBUTE_LIST = /\n\{:?([^}\n]*)\}[ \t]*$/;
+
 /** How many blank-line-separated pieces an HTML table may run across while Markdown in its cells joins it (see splitIntoBlocks). */
 const MAX_TABLE_PIECES = 64;
 
@@ -674,6 +677,184 @@ const MAX_JOINED_TABLE_DEPTH = 16;
 function htmlTableDepthChange(text: string): number {
     if (!/<\/?table/i.test(text)) return 0;
     return (text.match(/<table\b/gi)?.length ?? 0) - (text.match(/<\/table\s*>/gi)?.length ?? 0);
+}
+
+/**
+ * Where HTML text leaves its reader: in content (`data`), inside a tag (in a quoted attribute value when `quote` is
+ * set; `rawText` names the raw-text element the tag opens; `gt` once a `>` was passed inside one of its quotes), in a
+ * comment, in a CDATA section, in markup read to its next `>` (a declaration, a processing instruction, a raw-text
+ * element's end tag), or in a raw-text element's text.
+ */
+type HtmlScanState = { kind: 'data' } | { kind: 'tag'; quote?: string; rawText?: string; gt?: boolean } | { kind: 'comment' } | { kind: 'cdata' } | { kind: 'declaration' } | { kind: 'rawText'; name: string };
+
+/** What a scan saw beside the state it ends in (see scanHtmlState). */
+interface HtmlScanNotes {
+    /** It was in content at some point: what it started in ended in the text. */
+    reachedData: boolean;
+    /** It read markup the HTML reader may read otherwise (see scanHtmlState): from there on its state may not be the reader's. */
+    unsure: boolean;
+}
+
+/** White space JavaScript's trim() takes off that does not end a tag's name (the HTML reader trims a tag before naming it). */
+const TRIMMED_NON_TAG_SPACE = /[\v\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff]/;
+
+/** Whether the character at `at` is an ASCII letter (false past the text's end). */
+function isAsciiLetterAt(text: string, at: number): boolean {
+    const code = text.charCodeAt(at) | 0x20;
+    return code >= 0x61 && code <= 0x7a;
+}
+
+/** Where a tag's name ends (as the HTML reader reads it: at white space, `/` or `>`), or a quote opens a value in it. */
+const TAG_NAME_STOP = /[\t\n\f\r />"']/;
+
+/**
+ * The state HTML text leaves its reader in, read on from `state` (see HtmlScanState) as the HTML reader's tokenizer
+ * reads it. In content, `<!--` opens a comment (`<!-->` and `<!--->` are empty ones), `<![CDATA[` a CDATA section,
+ * `<!`, `<?`, or `</` and no letter, markup to the next `>`, and `<` or `</` and a letter a tag. In a tag, `"` and `'`
+ * open a quoted value that ends at the same quote, and `>` ends it: into the element's text when it opens a raw-text
+ * element (`<script>`, `<style>`, `<textarea>`, `<title>`: the HTML reader's RAW_TEXT_ELEMENTS and
+ * ESCAPABLE_RAW_TEXT_ELEMENTS, see HtmlParser) and is not self-closed. A comment ends at `-->` or `--!>`, CDATA at `]]>`, and raw text
+ * at its end tag (`</script` in any ASCII case, then white space, `/`, `>`, or the text's end: a text passed here is
+ * a segment of a joined table or one of its pieces, which white space follows), read to its `>`. A `>` passed inside
+ * a quote marks the tag `gt` (the reader may end the tag there, see HtmlParser's unbalanced-quote fallback, if no `>`
+ * outside quotes follows). Foreign content, a DOCTYPE and a tag name holding white space that `trim()` takes off are
+ * read otherwise by the reader: reading one sets `notes.unsure`. `notes.reachedData` is set whenever the state
+ * becomes content. One pass: each character is passed once, so a run of `<`, of quotes or of `</scrip` costs its
+ * length.
+ */
+function scanHtmlState(text: string, state: HtmlScanState, notes: HtmlScanNotes = { reachedData: false, unsure: false }): HtmlScanState {
+    const n = text.length;
+    // The first `>` at or after a place, found once per stretch: searched again only once the scan has passed the
+    // last one found (-1: none left), so a run of quotes costs its length.
+    let gtAt = -2;
+    const gtFrom = (from: number): number => {
+        if (gtAt !== -1 && gtAt < from) gtAt = text.indexOf('>', from);
+        return gtAt;
+    };
+    // The text in ASCII lower case, the same length, made when raw text is first searched.
+    let lower: string | undefined;
+    let i = 0;
+    while (i < n) {
+        switch (state.kind) {
+            case 'data': {
+                const lt = text.indexOf('<', i);
+                if (lt === -1) return state;
+                const next = text[lt + 1];
+                if (text.startsWith('<!--', lt)) {
+                    if (text[lt + 4] === '>') i = lt + 5;
+                    else if (text.startsWith('->', lt + 4)) i = lt + 6;
+                    else {
+                        state = { kind: 'comment' };
+                        i = lt + 4;
+                    }
+                } else if (text.startsWith('<![CDATA[', lt)) {
+                    state = { kind: 'cdata' };
+                    i = lt + 9;
+                } else if (next === '!' || next === '?' || (next === '/' && !isAsciiLetterAt(text, lt + 2))) {
+                    // (The reader may read a DOCTYPE's internal subset past its first `>`.)
+                    if (/^<!doctype/i.test(text.slice(lt, lt + 9))) notes.unsure = true;
+                    state = { kind: 'declaration' };
+                    i = lt + 2;
+                } else if (next === '/' || isAsciiLetterAt(text, lt + 1)) {
+                    const from = lt + (next === '/' ? 2 : 1);
+                    let j = from;
+                    while (j < n && !TAG_NAME_STOP.test(text[j])) j++;
+                    // (A name a quote runs into is no raw-text element's: the quote opens a value, read in the tag.)
+                    const name = text.slice(from, j).toLowerCase();
+                    // (In foreign content the reader reads `<title>`, `<textarea>` and the like as elements; it names
+                    // a tag after trimming it.)
+                    if ((next !== '/' && (name === 'svg' || name === 'math')) || TRIMMED_NON_TAG_SPACE.test(name)) notes.unsure = true;
+                    const rawText = next !== '/' && text[j] !== '"' && text[j] !== "'" && (HTML_RAW_TEXT_ELEMENTS.has(name) || ESCAPABLE_RAW_TEXT_ELEMENTS.has(name));
+                    state = rawText ? { kind: 'tag', rawText: name } : { kind: 'tag' };
+                    i = j;
+                } else i = lt + 1;
+                break;
+            }
+            case 'tag': {
+                if (state.quote) {
+                    const end = text.indexOf(state.quote, i);
+                    // A `>` the reader's quote pairing passes: it may end the tag there (see HtmlScanState's `gt`).
+                    if (!state.gt) {
+                        const gt = gtFrom(i);
+                        if (gt !== -1 && (end === -1 || gt < end)) state = { ...state, gt: true };
+                    }
+                    if (end === -1) return state;
+                    state = { kind: 'tag', ...(state.rawText ? { rawText: state.rawText } : {}), ...(state.gt ? { gt: true } : {}) };
+                    i = end + 1;
+                    break;
+                }
+                let j = i;
+                while (j < n && text[j] !== '>' && text[j] !== '"' && text[j] !== "'") j++;
+                if (j === n) return state;
+                if (text[j] !== '>') state = { ...state, quote: text[j] };
+                else if (state.rawText && text[j - 1] !== '/') state = { kind: 'rawText', name: state.rawText };
+                else {
+                    state = { kind: 'data' };
+                    notes.reachedData = true;
+                }
+                i = j + 1;
+                break;
+            }
+            case 'comment': {
+                let at = text.indexOf('--', i);
+                while (at !== -1 && text[at + 2] !== '>' && !(text[at + 2] === '!' && text[at + 3] === '>')) at = text.indexOf('--', at + 1);
+                if (at === -1) return state;
+                state = { kind: 'data' };
+                notes.reachedData = true;
+                i = at + (text[at + 2] === '>' ? 3 : 4);
+                break;
+            }
+            case 'cdata': {
+                const end = text.indexOf(']]>', i);
+                if (end === -1) return state;
+                state = { kind: 'data' };
+                notes.reachedData = true;
+                i = end + 3;
+                break;
+            }
+            case 'declaration': {
+                const end = text.indexOf('>', i);
+                if (end === -1) return state;
+                state = { kind: 'data' };
+                notes.reachedData = true;
+                i = end + 1;
+                break;
+            }
+            case 'rawText': {
+                lower ??= text.replace(/[A-Z]+/g, upper => upper.toLowerCase());
+                const close = `</${state.name}`;
+                let at = lower.indexOf(close, i);
+                while (at !== -1 && at + close.length < n && !/[\t\n\f\r />]/.test(text[at + close.length])) at = lower.indexOf(close, at + 1);
+                if (at === -1) return state;
+                state = { kind: 'declaration' };
+                i = at + close.length;
+                break;
+            }
+        }
+    }
+    return state;
+}
+
+/** The table tags of a text, opening or closing. */
+const TABLE_TAG = /<table\b|<\/table\s*>/gi;
+
+/** Where the outermost table a text leaves open opens: the last place its open tables go from none to one. */
+function openTableTagAt(text: string): number {
+    let depth = 0;
+    let at = 0;
+    for (const match of text.matchAll(TABLE_TAG)) {
+        const opens = match[0][1] !== '/';
+        if (opens && depth <= 0) at = match.index;
+        depth += opens ? 1 : -1;
+    }
+    return at;
+}
+
+/** Where a text's last table tag ends, when it is an end tag; -1 otherwise. */
+function lastTableCloseEnd(text: string): number {
+    let last: RegExpExecArray | undefined;
+    for (const match of text.matchAll(TABLE_TAG)) last = match;
+    return last && last[0][1] === '/' ? last.index + last[0].length : -1;
 }
 
 /** How deeply disclosures nest in Markdown (see planDisclosures): deeper, a disclosure's tags go and its text stays. */
@@ -1748,8 +1929,9 @@ const INLINE_TOKEN_REGEX = new RegExp(INLINE_TOKENS, 'g');
  * or, inside a list item, the column the item's content starts at (so the four-space-indented fence
  * under `- item` is a fence, not indented code); an item's fence closes within the item. Content
  * lines lose up to the opening fence's indentation. A fence that is never closed is left as text.
+ * `replace` is given the fence's language, its code and its source lines as written, fences included.
  */
-function liftFencedCode(text: string, replace: (lang: string, code: string) => string): string {
+function liftFencedCode(text: string, replace: (lang: string, code: string, source: string) => string): string {
     const lines = text.split('\n');
     const out: string[] = [];
     const closingFence = /^( *)(`{3,}|~{3,})[ \t]*$/;
@@ -1833,7 +2015,7 @@ function liftFencedCode(text: string, replace: (lang: string, code: string) => s
                 let j = i + 1;
                 while (!closes(lines[j])) j++;
                 const dedent = new RegExp(`^ {0,${indentStr.length}}`);
-                out.push(replace(info.trim().split(/\s+/)[0] || '', lines.slice(i + 1, j).map(content => content.replace(dedent, '')).join('\n')));
+                out.push(replace(info.trim().split(/\s+/)[0] || '', lines.slice(i + 1, j).map(content => content.replace(dedent, '')).join('\n'), lines.slice(i, j + 1).join('\n')));
                 i = j;
                 continue;
             }
@@ -1957,6 +2139,21 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
     let sentinel = '\uE000';
     while (textStr.includes(sentinel)) sentinel += '\uE001';
     const placeholder = (kind: string, n: number) => `${sentinel}${kind}_${n}${sentinel}`;
+    /** What each lifted block replaced, by its placeholder: put back where the block lands in text read as written. */
+    const liftedSources = new Map<string, string>();
+    /** A lifted block's placeholder, with the blank line on each side its lift put there when they are still there. */
+    const LIFTED_PLACEHOLDER = new RegExp(`(\n\n)?${sentinel}(?:CODE_BLOCK|MATH_BLOCK|ADMONITION|HTML_COMMENT)_\\d+${sentinel}(\n\n)?`, 'g');
+    /**
+     * `text` with every lifted block's placeholder replaced by the source it replaced, nested ones too (a comment
+     * holding an admonition holding code). Every lift put `\n\n<placeholder>\n\n` where its source was, so with both
+     * blank lines found the text is the original exactly; with one or none (white space the reader changed) the
+     * source goes where the placeholder is. Each placeholder occurs once, so this is linear in the result.
+     */
+    const expandLifted = (text: string): string => !text.includes(sentinel) ? text : text.replace(LIFTED_PLACEHOLDER, (match: string, before?: string, after?: string) => {
+        const source = liftedSources.get(match.slice(before ? 2 : 0, match.length - (after ? 2 : 0)));
+        if (source === undefined) return match;
+        return before && after ? expandLifted(source) : (before ?? '') + expandLifted(source) + (after ?? '');
+    });
     const placeholderIndex = (block: string, kind: string): number | null => {
         const m = block.startsWith(sentinel + kind + '_') && block.endsWith(sentinel) ? block.slice(sentinel.length + kind.length + 1, -sentinel.length) : null;
         return m !== null && /^\d+$/.test(m) ? parseInt(m, 10) : null;
@@ -1964,9 +2161,10 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
 
     // Extract fenced code blocks first to protect their contents (see liftFencedCode).
     const codeBlocks: string[] = [];
-    const liftCode = (text: string): string => liftFencedCode(text, (lang, code) => {
+    const liftCode = (text: string): string => liftFencedCode(text, (lang, code, source) => {
         const id = placeholder('CODE_BLOCK', codeBlocks.length);
         codeBlocks.push(JSON.stringify({ lang, code }));
+        liftedSources.set(id, source);
         return `\n\n${id}\n\n`;
     });
     /** The code node a lifted block's placeholder stands for, or null for any other text. */
@@ -1986,8 +2184,9 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
     // pre-pass above - its body may contain blank lines that would otherwise fragment it.
     // Inline math ($...$) is handled directly in parseInline below.
     const mathBlocks: string[] = [];
-    textStr = textStr.replace(/^\$\$\n([\s\S]*?)\n\$\$$/gm, (_match, latex: string) => {
+    textStr = textStr.replace(/^\$\$\n([\s\S]*?)\n\$\$$/gm, (match: string, latex: string) => {
         const id = placeholder('MATH_BLOCK', mathBlocks.length);
+        liftedSources.set(id, match);
         // The generator indents a content line of `$$` (which would close the block) by one space,
         // and one already indented likewise: one space comes off each.
         mathBlocks.push(latex.replace(/^ (?= *\$\$$)/gm, ''));
@@ -1997,8 +2196,9 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
     // falls through to the inline `$...$` tokenizer, which matches the INNER `$\int$` and leaks
     // the outer pair as two stray literal `$`. Runs after the multi-line pass, whose placeholders
     // carry no `$$` and so can't be re-matched. `(?!\$)` rejects `$$$...`/empty `$$$$`.
-    textStr = textStr.replace(/^\$\$(?!\$)([^\n]+?)\$\$[ \t]*$/gm, (_match, latex) => {
+    textStr = textStr.replace(/^\$\$(?!\$)([^\n]+?)\$\$[ \t]*$/gm, (match: string, latex: string) => {
         const id = placeholder('MATH_BLOCK', mathBlocks.length);
+        liftedSources.set(id, match);
         mathBlocks.push(latex);
         return `\n\n${id}\n\n`;
     });
@@ -2027,6 +2227,7 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
                 const admonitionType = ADMONITION_TYPE_MAP[(open[1] ?? open[2]).toLowerCase()];
                 if (admonitionType) {
                     const id = placeholder('ADMONITION', admonitionBlocks.length);
+                    liftedSources.set(id, lines.slice(i, close + 1).join('\n'));
                     admonitionBlocks.push(JSON.stringify({ admonitionType, body: lines.slice(i + 1, close).join('\n'), sourceSyntax: open[2] ? 'pandoc' : 'gitlab' }));
                     out.push('', '', id, '', '');
                 } else {
@@ -2065,8 +2266,11 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
             let end = found.end;
             while (textStr[end] === ' ' || textStr[end] === '\t') end++;
             if (end < textStr.length && textStr[end] !== '\n') continue;
-            out += `${textStr.slice(pos, open)}\n\n${placeholder('HTML_COMMENT', htmlComments.length)}\n\n`;
-            htmlComments.push(found.body);
+            const id = placeholder('HTML_COMMENT', htmlComments.length);
+            liftedSources.set(id, textStr.slice(open, end));
+            out += `${textStr.slice(pos, open)}\n\n${id}\n\n`;
+            // A comment is text read as written: the blocks lifted before it in its body are put back.
+            htmlComments.push(expandLifted(found.body));
             pos = search = end;
         }
         textStr = out + textStr.slice(pos);
@@ -2768,28 +2972,61 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
     // in the table's HTML for a token (private-use characters and a per-document nonce, so no text
     // the document holds can be one) and read as Markdown into its cell after the HTML is.
     const markdownPieces: string[] = [];
+    // Off while a table nested past what the HTML reader reads is read again without joining (see JOINED_TABLE).
+    let joinTables = true;
     const pieceNonce = Math.random().toString(36).slice(2);
     const PIECE_TOKEN = new RegExp(`\uE000${pieceNonce}:(\\d+)\uE001`, 'g');
     const isInlineNode = (node: OfficeContentNode) => node.type === 'text' || node.type === 'image' || node.type === 'break'
         || (node.type === 'code' && (node.metadata as CodeMetadata | undefined)?.math === 'inline');
-    const restoreMarkdownPieces = async (nodes: OfficeContentNode[]): Promise<OfficeContentNode[]> => {
+    // The HTML around a piece (a link, bold, a color) is its text's: each text node of the piece's blocks takes the
+    // formatting and metadata of the text node its token stood in, under its own, and each picture its link, unless
+    // it has one.
+    const carryRunFormatting = (nodes: OfficeContentNode[], from: OfficeContentNode): void => {
+        for (const node of nodes) {
+            if (node.type === 'text') {
+                if (from.formatting) node.formatting = { ...from.formatting, ...node.formatting };
+                if (from.metadata) node.metadata = { ...from.metadata, ...node.metadata } as TextMetadata;
+            } else if (node.type === 'image' && (from.metadata as TextMetadata | undefined)?.link && !(node.metadata as ImageMetadata | undefined)?.link) {
+                const { link, linkType } = from.metadata as TextMetadata;
+                node.metadata = { ...node.metadata, link, ...(linkType ? { linkType } : {}) } as ImageMetadata;
+            }
+            if (node.children?.length) carryRunFormatting(node.children, from);
+        }
+    };
+    // Each piece restored is added to `placed` (see readHtmlBlock).
+    const restoreMarkdownPieces = async (nodes: OfficeContentNode[], placed: Set<number>): Promise<OfficeContentNode[]> => {
         let changed = false;
         const out: OfficeContentNode[] = [];
         for (const node of nodes) {
             if (node.children?.length) {
-                const restored = await restoreMarkdownPieces(node.children);
+                const restored = await restoreMarkdownPieces(node.children, placed);
                 if (restored !== node.children) {
                     node.children = restored;
                     // A paragraph a piece's blocks landed in is those blocks, and its runs of text.
                     if (node.type === 'paragraph' && restored.some(child => !isInlineNode(child))) {
                         changed = true;
+                        const made: OfficeContentNode[] = [];
                         let run: OfficeContentNode[] = [];
-                        const flush = () => { if (run.some(child => child.type !== 'text' || child.text?.trim())) out.push({ ...node, children: run }); run = []; };
+                        const flush = () => { if (run.some(child => child.type !== 'text' || child.text?.trim())) made.push({ ...node, children: run }); run = []; };
                         for (const child of restored) {
                             if (isInlineNode(child)) run.push(child);
-                            else { flush(); out.push(child); }
+                            else { flush(); made.push(child); }
                         }
                         flush();
+                        // Its anchors (lost with it before) go to the first node it became that holds anchors, or to
+                        // an empty paragraph before them; each run is a copy of it, and keeps none of them again.
+                        const ids = (node.metadata as { anchorIds?: string[] } | undefined)?.anchorIds;
+                        if (ids?.length) {
+                            const withoutIds = { ...node.metadata } as { anchorIds?: string[] };
+                            delete withoutIds.anchorIds;
+                            for (const copy of made) if (copy.metadata === node.metadata) copy.metadata = withoutIds as OfficeContentNode['metadata'];
+                            const holder = made.find(made => ANCHOR_HOLDERS.has(made.type));
+                            if (holder) {
+                                const own = (holder.metadata as { anchorIds?: string[] } | undefined)?.anchorIds ?? [];
+                                holder.metadata = { ...holder.metadata, anchorIds: [...ids, ...own] } as OfficeContentNode['metadata'];
+                            } else out.push({ type: 'paragraph', metadata: { anchorIds: ids } as ParagraphMetadata, children: [] });
+                        }
+                        appendAll(out, made);
                         continue;
                     }
                 }
@@ -2805,9 +3042,12 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
             for (const match of node.text.matchAll(PIECE_TOKEN)) {
                 const before = node.text.slice(last, match.index);
                 if (before.trim()) out.push({ ...node, text: before });
+                const index = Number(match[1]);
+                placed.add(index);
                 const parsed: OfficeContentNode[] = [];
-                await parseBlocks(splitIntoBlocks(markdownPieces[Number(match[1])] ?? ''), parsed);
+                await parseBlocks(splitIntoBlocks(markdownPieces[index] ?? ''), parsed);
                 foldAnchorPlaceholders(parsed);
+                if (node.formatting || node.metadata) carryRunFormatting(parsed, node);
                 appendAll(out, parsed);
                 last = match.index! + match[0].length;
             }
@@ -2817,17 +3057,21 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
         return changed ? out : nodes;
     };
     // A piece that landed where no Markdown is read (the text of a `<pre>`, an attribute such as alt
-    // text) is that text, as written: its token was left there.
-    const restoreRawPieces = (nodes: OfficeContentNode[]): void => {
-        const raw = (value: string) => value.replace(PIECE_TOKEN, (_, index: string) => markdownPieces[Number(index)] ?? '');
+    // text) is that text, as written: its token was left there, and a lifted block in it (a fence in a
+    // `<pre>`) is its source. Each piece restored is added to `placed` (see readHtmlBlock).
+    const restoreRawPieces = (nodes: OfficeContentNode[], placed: Set<number>): void => {
+        const raw = (value: string) => expandLifted(value.replace(PIECE_TOKEN, (_, index: string) => {
+            placed.add(Number(index));
+            return markdownPieces[Number(index)] ?? '';
+        }));
         for (const node of nodes) {
             if (typeof node.text === 'string' && node.text.includes('\uE000')) node.text = raw(node.text);
             for (const record of [node.metadata as Record<string, unknown> | undefined, (node as any).htmlAttributes as Record<string, unknown> | undefined]) {
                 if (!record) continue;
                 for (const [key, value] of Object.entries(record)) if (typeof value === 'string' && value.includes('\uE000')) record[key] = raw(value);
             }
-            if (node.children?.length) restoreRawPieces(node.children);
-            if (node.notes?.length) restoreRawPieces(node.notes);
+            if (node.children?.length) restoreRawPieces(node.children, placed);
+            if (node.notes?.length) restoreRawPieces(node.notes, placed);
         }
     };
 
@@ -2835,14 +3079,29 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
     // its pictures joining this document's attachments, and its footnote references taking their
     // `[^id]:` definitions from this document.
     // Its comments are kept, as Markdown's are (the HTML parser drops them unless asked, and a
-    // comment in an HTML table or block was lost).
-    const readHtmlBlock = async (block: string): Promise<OfficeParserAST> => {
+    // comment in an HTML table or block was lost). The HTML reader's warnings go to `issues` when it is given (an
+    // error it throws is reported when made, so one caught must not reach the caller).
+    const readHtmlBlock = async (block: string, issues?: OfficeIssue[]): Promise<OfficeParserAST> => {
         // Its quotes are numbered with this document's (an id per block, from 1, made two quotes one).
-        const html = await parseHtml(Buffer.from(block), { ...config, htmlParserConfig: { ...config.htmlParserConfig, preserveComments: true } },
-            { quoteId: () => `md-quote-${++quoteCount}`, ...(disclosureDepth > 0 ? { inDisclosure: true } : {}) });
-        if (markdownPieces.length) {
-            html.content = await restoreMarkdownPieces(html.content);
-            restoreRawPieces(html.content);
+        const html = await parseHtml(Buffer.from(block), {
+            ...config, ...(issues ? { onWarning: (issue: OfficeIssue) => { issues.push(issue); } } : {}),
+            htmlParserConfig: { ...config.htmlParserConfig, preserveComments: true },
+        }, { quoteId: () => `md-quote-${++quoteCount}`, ...(disclosureDepth > 0 ? { inDisclosure: true } : {}) });
+        if (markdownPieces.length && block.includes('\uE000')) {
+            const placed = new Set<number>();
+            html.content = await restoreMarkdownPieces(html.content, placed);
+            restoreRawPieces(html.content, placed);
+            // A piece the HTML reader left out (in an element it reads as nothing, an attribute it does not keep)
+            // is read after what the block holds, as it would be without the table.
+            for (const match of block.matchAll(PIECE_TOKEN)) {
+                const index = Number(match[1]);
+                if (placed.has(index)) continue;
+                placed.add(index);
+                const parsed: OfficeContentNode[] = [];
+                await parseBlocks(splitIntoBlocks(markdownPieces[index] ?? ''), parsed);
+                foldAnchorPlaceholders(parsed);
+                appendAll(html.content, parsed);
+            }
         }
         const renamed = new Map<string, string>();
         for (const attachment of html.attachments) {
@@ -2873,6 +3132,11 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
     // starts with; and a container's blocks after a tag closed it, read as blocks of the level.
     const disclosureBodies: { tag: string; summary: string[] | null; body: string[] }[] = [];
     const rawHtmlParts: string[] = [];
+    /**
+     * Tables a piece of text joined (see splitRaw): the lines before the table in its block, the table's, and the
+     * column the block's first line is indented to (a list item's content, see the list merge).
+     */
+    const joinedTables: { prefix: string; html: string; indent: number }[] = [];
     const liftedTexts: { text: string; alignment?: 'left' | 'center' | 'right' | 'justify' }[] = [];
     const liftedBlocks: string[] = [];
     /** How many disclosures' bodies are being read (see MAX_DISCLOSURE_DEPTH). */
@@ -3078,22 +3342,40 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
     // within MAX_TABLE_PIECES pieces, pieces of Markdown between (the GitHub way of writing a cell:
     // `<td>`, a blank line, `Some *text*`, a blank line, `</td>`) join it too, read as Markdown into
     // their cell (see restoreMarkdownPieces); they were a paragraph, and the rest escaped text.
+    // A table holding pieces of text is one HTML block from its table's first tag to its last: its pieces are read
+    // in its cells where they stand in the cells' content, and as the text of whatever they stand in otherwise (a
+    // tag, a quoted value, a comment, a raw-text element); every piece is read somewhere, and nothing is shown of a
+    // token or a placeholder (which pieces are read as written is decided when the table is read, see
+    // writeEndingPieces). The lines after its last tag read as they did.
     let tableDepth = 0;
     let joinMarkdownUntil = -1;
+    // For each raw block a piece of text joined (see the sub-split below): where its table opens, and where it
+    // closes (the end of its last tag), -1 while the block leaves it open.
+    const joinedRanges: ({ openAt: number; closeAt: number } | undefined)[] = [];
+    let tableOpenAt = 0;
+    let holdsCellText = false;
     for (let i = 0; i < parts.length; i += 2) {
         const part = parts[i];
         const separator = i > 0 ? parts[i - 1] : '';
         const startsWithTag = /^[ \t]*</.test(part);
         if (tableDepth > 0 && tableDepth <= MAX_JOINED_TABLE_DEPTH && (startsWithTag || i <= joinMarkdownUntil)) {
-            const markdown = !startsWithTag && !TABLE_PART_TAG.test(part);
-            if (markdown) markdownPieces.push(part);
-            rawBlocks[rawBlocks.length - 1] += separator + (markdown ? `\uE000${pieceNonce}:${markdownPieces.length - 1}\uE001` : part);
-            tableDepth += markdown ? 0 : htmlTableDepthChange(part);
+            const cellText = !startsWithTag && !TABLE_PART_TAG.test(part);
+            if (cellText) markdownPieces.push(part);
+            const partAt = rawBlocks[rawBlocks.length - 1].length + separator.length;
+            rawBlocks[rawBlocks.length - 1] += separator + (cellText ? `\uE000${pieceNonce}:${markdownPieces.length - 1}\uE001` : part);
+            tableDepth += cellText ? 0 : htmlTableDepthChange(part);
+            holdsCellText ||= cellText;
+            if (holdsCellText) {
+                const closeEnd = tableDepth > 0 ? -1 : lastTableCloseEnd(part);
+                joinedRanges[rawBlocks.length - 1] = { openAt: tableOpenAt, closeAt: closeEnd === -1 ? -1 : partAt + closeEnd };
+            }
             continue;
         }
         rawBlocks.push(part);
         rawSeparators.push(separator);
-        tableDepth = HTML_BLOCK_LINE.exec(part)?.index === 0 ? htmlTableDepthChange(part) : 0;
+        tableDepth = joinTables && HTML_BLOCK_LINE.exec(part)?.index === 0 ? htmlTableDepthChange(part) : 0;
+        holdsCellText = false;
+        if (tableDepth > 0) tableOpenAt = openTableTagAt(part);
         joinMarkdownUntil = -1;
         for (let j = i + 2, depth = tableDepth, n = 0; tableDepth > 0 && j < parts.length && n < MAX_TABLE_PIECES; j += 2, n++) {
             depth += htmlTableDepthChange(parts[j]);
@@ -3109,8 +3391,33 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
         if (!trimAsciiWhitespace(rawBlock)) continue;
         const firstBlock = blocks.length;
 
+        // A table a piece of text joined (see joinedRanges) is its HTML from the start of the line it opens on to the
+        // end of the line it closes on; where a disclosure's tag stands beside it on one of those lines, the line is
+        // broken between the two (HTML reads the line break as it reads none), so the disclosure reads as before.
+        const range = joinedRanges[r];
+        let blockText = rawBlock;
+        let joinStart = -1;
+        let joinEnd = -1;
+        if (range) {
+            joinEnd = blockText.length;
+            if (range.closeAt >= 0) {
+                const lineEnd = blockText.indexOf('\n', range.closeAt);
+                joinEnd = lineEnd === -1 ? blockText.length : lineEnd;
+                if (MAY_HOLD_DISCLOSURE_TAG.test(blockText.slice(range.closeAt, joinEnd))) {
+                    blockText = `${blockText.slice(0, range.closeAt)}\n${blockText.slice(range.closeAt)}`;
+                    joinEnd = range.closeAt;
+                }
+            }
+            joinStart = range.openAt > 0 ? blockText.lastIndexOf('\n', range.openAt - 1) + 1 : 0;
+            if (MAY_HOLD_DISCLOSURE_TAG.test(blockText.slice(joinStart, range.openAt))) {
+                blockText = `${blockText.slice(0, range.openAt)}\n${blockText.slice(range.openAt)}`;
+                joinStart = range.openAt + 1;
+                joinEnd++;
+            }
+        }
+
         // Match headings or lists that might be joined with other text via single newline
-        const lines = rawBlock.split('\n');
+        const lines = blockText.split('\n');
         let currentSubBlock: string[] = [];
         // Tracks whether we're currently "inside" a list (a list-item line, or an
         // indented continuation line right after one) so a continuation line doesn't
@@ -3129,22 +3436,49 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
         let quoteHtml = false;
         // Whether a quote was ended so (see quoteHtml): a quote line after the lines that ended it starts a quote again.
         let quoteEnded = false;
+        // The line of the sub-block the joined table starts at, while the sub-block holds it (-1 otherwise).
+        let joinedFrom = -1;
+        // Whether the sub-block holds a disclosure's tag (looked for in a block a table joined): one before the table
+        // is read before it, and one after it ends it.
+        let holdsDisclosureTag = false;
         const add = (line: string) => {
             currentSubBlock.push(line);
+            if (range && !holdsDisclosureTag && MAY_HOLD_DISCLOSURE_TAG.test(line)) holdsDisclosureTag = true;
             if (currentSubBlock.length === 2) inTable = line.includes('-') && /^[-:| \t]+$/.test(line);
         };
         const flush = () => {
             if (currentSubBlock.length > 0) {
                 separators.push(blocks.length === firstBlock ? rawSeparators[r] : '\n');
-                blocks.push(currentSubBlock.join('\n'));
+                if (joinedFrom >= 0) {
+                    blocks.push(placeholder('JOINED_TABLE', joinedTables.length));
+                    joinedTables.push({ prefix: currentSubBlock.slice(0, joinedFrom).join('\n'), html: currentSubBlock.slice(joinedFrom).join('\n'), indent: indentColumn(currentSubBlock[0]) });
+                } else blocks.push(currentSubBlock.join('\n'));
             }
+            joinedFrom = -1;
+            holdsDisclosureTag = false;
             currentSubBlock = [];
             inTable = false;
             quoteHtml = false;
             quoteEnded = false;
         };
+        let nextLineAt = 0;
         for (const line of lines) {
             checkAbortSignal(config.abortSignal);
+            const lineAt = nextLineAt;
+            nextLineAt += line.length + 1;
+            // The lines of a table a piece of text joined are its HTML: none starts a block (they are CommonMark's HTML
+            // block, which the table's line opened), and its pieces are read in its cells (see JOINED_TABLE).
+            if (range && lineAt >= joinStart && lineAt < joinEnd) {
+                if (joinedFrom < 0) {
+                    if (holdsDisclosureTag) flush();
+                    joinedFrom = currentSubBlock.length;
+                    inList = false;
+                }
+                add(line);
+                inTable = false;
+                continue;
+            }
+            if (joinedFrom >= 0 && MAY_HOLD_DISCLOSURE_TAG.test(line)) flush();
             // A blank line before any block (a text's first lines: blank lines inside a raw block are its
             // separators) starts none and opens no paragraph, as at the start of a document (CommonMark).
             // Taken as paragraph text, it kept a list item after it in the block, whose lines the list
@@ -3152,7 +3486,8 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
             if (!currentSubBlock.length && !trimAsciiWhitespace(line)) continue;
             // Paragraph text is open when the sub-block holds lines that are neither a list's nor a
             // table's: what follows it may continue it rather than start a block (CommonMark).
-            const inParagraph: boolean = currentSubBlock.length > 0 && !inList && !inTable;
+            // (A joined table is no paragraph: no line under it is an underline, and an item may follow it.)
+            const inParagraph: boolean = currentSubBlock.length > 0 && !inList && !inTable && joinedFrom < 0;
             // A line of `=` or `-` under paragraph text is a setext heading's underline; otherwise
             // three or more `-`, `*` or `_` (spaces between allowed) are a thematic break, which
             // is never a list item.
@@ -3254,16 +3589,26 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
         // (a paragraph, a table, a code block indented four more): the AST's items hold one line, so it
         // is read as a block of its own after the list, without the item's indentation. Read as
         // indented code, a table or paragraph under an item came out as a code block.
+        let continuation = false;
         if (itemColumns.size) {
-            const indent = indentColumn(block);
+            const joined = placeholderIndex(block, 'JOINED_TABLE');
+            const table = joined !== null && joined < joinedTables.length ? joinedTables[joined] : undefined;
+            const indent = table ? table.indent : indentColumn(block);
             sortedColumns ??= [...itemColumns].sort((a, b) => a - b);
             let column = 0;
             for (let lo = 0, hi = sortedColumns.length - 1; lo <= hi;) {
                 const mid = (lo + hi) >> 1;
                 if (sortedColumns[mid] <= indent) { column = sortedColumns[mid]; lo = mid + 1; } else hi = mid - 1;
             }
-            if (column > 0) block = block.split('\n').map(line => dedentLine(line, column)).join('\n');
-            else itemColumns.clear();
+            if (column > 0) {
+                const dedent = (text: string) => text.split('\n').map(line => dedentLine(line, column)).join('\n');
+                // (A joined table stands for its lines: they are dedented in its entry, see joinedTables.)
+                if (table) {
+                    table.prefix = dedent(table.prefix);
+                    table.html = dedent(table.html);
+                } else block = dedent(block);
+                continuation = true;
+            } else itemColumns.clear();
         }
         const isCode = isIndentedCodeBlock(block);
         // An indented code block runs on across blank lines (CommonMark): the next indented block
@@ -3273,7 +3618,6 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
             continue;
         }
         mergedBlocks.push(block);
-        const continuation = block !== blocks[i];
         previousIsList = !continuation && LIST_ITEM_START.test(block.split('\n', 1)[0]);
         previousIsCode = isCode;
         if (previousIsList) {
@@ -3290,6 +3634,80 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
     let listIdCounter = 1;
     /** The quotes read so far (each quote's paragraphs share an id, see ParagraphMetadata.quoteId). */
     let quoteCount = 0;
+
+    /**
+     * A joined table's HTML as the HTML reader is given it (see JOINED_TABLE), with the pieces of text the reader must
+     * read as written put in place of their tokens; every other piece keeps its token (read by readHtmlBlock: as
+     * Markdown in content, as text in a value, comment or `<pre>`, and after the table where the reader drops it). The
+     * text is scanned as the reader reads it (see scanHtmlState), lifted blocks as their source, and at each token
+     * outside content:
+     * - a piece that ends what it stands in (a tag at its `>`, a quoted value and its tag, a comment, CDATA, a
+     *   declaration, raw text at its end tag) is written: its token hid that end, and what it stood in took what
+     *   followed;
+     * - a piece that cannot change how the reader reads on (in a tag: no `>` and no quote that could pair; elsewhere:
+     *   no end) is written once what it stands in is seen to end, and keeps its token if it never does;
+     * - any other piece keeps its token: its quotes or `>` would move where the reader ends the tag.
+     * After a quote holding a `>` (`alt=Bob's width=40>`, `class="x>`) the reader ends that tag at the first `>` unless
+     * a `>` outside quotes follows anywhere, which writing a piece can change, so from there every piece keeps its
+     * token, as before tables joined; so do the pieces after markup the scan does not model (scanHtmlState's
+     * notes.unsure). Each stretch between tokens and each piece is scanned once.
+     */
+    const writeEndingPieces = (table: string): string => {
+        if (!table.includes('\uE000')) return table;
+        const write = new Set<number>();
+        let pending: number[] = [];
+        let state: HtmlScanState = { kind: 'data' };
+        const notes: HtmlScanNotes = { reachedData: false, unsure: false };
+        // Whether what `from` stood in ended on the way to `to` (a tag at its `>`, raw text at its end tag).
+        const ends = (from: HtmlScanState, to: HtmlScanState, seen: HtmlScanNotes) => seen.reachedData || to.kind !== from.kind;
+        let last = 0;
+        // Scans on from the last token to `end`: the pending pieces are written once what they stand in ends.
+        const scanTo = (end: number) => {
+            const from = state;
+            notes.reachedData = false;
+            state = scanHtmlState(expandLifted(table.slice(last, end)), state, notes);
+            if (pending.length && ends(from, state, notes)) {
+                for (const k of pending) write.add(k);
+                pending = [];
+            }
+        };
+        for (const match of table.matchAll(PIECE_TOKEN)) {
+            scanTo(match.index!);
+            last = match.index! + match[0].length;
+            if (state.kind === 'data' || notes.unsure || (state.kind === 'tag' && state.gt)) continue;
+            const index = Number(match[1]);
+            const piece = expandLifted(markdownPieces[index] ?? '');
+            const trial: HtmlScanNotes = { reachedData: false, unsure: false };
+            const after = scanHtmlState(piece, state, trial);
+            if (ends(state, after, trial)) {
+                write.add(index);
+                for (const k of pending) write.add(k);
+                pending = [];
+                state = after;
+                notes.unsure = trial.unsure;
+            } else if (state.kind !== 'tag' || (!piece.includes('>') && (state.quote ? !piece.includes(state.quote) : !/["']/.test(piece)))) pending.push(index);
+        }
+        // (The reader is not given a trailing attribute list, see readHtmlInto.)
+        if (pending.length) scanTo(table.match(TRAILING_ATTRIBUTE_LIST)?.index ?? table.length);
+        return write.size ? table.replace(PIECE_TOKEN, (token: string, index: string) => write.has(Number(index)) ? markdownPieces[Number(index)] ?? '' : token) : table;
+    };
+
+    // An HTML block read into `content`: a trailing attribute list (Pandoc's `{align=right}` right after it, or
+    // Kramdown's `{: align=right}` on its own following line) gives its table's align. Its warnings go to `issues`
+    // when it is given (see readHtmlBlock).
+    const readHtmlInto = async (block: string, content: OfficeContentNode[], issues?: OfficeIssue[]): Promise<void> => {
+        let tableAlign: 'left' | 'center' | 'right' | undefined;
+        const tableAttrLineMatch = block.match(TRAILING_ATTRIBUTE_LIST);
+        if (tableAttrLineMatch) {
+            tableAlign = parseAttributeList(tableAttrLineMatch[1]).align;
+            block = block.slice(0, tableAttrLineMatch.index);
+        }
+        const html = await readHtmlBlock(block, issues);
+        for (const node of html.content) {
+            if (node.type === 'table' && tableAlign) node.metadata = { ...node.metadata, align: tableAlign };
+            content.push(node);
+        }
+    };
 
     // Parses blocks (see splitIntoBlocks) into nodes appended to `content`: the document's, or those
     // of a quote or note being read.
@@ -3550,6 +3968,38 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
         const liftedBlocksIndex = placeholderIndex(block, 'LIFTED_BLOCKS');
         if (liftedBlocksIndex !== null && liftedBlocksIndex < liftedBlocks.length) {
             await parseBlocks(splitIntoBlocks(liftCode(liftedBlocks[liftedBlocksIndex])), content);
+            continue;
+        }
+        // A table a piece of text joined (see splitRaw): HTML from its table on, or from the first line starting an
+        // HTML block before it, whatever follows it in its block; the lines before that are Markdown.
+        const joinedIndex = placeholderIndex(block, 'JOINED_TABLE');
+        if (joinedIndex !== null && joinedIndex < joinedTables.length) {
+            const { prefix, html } = joinedTables[joinedIndex];
+            const start = prefix ? HTML_BLOCK_LINE.exec(prefix) : null;
+            const markdown = !prefix ? '' : start ? prefix.slice(0, start.index) : prefix;
+            if (trimAsciiWhitespace(markdown)) await parseBlocks([markdown], content);
+            const table = trimAsciiWhitespace(start ? `${prefix.slice(start.index)}\n${html}` : html);
+            // Read with its warnings kept back: a table nested past what the HTML reader reads (a cell's unclosed
+            // `<div>` lines, which were cut out of it before) is read as it was before tables joined, its pieces
+            // blocks of their own after its cells, rather than refused.
+            const issues: OfficeIssue[] = [];
+            try {
+                await readHtmlInto(expandLifted(writeEndingPieces(table)), content, issues);
+            } catch (error) {
+                const issue = (error as OfficeError).officeIssue;
+                if (issue?.code !== OfficeErrorType.MAX_NESTING_DEPTH_EXCEEDED || !issues.includes(issue)) {
+                    for (const kept of issues) config.onWarning?.(kept);
+                    throw error;
+                }
+                joinTables = false;
+                try {
+                    await parseBlocks(splitIntoBlocks(table.replace(PIECE_TOKEN, (_, index: string) => markdownPieces[Number(index)] ?? '')), content);
+                } finally {
+                    joinTables = true;
+                }
+                continue;
+            }
+            for (const issue of issues) config.onWarning?.(issue);
             continue;
         }
         // Raw HTML cut from an HTML block at a disclosure's tag (see groupDisclosures).
@@ -3889,7 +4339,14 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
             await parseBlocks([block.slice(0, htmlStart!.index)], content);
             block = block.slice(cut);
         }
-        if (htmlStart || (block.includes('|') && hasTableDelimiterRow(block))) {
+        if (htmlStart) {
+            // HTML is read with the HTML parser: a table's cells keep their formatting, links,
+            // pictures, math, line breaks and nested tables, and text around it in the block is
+            // kept too (see readHtmlBlock); an attribute list after it gives its table's align.
+            await readHtmlInto(block, content);
+            continue;
+        }
+        if (block.includes('|') && hasTableDelimiterRow(block)) {
             // Pandoc-style trailing attribute list (`{align=right}`) immediately after the
             // table, or Kramdown's `{: align=right}` on its own following line - both land
             // in this same raw block since there's no blank line separating them.
@@ -3900,73 +4357,61 @@ export const parseMarkdown = async (buffer: Buffer, config: FullOfficeParserConf
                 block = block.slice(0, tableAttrLineMatch.index);
             }
 
-            if (htmlStart) {
-                // HTML is read with the HTML parser: a table's cells keep their formatting, links,
-                // pictures, math, line breaks and nested tables, and text around it in the block is
-                // kept too (see readHtmlBlock).
-                const html = await readHtmlBlock(block);
-                for (const node of html.content) {
-                    if (node.type === 'table' && tableAlign) node.metadata = { ...node.metadata, align: tableAlign };
-                    content.push(node);
-                }
-                continue;
-            } else {
-                const lines = trimAsciiWhitespace(block).split('\n');
-                const rows: OfficeContentNode[] = [];
-                // Pre-scan the separator row for per-column GFM alignment (`:--` left, `:-:` center,
-                // `--:` right; a bare `--` column has none), so every cell can carry its column's
-                // alignment on CellMetadata.align (the header row precedes the separator, so a
-                // per-cell pass alone could not see it).
-                // The delimiter row is the first such line after the header: a body row of `-` or `:`
-                // cells (`| - | - |`) is a row, which was dropped as another delimiter row.
-                const sepIndex = lines.findIndex((l, i) => i >= 1 && /^\|?\s*:?-+:?\s*(?:\|\s*:?-+:?\s*)*\|?$/.test(l));
-                const sepLine = sepIndex >= 0 ? lines[sepIndex] : undefined;
-                const columnAligns: ('left' | 'center' | 'right' | null)[] = sepLine
-                    ? sepLine.replace(/^\||\|$/g, '').split('|').map(c => {
-                        const t = c.trim();
-                        const l = t.startsWith(':'), r = t.endsWith(':');
-                        return (l && r) ? 'center' : r ? 'right' : l ? 'left' : null;
-                    })
-                    : [];
-                for (let i = 0; i < lines.length; i++) {
-                    if (i === sepIndex) continue; // Separator row (per-cell `:?-+:?`, GFM-style; accepts short cells like `|-|-|`)
+            const lines = trimAsciiWhitespace(block).split('\n');
+            const rows: OfficeContentNode[] = [];
+            // Pre-scan the separator row for per-column GFM alignment (`:--` left, `:-:` center,
+            // `--:` right; a bare `--` column has none), so every cell can carry its column's
+            // alignment on CellMetadata.align (the header row precedes the separator, so a
+            // per-cell pass alone could not see it).
+            // The delimiter row is the first such line after the header: a body row of `-` or `:`
+            // cells (`| - | - |`) is a row, which was dropped as another delimiter row.
+            const sepIndex = lines.findIndex((l, i) => i >= 1 && /^\|?\s*:?-+:?\s*(?:\|\s*:?-+:?\s*)*\|?$/.test(l));
+            const sepLine = sepIndex >= 0 ? lines[sepIndex] : undefined;
+            const columnAligns: ('left' | 'center' | 'right' | null)[] = sepLine
+                ? sepLine.replace(/^\||\|$/g, '').split('|').map(c => {
+                    const t = c.trim();
+                    const l = t.startsWith(':'), r = t.endsWith(':');
+                    return (l && r) ? 'center' : r ? 'right' : l ? 'left' : null;
+                })
+                : [];
+            for (let i = 0; i < lines.length; i++) {
+                if (i === sepIndex) continue; // Separator row (per-cell `:?-+:?`, GFM-style; accepts short cells like `|-|-|`)
 
-                    const cellsStr = tableRowCells(lines[i]);
-                    const cells: OfficeContentNode[] = cellsStr.map((c, colIdx) => {
-                        // Recognize the MarkdownGenerator's own cell-alignment fallback,
-                        // `<div style="text-align: X">…</div>`, and lift it into an aligned
-                        // paragraph so it round-trips as alignment instead of being escaped to
-                        // visible text on regeneration. Unwrap wherever it sits (e.g. inside **…**).
-                        const { text: cellText, align: cellAlign } = unwrapAlignDivs(trimAsciiWhitespace(c));
-                        // The row before the delimiter row is the header. Its cells are marked as header
-                        // cells, as the Word, ODF, HTML and PDF readers mark theirs (`style: 'header'`), and
-                        // keep only the marks the author wrote: made bold instead, a header cell's own
-                        // `**b**` could not be told from the header, and a cell holding only `<br>` made
-                        // the row no header at all.
-                        const isHeader = i === 0 && sepIndex >= 1;
-                        const inline = parseInline(cellText, i === 0 && !isHeader ? { bold: true } : {});
-                        const colAlign = columnAligns[colIdx] ?? undefined;
-                        const cellMeta = colAlign || isHeader
-                            ? { ...(colAlign ? { col: colIdx, align: colAlign } : {}), ...(isHeader ? { style: 'header' } : {}) } as any
-                            : undefined;
-                        if (cellAlign && cellAlign !== 'left') {
-                            return {
-                                type: 'cell',
-                                metadata: cellMeta,
-                                children: [{ type: 'paragraph', metadata: { alignment: cellAlign } as any, children: inline }]
-                            } as OfficeContentNode;
-                        }
-                        return { type: 'cell', metadata: cellMeta, children: inline } as OfficeContentNode;
-                    });
-                    rows.push({ type: 'row', children: cells });
-                }
-                // The table's own align is where it stands on the page, which only an attribute list
-                // after it says (see tableAlign). How its columns are aligned says nothing of that: taken
-                // as the table's align when every column agreed, a table of right-aligned columns was
-                // moved to the right of the page by an editor reading its HTML.
-                content.push({ type: 'table', metadata: tableAlign ? { align: tableAlign } : undefined, children: rows });
-                continue;
+                const cellsStr = tableRowCells(lines[i]);
+                const cells: OfficeContentNode[] = cellsStr.map((c, colIdx) => {
+                    // Recognize the MarkdownGenerator's own cell-alignment fallback,
+                    // `<div style="text-align: X">…</div>`, and lift it into an aligned
+                    // paragraph so it round-trips as alignment instead of being escaped to
+                    // visible text on regeneration. Unwrap wherever it sits (e.g. inside **…**).
+                    const { text: cellText, align: cellAlign } = unwrapAlignDivs(trimAsciiWhitespace(c));
+                    // The row before the delimiter row is the header. Its cells are marked as header
+                    // cells, as the Word, ODF, HTML and PDF readers mark theirs (`style: 'header'`), and
+                    // keep only the marks the author wrote: made bold instead, a header cell's own
+                    // `**b**` could not be told from the header, and a cell holding only `<br>` made
+                    // the row no header at all.
+                    const isHeader = i === 0 && sepIndex >= 1;
+                    const inline = parseInline(cellText, i === 0 && !isHeader ? { bold: true } : {});
+                    const colAlign = columnAligns[colIdx] ?? undefined;
+                    const cellMeta = colAlign || isHeader
+                        ? { ...(colAlign ? { col: colIdx, align: colAlign } : {}), ...(isHeader ? { style: 'header' } : {}) } as any
+                        : undefined;
+                    if (cellAlign && cellAlign !== 'left') {
+                        return {
+                            type: 'cell',
+                            metadata: cellMeta,
+                            children: [{ type: 'paragraph', metadata: { alignment: cellAlign } as any, children: inline }]
+                        } as OfficeContentNode;
+                    }
+                    return { type: 'cell', metadata: cellMeta, children: inline } as OfficeContentNode;
+                });
+                rows.push({ type: 'row', children: cells });
             }
+            // The table's own align is where it stands on the page, which only an attribute list
+            // after it says (see tableAlign). How its columns are aligned says nothing of that: taken
+            // as the table's align when every column agreed, a table of right-aligned columns was
+            // moved to the right of the page by an editor reading its HTML.
+            content.push({ type: 'table', metadata: tableAlign ? { align: tableAlign } : undefined, children: rows });
+            continue;
         }
 
         // Paragraph (with any display math written in it lifted out between its parts)

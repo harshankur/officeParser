@@ -102,8 +102,8 @@ const VOID_ELEMENTS = new Set(['area', 'base', 'basefont', 'bgsound', 'br', 'col
  * `<xmp>`...; `<noscript>` too, as a browser running scripts reads it) and, with its character
  * references, `<title>` and `<textarea>`. Read as markup, `<textarea><b>x</b></textarea>` was bold text.
  */
-const RAW_TEXT_ELEMENTS = new Set(['iframe', 'noembed', 'noframes', 'noscript', 'script', 'style', 'xmp']);
-const ESCAPABLE_RAW_TEXT_ELEMENTS = new Set(['textarea', 'title']);
+export const RAW_TEXT_ELEMENTS = new Set(['iframe', 'noembed', 'noframes', 'noscript', 'script', 'style', 'xmp']);
+export const ESCAPABLE_RAW_TEXT_ELEMENTS = new Set(['textarea', 'title']);
 
 /**
  * HTML's formatting elements. One a paragraph's end closes is opened again where the text goes on, as
