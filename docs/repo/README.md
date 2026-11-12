@@ -367,9 +367,11 @@ pdf.js in the host stops at its next time slice.
 > [!NOTE]
 > **Cancellation is cooperative**
 > The signal is checked between steps: an already-aborted signal rejects before any work, and an abort
-> is seen at the next check (between archive reads, pages, OCR jobs, or batches of parsed tokens). A
-> step that runs synchronously, such as parsing a `.tex` file or one large XML part, finishes before a
-> timer's abort can run; those steps are bounded in size instead.
+> is seen at the next check: between archive reads (an archive yields to the event loop every megabyte
+> when a signal is given), pages, OCR jobs or batches of parsed tokens. Format detection and OpenDocument
+> decryption stop too, and decryption asks for no other password after an abort. A step that runs
+> synchronously, such as parsing a `.tex` file or one large XML part, finishes before a timer's abort can
+> run; those steps are bounded in size instead, and `abortSignal` is not a hard execution-time limit.
 
 > [!NOTE]
 > **Worker Cleanup on Abort**
@@ -508,13 +510,16 @@ const { value: csv } = await OfficeGenerator.generate(ast, 'csv');
 >
 > **EPUB generation with images** requires `extractAttachments: true` on the parse step that
 > produced the AST. See [EPUB Support](#epub-support). So do pictures and charts in **PPTX and ODP**
-> output: a chart is written as a table of its data, which is in its attachment.
+> output, and charts in EPUB output: a chart is written as a table of its data, which is in its attachment.
+> Parsed without it, a chart has no data: an ODF chart (ODT, ODS, ODP) is written as its text and a DOCX or
+> PPTX chart as its reference (`[Chart: chart1.xml]`) by the flowing outputs, PPTX, ODP, XLSX, ODS and CSV
+> output report it, and an XLSX chart is not read (reported with `CONTENT_PART_NOT_READ`).
 
 ---
 
 ## OfficeConverter: One-Step API
 
-`OfficeConverter.convert()` combines parsing and generation in a single call. It automatically syncs parser options from the generator config: unless you set `parseConfig.extractAttachments` explicitly, it is enabled when the output will render images or charts, or when you enable `parseConfig.ocr`. An explicit `parseConfig.extractAttachments` (including `false`) always wins, and `parseConfig.ocr` is honored (so `{ parseConfig: { ocr: true } }` produces OCR text through the converter, given an image-or-OCR output mode).
+`OfficeConverter.convert()` combines parsing and generation in a single call. It automatically syncs parser options from the generator config: unless you set `parseConfig.extractAttachments` explicitly, it is enabled when the output will render images or charts, or when you enable `parseConfig.ocr`. An explicit `parseConfig.extractAttachments` (including `false`) always wins, and `parseConfig.ocr` is honored (so `{ parseConfig: { ocr: true } }` produces OCR text through the converter, given an image-or-OCR output mode). With `includeCharts: false` it does not report a workbook's charts as not read (`CONTENT_PART_NOT_READ`): its output holds no chart.
 
 ```ts
 import { OfficeConverter } from 'officeparser';
@@ -598,7 +603,7 @@ Please pay {{ amount }} by {{ due }}.
 ```
 
 - **Where the tags sit decides what they cover.** Both tags in one paragraph: the text between them. Tags in separate paragraphs: the paragraphs between them; when every tag of the block has a paragraph of its own, those paragraphs are removed with the tags, so no blank line is left (a tag beside text cuts its paragraph where it stands, and the block's other tag paragraphs then stay, empty). In an ODT, tags in items of one list: the items between them, a tag's item going with it when the tag is all it holds. Tags in different cells of one table: whole rows (in an ODT, rows inside a table's heading rows repeat there; a block cannot run from the heading rows into the body). Put `{{ for line in lines }}` in a row's first cell and `{{ endfor }}` in its last, and the row repeats once per item; close it in a later row and that group of rows repeats. `{{ if }}` keeps or drops rows the same way, each branch starting a row of its own.
-- **Conditions** take a field (`{{ if paid }}`) or a comparison: `==`, `!=`, `<`, `<=`, `>`, `>=`, joined with `and`, `or`, `not` and parentheses, against numbers, quoted strings, `true`, `false` and `null`. `false`, `null`, `""`, `0` and an empty list count as false. A comparison takes two values of the same kind (two numbers, two strings, two dates) or an empty one, save that text that is a number compares with a number as that number (`{{ if total > 100 }}` with `total: '250'`, as a form or a spreadsheet gives it; read with `dataNumberSeparators` when set). Other text compared with a number (`"150 EUR"`) rejects with `TEMPLATE_DATA_INVALID` rather than silently picking a branch; two texts compare as text. Keywords are case-insensitive, and quotes may be straight or curly, as Word's AutoCorrect writes them.
+- **Conditions** take a field (`{{ if paid }}`) or a comparison: `==`, `!=`, `<`, `<=`, `>`, `>=`, joined with `and`, `or`, `not` and parentheses, against numbers, quoted strings, `true`, `false` and `null`. `<>` is `!=` too. A value can go through filters, as a field's can, before it is compared: `{{ if answer | lower == "yes" }}` or `{{ if (a | upper) == (b | upper) }}` compares without case; `upper` matches more (`ß` and `SS`, `ı` and `i`) and neither is language-aware, so for one language's rules use a formatter of your own (`fold: v => String(v).toLocaleLowerCase('tr')`). `false`, `null`, `""`, `0` and an empty list count as false. A comparison takes two values of the same kind (two numbers, two strings, two dates) or an empty one, save that text that is a number compares with a number as that number (`{{ if total > 100 }}` with `total: '250'`, as a form or a spreadsheet gives it; read with `dataNumberSeparators` when set). Other text compared with a number (`"150 EUR"`) rejects with `TEMPLATE_DATA_INVALID` rather than silently picking a branch. Two texts compare as text, character by character, even when both read as numbers (`'250' > '1000'` is true), so `'007'` and `'7'` stay different; an order comparison of two such texts warns (`TEMPLATE_NUMBERS_COMPARED_AS_TEXT`, once per tag in a render or a check), and `numericTextComparison: 'number'` compares them as numbers, exactly (`'250' < '1000'`, `'1.0' == '1'`, and two 20-digit ids that differ in their last digit stay different; text too large for a double (past about 1.8e308, `'1e400'`) is no number, as for `format`, and compares as text), or `'text'` keeps the text comparison without the warning. Keywords are case-insensitive, and quotes may be straight or curly, as Word's AutoCorrect writes them.
 - **Loops** name their item: `{{ line.price }}` in a list of objects, `{{ t }}` in a list of plain values. Inside a loop, `loop.index` (from 0), `loop.number` (from 1), `loop.first`, `loop.last` and `loop.length` describe the current pass, so `{{ for t in tags }}{{ t }}{{ if not loop.last }}, {{ endif }}{{ endfor }}` writes `red, blue`. Loops and conditions nest.
 - **Data can be nested.** `{{ customer.address.city }}` follows a path and `{{ items.0.name }}` reads an item of a list. A top-level key that itself holds a dot (`"invoice.total"`) is read as typed before it is read as a path. Only the data's own keys are read, never `__proto__` or `constructor`.
 - **Mistakes are typed errors.** A block that is never closed, a closing tag with no block, or tags that cannot enclose content together (one in a table and the other outside it, one inside a tracked change, one in a Word field and the other outside it, one in a text box, note or comment and the other outside it) reject with `TEMPLATE_SYNTAX`, naming the tag and the part. A block keyword spelt as other template languages spell it (`{{ elseif x }}`, `{{ elif x }}`, `{{ end if }}`) is refused at once, with the tag as it should be typed in `details.suggestion` (`{{ else if x }}`, `{{ endif }}`). Text that starts like a block tag but is not one (`{{ If you have questions, call us }}`) stays text, as prose between the delimiters always has; when the blocks around it then fail to pair, the error names it and why it could not be read (`{{ if a = 1 }}`: use `==` to compare). A value that does not fit its tag (a loop over text, a list placed as a field) rejects with `TEMPLATE_DATA_INVALID`.
@@ -619,12 +624,23 @@ A field can be written through filters, after `|`. `format` takes a picture, as 
 {{ name | upper }}                            ADA LOVELACE
 ```
 
-- **Number pictures** use `0` (a digit, always written), `#` (a digit, written when there is one), `,` (groups of three), `.` (the decimal point) and `%` (a percentage); up to three sections, `positive;negative;zero`; text in `'quotes'` or after `\` is written as is. Values are rounded half away from zero, as Word and Excel round, and text that is a number (`"1250.5"`, as form data carries it) is taken too. Data written with a decimal comma (`"12,50"`, `"1.234,50"`, as German, French or Brazilian spreadsheets save it) is read with `dataNumberSeparators: { decimal: ',', group: '.' }`: a group separator must be followed by groups of three digits, so an ambiguous text (`"1.5"` with `.` for groups, or `"0.500"`: a first group never starts with 0) is refused rather than misread, and a space group separator matches a no-break space too.
+- **Number pictures** use `0` (a digit, always written), `#` (a digit, written when there is one), `,` (groups of three), `.` (the decimal point) and `%` (a percentage); up to three sections, `positive;negative;zero`; text in `'quotes'` or after `\` is written as is. Values are rounded half away from zero, as Word and Excel round, and text that is a number (`"1250.5"`, as form data carries it) is taken too. Data written with a decimal comma (`"12,50"`, `"1.234,50"`, as German, French or Brazilian spreadsheets save it) is read with `dataNumberSeparators: { decimal: ',', group: '.' }`: a group separator must be followed by groups of three digits, so an ambiguous text (`"1.5"` with `.` for groups, or `"0.500"`: a first group never starts with 0) is refused rather than misread, and a space group separator matches a no-break space too. Data written both ways (a program writing `12.50`, a person typing `12,50`) is read with a list, each way tried: text the ways read as one number is that number, and text two ways read as different numbers is refused with `TEMPLATE_DATA_INVALID` (`reason: 'ambiguous-number'`, each reading in `details.readings`). So `[{ decimal: ',', group: '.' }, { decimal: '.' }]` refuses a German whole number with one group separator, which the German way alone reads:
+
+  | Text | `{ decimal: ',', group: '.' }` | `{ decimal: '.' }` | the list of both |
+  |---|---|---|---|
+  | `12,50` | 12.5 | none | 12.5 |
+  | `12.50` | none | 12.5 | 12.5 |
+  | `1.234,50` | 1234.5 | none | 1234.5 |
+  | `1250` | 1250 | 1250 | 1250 |
+  | `1.250` | 1250 | 1.25 | refused |
+  | `1.234.567` | 1234567 | none | 1234567 |
+  | `0.5` | none | 0.5 | 0.5 |
+
 - **Date pictures** use `d` `dd` `ddd` `dddd` (day), `M` `MM` `MMM` `MMMM` (month), `yy` `yyyy`, `h` `hh` (12-hour), `H` `HH` (24-hour), `m` `mm` (minutes), `s` `ss`, and `AM/PM` (`am/pm`, `A/P`). As in Word, `M` is the month and `m` the minute: Excel's `dd/mm/yyyy` is `dd/MM/yyyy` here. A value is a `Date` or ISO 8601 text (`"2026-11-01"`, `"2026-11-01T09:05:00Z"`; without an offset it is UTC).
 - **The same on every machine.** The formatting is officeParser's own, not the runtime's `Intl`, so a template renders the same in every Node version and browser. What it writes is yours to set: `numberSeparators` (`{ decimal: ',', group: '.' }` writes `1.250,50`; it says how numbers are written, `dataNumberSeparators` how text in the data is read), `dateNames` (month and day names, AM/PM), and `utcOffsetMinutes` (dates are written in UTC unless you move them).
-- **`upper` and `lower`** change case; filters chain left to right (`{{ code | lower | upper }}`).
+- **`upper` and `lower`** change case, in a field or a condition; filters chain left to right (`{{ code | lower | upper }}`).
 - **Your own filters:** `formatters: { initials: (v) => ..., round: (v, places) => ... }`, used as `{{ name | initials }}` or `{{ x | round 2 }}`. Each gets the value as the data holds it (a list or an object too) and the strings and numbers written after its name.
-- A picture given the wrong kind of value (a date picture on a number, a number picture on text that is no number) rejects with `TEMPLATE_DATA_INVALID`; a picture that cannot be read rejects with `TEMPLATE_SYNTAX`. A word after `|` that is no filter leaves the whole tag as text, like other prose between the delimiters. An empty value stays empty, and a missing one follows `onMissing`.
+- A picture given the wrong kind of value (a date picture on a number, a number picture on text that is no number) rejects with `TEMPLATE_DATA_INVALID`; a picture that cannot be read rejects with `TEMPLATE_SYNTAX`. A word after `|` that is no filter leaves the whole tag as text, in a field or a condition, like other prose between the delimiters. An empty value stays empty, and a missing one follows `onMissing`.
 
 ### Fields
 
@@ -638,7 +654,8 @@ A field can be written through filters, after `|`. `format` takes a picture, as 
 | `data` | `TemplateData \| TemplateData[]` | (required) | Field values, which may be nested objects and lists. One object is one document; an array is one document per entry |
 | `delimiters` | `{ start: string; end: string }` | `{{ }}` | Tag delimiters, for fields and block tags alike |
 | `numberSeparators` | `{ decimal?, group? }` | `{ decimal: '.', group: ',' }` | What a number picture writes for its point and groups |
-| `dataNumberSeparators` | `{ decimal?, group? }` | (none: `.` for the point, no groups) | How numbers written as text in the data are read, by a number picture and where a condition compares them with a number: `{ decimal: ',', group: '.' }` reads `1.234,50`. Each one character; `group` may be `''` |
+| `dataNumberSeparators` | `{ decimal?, group? } \| { decimal?, group? }[]` | (none: `.` for the point, no groups) | How numbers written as text in the data are read, by a number picture and where a condition compares them with a number: `{ decimal: ',', group: '.' }` reads `1.234,50`. Each one character; `group` may be `''`. A list of one to 8 is tried in turn; text two ways read differently is refused |
+| `numericTextComparison` | `'text' \| 'number'` | (none: as text, a warning on `<` `<=` `>` `>=`) | How a condition compares two texts that both read as numbers: as text, or as numbers, exactly (text too large for a double is no number) |
 | `dateNames` | `TemplateDateNames` | English | Month and day names (full and short) and AM/PM markers a date picture writes |
 | `utcOffsetMinutes` | `number` | `0` | Minutes added to UTC before a date picture writes a date (330 for India); a fixed offset, the same on every machine |
 | `formatters` | `Record<string, TemplateFormatter>` | (none) | Filters of your own, used after `\|` in a tag |
@@ -668,7 +685,7 @@ const problems = await OfficeTemplate.check('invoice-template.docx', { data });
 if (problems.length === 0) await OfficeTemplate.render('invoice-template.docx', { data });
 ```
 
-- **A tag** (`TemplateTagInfo`) has its `kind` (`field`, `if`, `elseif`, `else` or `for`; `endif` and `endfor` are not listed), the tag as typed, the `part` holding it (a header's tags are in `word/header1.xml`, or an ODT's in `styles.xml`), the paths it reads (`fields`), a field's `filters`, a loop's `item`, and the loops it is inside, outermost first.
+- **A tag** (`TemplateTagInfo`) has its `kind` (`field`, `if`, `elseif`, `else` or `for`; `endif` and `endfor` are not listed), the tag as typed, the `part` holding it (a header's tags are in `word/header1.xml`, or an ODT's in `styles.xml`), the paths it reads (`fields`), a field's `filters`, or the filters an `if`'s condition uses, a loop's `item`, and the loops it is inside, outermost first.
 - **Text that looks like a tag but is not one** is listed among the tags as `kind: 'text'`, with the text as typed, its part, its loops, no fields, and why in `reason`, and `render()` and `check()` report it once with a `TEMPLATE_NOT_A_TAG` warning (`details.texts`, and `details.found`, how many there are); a render writes it as typed. At most 1,000 such texts are listed for a template, in `tags()` and in the warning: past them they are only counted, the warning's message says how many were found, and `tags()` reports the warning when its list was cut. Exactly four shapes count: a name with spaces between the delimiters (`{{first name}}`, `space-in-name`: letters, digits, `_ . -` and spaces, starting with a letter or `_`, at most 64 characters), a word after `|` that is no filter (`{{ total | fromat "0.00" }}`, `unknown-filter`), a delimiter a character short around a name (`{{ name }`, `{ name }}`, `missing-delimiter`, for delimiters of one character typed twice or more), and delimiters typed full-width around a name (`｛｛nom｝｝`, `full-width`). Single braces, `{x}`, `{ x }`, JSON, code that nests braces (`{a: {b}}`, `{{x}, {y}}`: a short delimiter is reported only where the braces around it do not balance) and an empty `{{}}` are never reported. Braces are counted only when the start and the end are different characters: with delimiters such as `$$` and `$$`, every delimiter a character short around a name is reported.
 - **A problem** (`TemplateProblem`) is `TEMPLATE_FIELD_MISSING` (with the `field`) or `TEMPLATE_DATA_INVALID` (with `details`: why, the tag and the kinds of value), with the render's `message`, the `part`, and the loops it was read in, each with its pass from 0.
 - **A check follows the data** as a render does: the branch each condition picks (a field only another branch uses is not needed), every pass of every loop, and nothing inside a list that is missing or does not fit, whose fields are checked once it is given. A key present but `undefined` or `null` counts as given, as a render writes it empty.
@@ -791,7 +808,7 @@ OfficeParserAST
 │   ├── mimeType: string
 │   ├── data: string  (Base64)
 │   ├── ocrText?: string  (if ocr: true AND extractAttachments: true)
-│   └── chartData?: { title, dataSets, labels }
+│   └── chartData?: { title, dataSets, labels, ... }  (see Charts below)
 ├── warnings: OfficeIssue[]  (non-fatal issues from the parsing phase)
 ├── config: OfficeParserConfig  (the resolved parse config; `.to()` inherits newlineDelimiter/onWarning from it)
 └── to(format, config?)  (format: 'html'|'md'|'text'|'csv'|'rtf'|'pdf'|'docx'|'odt'|'xlsx'|'ods'|'pptx'|'odp'|'tex'|'epub'|'chunks', returns { value, messages })
@@ -858,13 +875,14 @@ These never throw; they report a degraded-but-successful outcome you may branch 
 | `PDF_WORKER_MISSING` / `PDF_WORKER_FALLBACK` | parse | The pdf.js worker could not be loaded / a fallback was used (set `pdfWorkerSrc`). |
 | `REMOTE_ASSET_BLOCKED` | parse (error) | `allowRemoteAssets` is `false` and the parse would have fetched the pdf.js worker or Tesseract's files from the library's default CDN address. The message names the options to set (`pdfWorkerSrc`, `ocrConfig.workerPath`/`corePath`/`langPath`). |
 | `NO_WORKSHEETS_FOUND` / `NO_SLIDES_FOUND` | parse | A legitimately empty workbook/presentation. |
+| `FORMULA_RESULTS_MISSING` | parse | An XLSX sheet's formula cells hold no calculated result (the workbook was written without calculating its formulas): they are read with their formula (`CellMetadata.formula`) and no text. Once per sheet, with the sheet, the number of cells and the first of them in `details`; open and save the workbook in a spreadsheet application to calculate them. |
 | `TABLE_CELL_LIMIT_EXCEEDED` | parse | The cells an ODF or XLSX document yields passed `decompressionLimits.maxTableCells` plus one per byte of the document; the rest were not read. |
-| `REPEATED_CONTENT_LIMIT_EXCEEDED` | parse | The document repeated `decompressionLimits.maxRepeatedContent` (plus 16 characters per byte of the document; an XLSX cell showing a shared string again costs up to 128 characters less, while 64 characters per byte of the document last) of content by reference (ODF repeated cells and chart values, XLSX shared strings, style values, link targets, chart text per frame, a form control's text at each `draw:control` naming it, LaTeX titles per reference); later repeats were not made, shortened or went without the value. |
+| `REPEATED_CONTENT_LIMIT_EXCEEDED` | parse, generate | The document repeated `decompressionLimits.maxRepeatedContent` (plus 16 characters per byte of the document; an XLSX cell showing a shared string again costs up to 128 characters less, while 64 characters per byte of the document last) of content by reference (ODF repeated cells and chart values, XLSX shared strings, style values, link targets, chart text per frame, a form control's text at each `draw:control` naming it, LaTeX titles per reference, a chart's table, title and in-line text at each chart showing it, charged what the writer writes); later repeats were not made, shortened or went without the value, and a chart's table written again is a reference to the chart (`[Chart: Sales]`). |
 | `BROTLI_DECODER_AVOIDED` | parse / generate | The runtime's Brotli decoder has a known flaw (CVE-2026-111497), so a PDF's Brotli streams or a WOFF2 font in `pdfConfig.fonts` were decoded by a slower decoder written in JavaScript. Raised only when such a stream or font is met. Upgrade the runtime. |
 | `PDF_SEPARATE_PROCESS_UNAVAILABLE` | parse | pdf.js could not start in a separate process (Node), so it runs in the host; a hostile PDF can then exhaust its memory, and pdf.js's time is not bounded (bound it with `abortSignal`). |
 | `PDF_CONTENT_LIMIT_EXCEEDED` | parse | A PDF passed one of its content limits (plus an allowance per byte), which the message names: past `pdfParserConfig.maxTextItems` or `maxTimeMs` the rest of it was not read; past `maxOperators` its images, text colours and font styles from that page on were not (its text was). |
 | `ALT_CHUNK_NOT_READ` | parse | A DOCX alternative-format chunk (`w:altChunk`) was not read: its part is missing, is of a format other than HTML, MHT, RTF, plain text or DOCX, is a DOCX inside a DOCX chunk, or could not be read (not a ZIP, no document part, nested too deep). The rest of the document is read; a chunk past the document's limits (`maxXmlElements`, `maxUncompressedBytes`) still fails the parse. Saving the document again in Word merges chunks into it. |
-| `CONTENT_PART_NOT_READ` | parse | A part of the document was not read. A chapter an EPUB's spine lists: its file is missing from the archive (or has an extension other than `.xhtml`, `.html`, `.htm`, `.xht` or `.xml`), or it is encrypted (DRM, listed in `META-INF/encryption.xml`); a book whose chapters are all encrypted throws `DOCUMENT_DECRYPTION_FAILED` instead. In a PPTX, a part that is not XML and holds none of the slides' text: the presentation's slide list or relationships (the slides are then read in the order of their file numbers), or the relationships of a notes page or a slide master (its links and pictures are then not resolved). In a PDF, an XObject whose text pdf.js could not read (with its `page`). |
+| `CONTENT_PART_NOT_READ` | parse | A part of the document was not read. A chapter an EPUB's spine lists: its file is missing from the archive (or has an extension other than `.xhtml`, `.html`, `.htm`, `.xht` or `.xml`), or it is encrypted (DRM, listed in `META-INF/encryption.xml`); a book whose chapters are all encrypted throws `DOCUMENT_DECRYPTION_FAILED` instead. In a PPTX, a part that is not XML and holds none of the slides' text: the presentation's slide list or relationships (the slides are then read in the order of their file numbers), or the relationships of a notes page or a slide master (its links and pictures are then not resolved). In a PDF, an XObject whose text pdf.js could not read (with its `page`). An embedded object (DOCX `w:object`, RTF `\object`) with no picture of it (`details.progId`, and the object's part as `details.target`); an RTF picture in a format not read (`\macpict`, `\pmmetafile`, none named, or data held as `\binN`); an RTF equation with no text to read and no picture of it. In an XLSX parsed without `extractAttachments`, the charts its drawings show, once (`details.count`, and `details.name` the first's part name, `chart1.xml`); a conversion that leaves charts out (`includeCharts: false`, with `OfficeConverter.convert` or the CLI) does not report them. |
 | `RAW_CONTENT_LIMIT_EXCEEDED` | parse | With `includeRawContent`, the document's nodes reached `decompressionLimits.maxRawContentLength` of raw content; the remaining nodes carry none. |
 | `IMAGE_EXTRACTION_FAILED` / `IMAGE_PROCESSING_FAILED` / `ATTACHMENT_EXTRACTION_FAILED` | parse | An image/attachment could not be extracted or decoded; it was skipped or degraded. A PDF's has the page the picture is on (`page`), and covers the pictures pdf.js leaves out without drawing them: one larger than `pdfParserConfig.maxImagePixels` (the message names it), a small inline picture it cannot decode, one without dimensions, an XObject it cannot read. In the browser these are reported where the library can start pdf.js's worker itself (a policy forbidding `blob:` workers, or a `GlobalWorkerOptions.workerPort` you set, leaves them unreported). |
 | `ANNOTATION_EXTRACTION_FAILED` / `CHART_DATA_EXTRACTION_FAILED` | parse | A PDF annotation / a chart's data could not be read. |
@@ -876,7 +894,7 @@ These never throw; they report a degraded-but-successful outcome you may branch 
 | `PASSWORD_REQUIRED` / `PASSWORD_INCORRECT` | parse | Encrypted input; supply `password`/`onPassword` (these also throw when parsing cannot continue). |
 | `UNRECOGNIZED_CONFIG_OPTION` | config | A config key this version does not know (often a typo or a removed/renamed option); it had no effect. Raised for parser and generator configs, and for a `convert()` option placed at the top level instead of under `parseConfig`/`generatorConfig` (the message says where it belongs). |
 | `INVALID_CONFIG_VALUE` | config | A generator option got a value it does not accept (a `documentClass`, paper `format` or margin, `pdfConfig.engine`, `htmlConfig.standalone.styles`, a Markdown dialect preset, a chunking strategy/`splitBy`/`tableSplitStrategy`) or `texParserConfig.today` is not a string; the option's default was used, and the message names the option, the value and what it accepts. |
-| `CONTENT_NOT_REPRESENTABLE` | generate | A node type has no faithful form in the target format and was downgraded or omitted (e.g. math/embeds in DOCX/ODT, a table-less document to CSV, pictures and charts in XLSX/ODS, which a cell cannot hold, or a chart without its data in PPTX/ODP). From the native PDF engine, `details.reason` says which, as a value to branch on: `'unencodable-text'` (characters no font given could draw, with `details.count` and a `details.sample` of the first few), `'image-in-table-cell'`, `'image-in-text-line'`, `'chart'`, `'embed'`, `'onnode-string-override'`, each raised once per conversion, and `'svg'`, raised for each SVG picture with parts the engine does not draw (named in `details.feature`). HTML raises it with `details.reason: 'chart'` for a chart written as its data table because there is no chart script to draw it with (`htmlConfig.chartJsSrc: ''`). |
+| `CONTENT_NOT_REPRESENTABLE` | generate | A node type has no faithful form in the target format and was downgraded or omitted (e.g. math/embeds in DOCX/ODT, a table-less document to CSV, pictures and charts in XLSX/ODS, which a cell cannot hold, charts in CSV, which writes sheets and tables, or a chart without its data in PPTX/ODP). From the native PDF engine, `details.reason` says which, as a value to branch on: `'unencodable-text'` (characters no font given could draw, with `details.count` and a `details.sample` of the first few), `'image-in-table-cell'`, `'image-in-text-line'`, `'chart'`, `'embed'`, `'onnode-string-override'`, each raised once per conversion, and `'svg'`, raised for each SVG picture with parts the engine does not draw (named in `details.feature`), `'math-as-source'` for each equation written as its LaTeX source (`details.latex`, at most 1,000 characters, with `details.length` the whole source's length when it is longer, and `details.math`, `'inline'` or `'block'`), `'image-in-text-line-dropped'` for each picture in a line drawn as text (a heading in a nested table's cell) that has no alternative text to stand in its place (`details.name`), and `'metafile-vector'` for each EMF or WMF picture drawn from its bitmap that also draws lines, shapes, text or other bitmaps, draws only part of a PNG or JPEG bitmap (drawn whole), or draws it with a transparency the engine does not apply (`details.name`; `details.feature` names which). HTML raises it with `details.reason: 'chart'` for a chart written as its data table because there is no chart script to draw it with (`htmlConfig.chartJsSrc: ''`). CSV raises it once with `details.reason: 'chart'` for the charts it leaves out (not those `onNode` leaves out), `details.count` how many and `details.name` the first's title (else its attachment's name); for a document of charts alone, the report that it has no table names them. |
 | `METADATA_NOT_REPRESENTABLE` | generate | A metadata field could not be represented in the target format. |
 | `TABLE_GRID_LIMIT_EXCEEDED` | generate | The document's tables needed more empty grid positions than one output fills (a million, plus 16 per byte of the document): a table's cells were laid out closer, short rows were not padded to the table's width, or a sparse sheet's empty rows were not written; or plain text stopped lining columns up (16 million spaces, plus 16 per byte). |
 | `IMAGE_NOT_INLINED` | generate | An image was referenced by name instead of inlined: it is over `maxInlineImageBytes` (Markdown / fragment HTML), or the pictures inlined in the document reached 128 MB in all (Markdown, HTML of either kind, RTF; a picture is inlined at every place that shows it). |
@@ -887,7 +905,8 @@ These never throw; they report a degraded-but-successful outcome you may branch 
 | `INVALID_STYLE_MAPPING` / `INVALID_STYLE_MAP_TAG` | generate | A `styleMap` entry/tag was invalid and ignored. |
 | `TEMPLATE_UNSUPPORTED_FORMAT` / `TEMPLATE_FIELD_MISSING` | template | The template format is unsupported / a `{{field}}` had no value under `onMissing: 'error'`. |
 | `TEMPLATE_SYNTAX` | template | Blocks do not pair (a tag that could not be read is named, where that is why), or a block's tags cannot enclose content together; `details` holds the `reason` (`'unreadable'`, `'unclosed'`, `'unopened'`, `'mismatched'`, `'else-after-else'`, `'crossing'`, `'row-branch'`, `'overlap'`, `'malformed-xml'`; see `TemplateSyntaxReason`), the `tag` as typed and the `part`. |
-| `TEMPLATE_DATA_INVALID` | template | A value does not fit its tag: a loop over something that is not a list, a list, object, function or symbol placed as a field, a comparison of two kinds of value, or a picture given the wrong kind of value; `details` holds the `reason` (`'not-a-list'`, `'not-text'`, `'incomparable'`, `'unformattable'`; see `TemplateDataReason`), the `tag`, the `part` and the value's `kind`. |
+| `TEMPLATE_DATA_INVALID` | template | A value does not fit its tag: a loop over something that is not a list, a list, object, function or symbol placed as a field, a comparison of two kinds of value, a picture given the wrong kind of value, or a number text two ways of `dataNumberSeparators` read differently (`details.readings`); `details` holds the `reason` (`'not-a-list'`, `'not-text'`, `'incomparable'`, `'unformattable'`, `'ambiguous-number'`; see `TemplateDataReason`), the `tag`, the `part` and the value's `kind`. |
+| `TEMPLATE_NUMBERS_COMPARED_AS_TEXT` | template | A condition ordered two texts that both read as numbers (`{{ if a > b }}` with `'250'` and `'1000'`) and compared them as text, as `numericTextComparison` was not given. Once per tag in a render or a check; `details` holds the `tag`, the `part`, the `operator`, the two texts (`left`, `right`, each at most 80 characters), whether comparing them as numbers answers otherwise (`differs`), and a batch's `entry`. Set `numericTextComparison` to `'number'` or `'text'`. |
 | `PAGE_LOAD_FAILED` | parse | A PDF page could not be processed and was skipped (partial content). |
 | `SHEET_RANGE_NOT_FOUND` | generate | A `csvConfig.sheets` range matched no sheet, so CSV output is empty. |
 | `EMPTY_CHUNK_GENERATED` / `WHITESPACE_NODE_SKIPPED` / `BROWSER_GENERATION_LIMITATION` / `PERFORMANCE_TIP` / `DEPENDENCY_LOAD_FAILED` | generate | Diagnostic/informational notes from the chunking and PDF generators. |
@@ -933,18 +952,24 @@ column and are a no-op wherever it shows `–`. OCR (`ocr: true`) recognizes tex
 image and therefore also needs `extractAttachments: true`.
 
 Content kept in parts of its own is read where it stands: SmartArt text (as a nested bulleted list, in
-DOCX after the paragraph drawing it), DOCX content controls, text boxes (their paragraphs, lists and
-tables, after the paragraph drawing them) and alternative-format chunks (`w:altChunk`: HTML, MHT, RTF,
-plain text or a DOCX, in the body, headers, footers, notes and comments), and RTF shape text boxes (as
-blocks right after the paragraph the shape is anchored in). Text a tracked
-change deleted or moved away (DOCX, ODT) is not read; insertions are.
+DOCX after the paragraph drawing it), DOCX content controls (a control still showing its placeholder
+prompt keeps it marked `TextMetadata.placeholder`, left out of output unless `includePlaceholderText`),
+text boxes (their paragraphs, lists and tables, after the paragraph drawing them) and alternative-format
+chunks (`w:altChunk`: HTML, MHT, RTF, plain text or a DOCX, in the body, headers, footers, notes and
+comments), and RTF shape text boxes (as blocks right after the paragraph the shape is anchored in). DOCX
+embedded objects (`w:object`: an Excel sheet, an Equation 3.0 or MathType equation) are read as their
+preview picture, its alt text naming the object's kind, and RTF embedded objects (`\object`) as the
+picture or text they show (`\result`); one with no picture of it is reported (`CONTENT_PART_NOT_READ`).
+Text a tracked change deleted or moved away (DOCX, ODT, RTF) is not read; insertions are.
 
 A PPTX's slides are read in the order its slide list (`p:sldIdLst`) shows them, not the order of their
 file names, and `slideNumber` is a slide's place in that order. Each slide has the notes page its own
 relationships name. A slide part the list no longer names (a deleted slide an editor left in the
-package) is not read. A hidden slide (`show="0"`) is read like any other and marked with
-`SlideMetadata.hidden`. It keeps its `slideNumber`, and PDF output leaves it out unless
-`pdfConfig.printHidden` is set. A slide list or presentation relationships that are not XML leave the slides in
+package) is not read. A hidden slide (PPTX `show="0"`, ODP `presentation:visibility="hidden"`) is read
+like any other and marked with `SlideMetadata.hidden`, and PPTX and ODP output keep it hidden. It keeps
+its `slideNumber`, and PDF output leaves it out unless `pdfConfig.printHidden` is set. A notes page's slide
+number (PPTX's `sldNum` placeholder, ODP's `page-number` frame) is what it prints beside the notes, not a
+note, and is not read; its date, header and footer text is read at the end of the notes, as before. A slide list or presentation relationships that are not XML leave the slides in
 the order of their file numbers, and relationships of a notes page or a slide master that are not XML
 leave its links and pictures unresolved; each is reported with a `CONTENT_PART_NOT_READ` warning.
 
@@ -993,6 +1018,7 @@ Table Node (type: 'table')
 - `valueType` (spreadsheets): the kind of value the file says the cell holds, `'number' | 'date' | 'time' | 'boolean' | 'error' | 'text'` (XLSX's cell type and number format, ODS's `office:value-type`); not set for CSV or a document's tables, whose cells are read from their text. XLSX and ODS output hold the cell as that kind, so text that reads as a number (`1E5`, a card number) stays text
 - `value` (spreadsheets): the value the cell holds where it is other than `text`: a number in full (`10.456` where ODS's text shows `10.46`), a date's or time's count of days in Excel's 1900 date system (`45000` for 2023-03-15, `45000.5` at noon), `true` or `false`
 - `numberFormat` (XLSX): the number format the cell is shown in, as Excel writes one (`0.0 "kg"`, `mm/dd/yyyy`), where it has one other than General; XLSX output writes it as it is
+- `formula` (XLSX): the formula the cell's value is calculated from, as the sheet holds it, without the leading `=` (`SUM(A1:A3)`); a filled-down (shared) formula with each cell's own references, an array formula on its range's first cell. `text` and `value` keep the result the file last calculated, which every output writes; no output writes the formula. Not set for a what-if data table's cell. Shared copies count toward `decompressionLimits.maxRepeatedContent`; past it a copy keeps its value without its formula (a copy with no calculated result is then left out), with `REPEATED_CONTENT_LIMIT_EXCEEDED`. A formula cell with no calculated result (a workbook written without calculating its formulas) is a cell of its formula and no text, reported once per sheet with `FORMULA_RESULTS_MISSING`
 - `hidden` (spreadsheets): the cell's row or column is hidden; every output keeps it as data, and PDF output leaves it out unless `pdfConfig.printHidden` is set
 - Cells can contain nested tables
 
@@ -1014,16 +1040,57 @@ Image Node (type: 'image')
 
 - Set `extractAttachments: true` to populate `attachment.data`
 - Set `ocr: true` (requires `extractAttachments: true`) to populate `ocrText`
+- EMF and WMF pictures are typed `image/emf` and `image/wmf` (an RTF WMF is given its placeable header, as
+  packages hold it), and are not OCR'd; DOCX, ODT, RTF, PPTX and ODP output keep them, and the native PDF
+  engine draws one from the bitmap it holds
+- Writers take a picture's format from its bytes, not its name or `mimeType`: RTF output writes a GIF or BMP
+  as a PNG of its pixels, and a JPEG named `.png` as the JPEG it is
+- DOCX embedded objects (`w:object`) are read as their preview pictures, the alt text naming the object's
+  kind (`Excel worksheet`, `Equation`); RTF embedded objects (`\object`) as the picture or text they show
 
 ### 4. Charts
 
+Charts in DOCX, PPTX, XLSX, ODT, ODS and ODP are read as `chart` nodes where they stand (a Word or ODT chart in a line of text stays a child of its paragraph), and with `extractAttachments: true` as chart attachments holding their data:
+
 ```text
 Chart Node (type: 'chart')
+├── text: the chart's text (rawTexts)
 ├── metadata: { attachmentName: 'chart1.xml' }
-└── → Attachment: { chartData: { title, dataSets, labels } }
+└── → Attachment: { type: 'chart', chartData }
+    chartData
+    ├── title?, xAxisTitle?, yAxisTitle?
+    ├── labels: string[]            (categories; a scatter chart's first series' X values)
+    ├── labelIndexes?, pointCount?  (point positions)
+    ├── labelFormatCode?, shownLabels?
+    ├── labelLevels?: [{ labels, labelIndexes? }]   (categories of several levels, innermost first)
+    ├── axes?: [{ id, kind, position?, title?, deleted? }]
+    ├── dataSets: [{
+    │     name?, values, valueIndexes?, formatCode?, shownValues?,
+    │     pointLabels, pointLabelIndexes?,
+    │     chartType?, axisIds?,
+    │     xValues?, xValueIndexes?, bubbleSizes?, bubbleSizeIndexes? }]
+    └── rawTexts: string[]
 ```
 
-A PPTX or XLSX chart's cache leaves out blank points, so `labels[i]` and `values[i]` can belong to different points. `labelIndexes`, each series' `valueIndexes` and `pointLabelIndexes` give the point index of every entry, and `pointCount` gives the number of points, blank ones included. Pair a label with a value through their point indexes. A list without point indexes holds the points in order.
+| Field | What it holds | Read from (OpenXML / ODF) |
+|---|---|---|
+| `labels` | The category labels: the innermost level of a chart of several; a scatter or bubble chart's first series' X values | `c:cat` (or `c:xVal`) / the chart's table's first column |
+| `labelIndexes`, `valueIndexes`, `pointLabelIndexes` | The point index of each label, value and point label, ascending | `c:pt idx`, `c:dLbl/c:idx` / the row of the chart's table |
+| `pointCount` | How many points the categories span, blank ones included | `c:ptCount` / the chart's table's data rows |
+| `formatCode`, `labelFormatCode` | A series' and the categories' number format (none for General) | `c:formatCode` |
+| `shownValues`, `shownLabels` | Each value and label as the chart shows it (`£1,250,000`, `12%`, `Jan-25`), in the chart's date system | `c:formatCode`, a point's own `formatCode`, `c:date1904` |
+| `labelLevels` | Every level of a chart's categories when it has more than one (quarters under years), innermost first; an outer label covers the points from its index to the next label's | `c:multiLvlStrCache/c:lvl` |
+| `axes` | Every axis: its id, kind (`category`, `date`, `value`, `series`), side, title and whether the chart hides it | `c:catAx`, `c:dateAx`, `c:valAx`, `c:serAx` / `chart:axis` |
+| `chartType` | The kind of chart a series is drawn as (a combo chart has several): `bar`, `line`, `pie`, `doughnut`, `area`, `scatter`, `bubble`, `radar`, `stock`, `surface`, `ofPie` | its plot group (`c:barChart`, `c:lineChart`, ...) / `chart:class` |
+| `axisIds` | The axes a series is drawn on (`axes[].id`), its X axis first | the group's `c:axId` / `chart:attached-axis` |
+| `xValues`, `bubbleSizes` | A scatter or bubble series' own X values and sizes, with their point indexes (`xValueIndexes`, `bubbleSizeIndexes`) | `c:xVal`, `c:bubbleSize` |
+| `xAxisTitle`, `yAxisTitle` | The titles of the chart's primary axes, the axes it lists first, as Office and LibreOffice take them (a date axis gives the X title) | its axes / the primary axes |
+
+A chart's cache leaves out blank points (an ODF chart's table, its blank cells and the NaN LibreOffice writes for a blank value), so `labels[i]` and `values[i]` can belong to different points. `labelIndexes`, each series' `valueIndexes` and `pointLabelIndexes` give the point index of every entry, and `pointCount` gives the number of points, blank ones included. Pair a label with a value through their point indexes. A list without point indexes holds the points in order. `shownValues` and `shownLabels` line up with `values` and `labels`, so they share their point indexes; raw values stay as they are.
+
+Every writer but CSV writes a chart's data: DOCX, ODT, LaTeX, Markdown, RTF, EPUB, PPTX, ODP, XLSX and ODS as a table (the text the chart shows, a column for each outer category level, and for a scatter or bubble chart each series' X, value and size columns); a chart standing in a line of text, as Word and ODF place one, is written by DOCX, ODT and LaTeX as its data's lines of text, and by Markdown and RTF as a table between the text before and after it. HTML writes a Chart.js chart (a line series as a line, an OpenXML series on a value axis at the right on a second axis, each axis with its own title, scatter and bubble charts as points; a table where `htmlConfig.chartJsSrc` is empty), EPUB a table of its data under its title (a reading system runs no script), and the native PDF engine a drawn chart (bars, or points for a scatter or bubble chart, with category levels, and an OpenXML right-hand axis in every chart but a scatter or bubble chart), within its text box's room; in a heading, list item or note the native engine writes the chart's data as text there, reported. CSV writes sheets and tables, and reports the charts it leaves out (not those `onNode` leaves out), once a document (`CONTENT_NOT_REPRESENTABLE`, `details.reason: 'chart'`). A chart without its data is written as its text, else as its reference (`[Chart: chart1.xml]`), by HTML, EPUB, DOCX, ODT, LaTeX, Markdown, RTF, plain text, chunk and native PDF output; PPTX, ODP, XLSX, ODS and CSV output report it with `CONTENT_NOT_REPRESENTABLE`. A parse without `extractAttachments` reads no chart's data: an ODF chart (ODT, ODS, ODP) has its text, a DOCX or PPTX chart none, and an XLSX chart is not read, which the parse reports (`CONTENT_PART_NOT_READ`). A chart shown at several places has its table, title and text (in a line, or without its data) written again at each, charged what each writer writes (UTF-8 bytes, escapes included), while `decompressionLimits.maxRepeatedContent` lasts, then a reference to it (`[Chart: Sales]`), reported with `REPEATED_CONTENT_LIMIT_EXCEEDED`. A heading holding a chart is still named by its whole text, the chart's text in it, at every such heading: its LaTeX label (and, where the heading shows the chart's reference, its table of contents entry) and its HTML and EPUB id, within what the parse counts of that text. `includeCharts: false` leaves charts out of every output.
+
+An ODF object that is not a chart or a formula (an embedded Calc table) is read as the replacement picture its frame carries, an attachment of its own (`Object 3.png`, named by its bytes); with no replacement it is reported (`CONTENT_PART_NOT_READ`).
 
 ### 5. Text Formatting
 
@@ -1111,6 +1178,7 @@ formula means the same thing whichever format it arrived in:
 | Source format | Markup in the file |
 |---|---|
 | DOCX, PPTX | OOXML `<m:oMath>` / `<m:oMathPara>` |
+| RTF | `\mmath` (OMML in control words: `\moMath`, `\moMathPara`) |
 | ODT, ODP, ODS | MathML inside the embedded formula object |
 | HTML, EPUB | native MathML `<math>` |
 | Markdown | `$inline$` / `$$block$$` |
@@ -1120,11 +1188,14 @@ They all land as the same node:
 ```text
 Code Node (type: 'code')
 ├── text: '\\frac{1}{2}'          // LaTeX, whatever the source markup was
-└── metadata: { math: 'inline' | 'block' }
+└── metadata: { math: 'inline' | 'block',
+                fallbackAttachmentName?: 'image_1.png' }  // RTF: the document's own picture of it, drawn where math cannot be
 ```
 
 Fractions, sub/superscripts, radicals, delimiters, n-ary operators (sums, integrals), named
-functions, accents, bars, matrices and math alphabets (`ℝ`, `𝒜`, …) are all preserved. When a
+functions, accents, bars, matrices and math alphabets (`ℝ`, `𝒜`, …) are all preserved. A command's
+argument is always braced (`\frac{a}{b}`, `\sqrt{x}`, `\mathbb{R}`) and a command before a letter is
+spaced (`\int x`), so the LaTeX compiles and renders in KaTeX and MathJax. When a
 document supplies its own TeX source in an `<annotation encoding="application/x-tex">`, that is
 used verbatim in preference to anything reconstructed from the presentation markup.
 
@@ -1134,13 +1205,22 @@ used verbatim in preference to anything reconstructed from the presentation mark
 > index document text should treat `code` nodes carrying `math` as opaque LaTeX rather than
 > splitting them as words.
 
-**On generation**, an equation's fate depends on the target: LaTeX output typesets it as real math
-(`$…$`, `\[…\]`, or a bare `align`-style environment), after a safety check that refuses any command
-reaching outside the formula (see [TexGeneratorConfig](#texgeneratorconfig)); HTML and Markdown keep it
-as LaTeX (a `$…$`/`$$…$$` delimited block or a `data-math` attribute); DOCX and ODT downgrade it to its
-LaTeX text and emit a `CONTENT_NOT_REPRESENTABLE` warning (no native OMML/ODF-math is written); plain
-text, RTF and the PDF engines render the LaTeX string as-is without a warning. So the LaTeX always
-survives, and LaTeX, HTML and Markdown keep it as math.
+**On generation**, an equation's fate depends on the target. LaTeX output typesets it as real math (`$…$`,
+`\[…\]`, or a bare `align`-style environment), after a safety check that refuses any command reaching outside the
+formula (see [TexGeneratorConfig](#texgeneratorconfig)); HTML, EPUB and Markdown keep it as LaTeX (a `$…$`/`$$…$$`
+delimited block or a `data-math` attribute), and plain text and chunks as its LaTeX string. Outputs with no math of
+their own write its LaTeX source as text: DOCX and ODT in their code style, reporting (`CONTENT_NOT_REPRESENTABLE`,
+once) an equation written as a block of its own but not one in a line of text; RTF in a monospace font, reporting the
+first equation (`CONTENT_NOT_REPRESENTABLE`); PPTX and ODP in Courier, unreported; the default PDF engine as `$…$`
+text (`$$…$$` for display math), unreported; and the native PDF engine as its LaTeX, reporting each equation once
+(`CONTENT_NOT_REPRESENTABLE`, `details.reason: 'math-as-source'`, the source in `details.latex`, its kind in
+`details.math`). An RTF equation that carries its document's own
+picture of it (`fallbackAttachmentName`, which LibreOffice always writes) is written by those outputs as that picture
+instead, wherever they write pictures (`includeImages`): in the equation's place, or in PPTX and ODP on a slide of its
+own after its paragraph (after its table, for one in a table cell), as any picture in a flowing document. Its LaTeX is the picture's alternative text in DOCX,
+ODT, PPTX, ODP and the default PDF engine, and is written as above where no picture goes: in PPTX and ODP speaker
+notes and comments, and in a nested table's cells in the native PDF engine. So the
+LaTeX always survives, and LaTeX, HTML and Markdown keep it as math.
 
 ### 7. Document Metadata
 
@@ -1221,6 +1301,7 @@ idempotent and `.md → AST → HTML → AST → .md` survives unchanged.
 | Disclosures | `<details open>` / `<summary>Summary</summary>` / blank line / Markdown body / blank line / `</details>` (GitHub's form; its body is read as Markdown the way the document is, a disclosure in it nested, up to 16 deep, deeper ones flattened into the one holding them; a summary of more than a line of text is Markdown between a `<summary>` line and a `</summary>` line) | `type: 'disclosure'`, `DisclosureMetadata.open`; its `children` a `type: 'summary'` node first (the summary's blocks: a paragraph, a heading, a list...) and then its body. Written back the same way; a list item or table holding one as HTML (a table under `fallbackToHtml.tables`); in a pipe-table cell or a definition, where no block goes, its summary in bold then its body, reported with `CONTENT_NOT_REPRESENTABLE` |
 | Keyboard input | `<kbd>Ctrl</kbd>` | `TextFormatting.keyboard` (with `font: 'monospace'`). Written back as `<kbd>` (its Markdown characters as character references) |
 | Captioned pictures | `<figure><img src="..." alt="..."><figcaption>Caption</figcaption></figure>` (an HTML block; Markdown has no caption syntax, and a paragraph after the picture would read back as text) | `ImageMetadata.caption`. Written as that block; in a list item, table cell, definition or heading, where no block goes, the caption follows the picture as text, ending its line, and `CONTENT_NOT_REPRESENTABLE` reports it. The caption is written in every `includeImages` mode: where no image is written (`'none'`, `'ocr-text-only'`, or a picture over `maxInlineImageBytes` whose recognized text takes its place), its recognized text, if written, then the caption, each a paragraph of its own (a line of its own in a list item, cell, definition or heading) |
+| HTML tables with Markdown cells | `<table>`, `<tr>`, `<td>` / blank line / Markdown / blank line / `</td>` (GitHub's form) | `type: 'table'`; the Markdown between blank lines is read into its cell; the table's other lines are its HTML, so a heading, list or `---` line among them is text in its cell; the lines after `</table>` are its HTML up to the next blank line, until a heading, list item, rule or fence line, from which they read as Markdown |
 | Inline/block math | `$E=mc^2$` / `` $$...$$ `` | `type: 'code'`, `CodeMetadata.math` (`'inline' \| 'block'`). `$$...$$` is display math wherever it is written: inside a paragraph, the paragraph is split around it; in a heading, list item, table cell, quote or note, where a block cannot go, it is inline math |
 | Embeds | `::youtube[Label]{id=… width=… align=…}` / `::embed[Label]{src=… …}` (leaf directive; see `mdConfig.dialect.embeds`) | `type: 'embed'`, `EmbedMetadata` |
 | Frontmatter arrays | `tags: [a, b]` or `tags: ["a","b"]` | Real array in `metadata.customProperties`/`nativeProperties` |
@@ -1276,12 +1357,15 @@ of the content, and is passed over. EPUB 3 footnotes (`<a epub:type="noteref">` 
 
 `EpubGenerator` renders the AST through `HtmlGenerator` and packages the result as a minimal, valid
 EPUB 3 (`mimetype`, `META-INF/container.xml`, an OPF manifest, a nav document, and one XHTML chapter).
+A chart is written as a table of its data under its title, as DOCX writes one: a reading system runs no
+script. The result's `messages` hold what writing the chapter reported.
 
 > [!IMPORTANT]
-> **Pass `extractAttachments: true` when converting to or from EPUB if the document has images.**
-> Without it, the parser never pulls embedded image bytes out of the source document, so there is
-> nothing for the EPUB generator to package, so images silently disappear even though everything else
-> converts correctly. Images are packaged as real zip entries (`OEBPS/images/...`) declared in the OPF
+> **Pass `extractAttachments: true` when converting to or from EPUB if the document has images or charts.**
+> Without it, the parser never pulls embedded image bytes or chart data out of the source document, so
+> there is nothing for the EPUB generator to package: images are left out, and charts have no data, so an
+> ODF chart is written as its text, a DOCX or PPTX chart as its reference (`[Chart: chart1.xml]`), and an
+> XLSX chart is not read (reported), even though everything else converts correctly. Images are packaged as real zip entries (`OEBPS/images/...`) declared in the OPF
 > manifest, not `data:` URIs, because most EPUB reading systems do not render `data:` URIs in image `src`.
 >
 > This only matters for the two-step `OfficeParser.parseOffice()` → `OfficeGenerator.generate()` API
@@ -1598,7 +1682,7 @@ Options shared by all generator formats. Pass to `OfficeGenerator.generate(ast, 
 | `metadataOverrides` | `MetadataOverrides` | `{}` | Override the metadata embedded in the output, merged per field over `ast.metadata` |
 | `includeImages` | `boolean \| 'image-only' \| 'image+ocr-text' \| 'ocr-text-only' \| 'none'` | `true` | How to render an image node. `true`=`'image-only'` (embed the image, no OCR text); `'image+ocr-text'` (image then its recognized/OCR text); `'ocr-text-only'` (OCR text, no image); `false`=`'none'` (omit). A picture's caption (`ImageMetadata.caption`) is written in every mode, `'none'` included. In plain-text output an image becomes an `[Image: name]` placeholder (plus OCR text for `'image+ocr-text'`), or just the OCR text for `'ocr-text-only'`. In chunks a picture is `[Image: alt]` for its alt text, with its OCR text, except under `'none'` and `'ocr-text-only'` (OCR text only). XLSX and ODS, whose cells hold no pictures, write a picture's OCR text in its place under `'ocr-text-only'` and `'image+ocr-text'`; PPTX and ODP write it in the picture's place under `'ocr-text-only'`, and under `'image+ocr-text'` after a flowing document's picture slide or in a placed slide's notes |
 | `maxInlineImageBytes` | `number` | `1500000` | Max decoded image size, in bytes, that is inlined as a `data:` URI (HTML/Markdown); the base64 URI itself is ~1/3 larger, so a scanned page cannot emit a multi-megabyte line that breaks downstream parsers. Under the default `image-only` mode an image over the cap renders its recognized/OCR text when it has any (multi-line OCR as a fenced block in Markdown), otherwise a compact name reference; Markdown still emits the `IMAGE_NOT_INLINED` warning. Plain text follows the same rule. **Standalone HTML inlines whatever the cap**: a self-contained document has nowhere else to resolve the image from. In every mode (standalone HTML and `Infinity` included), the pictures one document writes inline stop at 128 MB in all (a picture is inlined at every place showing it); the rest are name references, with `IMAGE_NOT_INLINED`. `0` never inlines, `Infinity` inlines every picture within those 128 MB |
-| `includeCharts` | `boolean` | `true` | Include charts: HTML renders an interactive Chart.js canvas (or, with no `chartJsSrc`, the chart's data as a table), DOCX/ODT/LaTeX render the chart's data as a table, PPTX/ODP a table of its data in the chart's place, plain text and the native PDF engine render the chart's data text; Markdown and RTF render nothing for a chart, and XLSX/ODS, whose cells cannot hold one, report it (`CONTENT_NOT_REPRESENTABLE`). `false` omits charts in every generator |
+| `includeCharts` | `boolean` | `true` | Include charts: HTML renders an interactive Chart.js canvas (or, with no `chartJsSrc`, the chart's data as a table), DOCX/ODT/LaTeX/Markdown/RTF/EPUB render the chart's data as a table under its title (a chart in a line of text: DOCX/ODT/LaTeX its data's lines, Markdown/RTF a table between the text around it), PPTX/ODP a table of its data in the chart's place, XLSX/ODS a sheet of its data, the native PDF engine draws it from its data (in a heading, list item or note, its data as text, reported), and plain text renders the chart's data text. CSV writes sheets and tables and reports the charts it leaves out. `false` omits charts in every generator, unreported |
 | `includePlaceholderText` | `boolean` | `false` | Write the prompt of a DOCX content control that still shows its placeholder ("Click or tap here to enter text."). The parser keeps the prompt in the AST, marked `metadata.placeholder`, and leaves it out of the paragraph's `text`; every generator leaves it out unless this is `true` |
 | `ignoreInternalLinks` | `boolean` | `false` | Strip bookmarks and internal anchors from output (HTML, Markdown, DOCX, ODT, LaTeX, RTF, and the native PDF engine's links into the document) |
 | `ignoreDefaultStyleMap` | `boolean` | `false` | Disable built-in style mappings (e.g., "Heading 1" → h1) |
@@ -1805,18 +1889,24 @@ Each font is the bytes of a TrueType, OpenType, WOFF or WOFF2 file (a web font, 
 
 > **Native engine (`engine: 'native'`) differences beyond fidelity:** it ignores the Puppeteer-only
 > options above (and `tagged`), uses a non-zero default `margin` (the document's own, where it sets
-> one), draws a chart as a bar chart of its data, and does not apply `renderMetadata`. It draws the
+> one), draws a chart as a bar chart of its data (a scatter or bubble chart as points on its X and Y
+> axes, in any other chart a series on a right-hand axis scaled to that axis, a chart in a line of text between the line's
+> parts, categories of several levels as rows of labels), and does not apply `renderMetadata`. It draws the
 > document's own headers and footers on every page, footnotes at the foot of their page, clickable
 > links, slides as they are laid out, and text in a section's columns. It draws an SVG picture as vector
 > graphics in its place (paths, shapes, text, embedded PNG and JPEG pictures, fills, strokes, dashes
 > and opacity, styled by attributes, `style` and the picture's own stylesheet); a gradient is drawn in
-> one colour, and filters, masks, clip paths and patterns are left out, both reported. Choose it to
+> one colour, and filters, masks, clip paths and patterns are left out, both reported. It embeds PNG, JPEG,
+> GIF and BMP pictures and SVG, and an EMF or WMF
+> picture from the bitmap it holds (its lines, shapes and text are reported; one with no bitmap is its alt
+> text, reported), a picture's format read from its bytes, not its name. A picture in a heading, a list item
+> or a note is drawn in its line, as in a paragraph. Choose it to
 > avoid the headless browser; choose `'html'` for pixel-matching fidelity, other chart kinds and PDF/UA
 > tags.
 
 ### DocxGeneratorConfig
 
-Pass as `docxConfig` inside `GeneratorConfig`. The DOCX generator writes a real WordprocessingML package (`.docx`) with zero extra dependencies, so it runs identically in Node and the browser and returns a `Uint8Array`. It reproduces headings, styled runs, tables (including merged cells), lists, images, hyperlinks, footnotes/endnotes, comments, headers/footers and metadata from any parsed source.
+Pass as `docxConfig` inside `GeneratorConfig`. The DOCX generator writes a real WordprocessingML package (`.docx`) with zero extra dependencies, so it runs identically in Node and the browser and returns a `Uint8Array`. It reproduces headings, styled runs, tables (including merged cells), lists, images, hyperlinks, footnotes/endnotes, comments, headers/footers and metadata from any parsed source. A presentation's speaker notes follow each slide's content, under a "Slide notes" title, as HTML output shows them.
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
@@ -1837,7 +1927,7 @@ writeFileSync('report.docx', value); // value is a Uint8Array
 
 ### OdtGeneratorConfig
 
-Pass as `odtConfig` inside `GeneratorConfig`. The ODT generator writes a real OpenDocument Text package (`.odt`) with zero extra dependencies, so it runs identically in Node and the browser and returns a `Uint8Array`. It is the round-trip partner of the ODF parser: headings, styled runs, tables (including merged cells), nested lists, images, hyperlinks, footnotes, comments and headers/footers all re-parse. Formatting is carried in ODF automatic styles, and the package is reproducible (pinned zip mtimes, deterministic style/id names).
+Pass as `odtConfig` inside `GeneratorConfig`. The ODT generator writes a real OpenDocument Text package (`.odt`) with zero extra dependencies, so it runs identically in Node and the browser and returns a `Uint8Array`. It is the round-trip partner of the ODF parser: headings, styled runs, tables (including merged cells), nested lists, images, hyperlinks, footnotes, comments and headers/footers all re-parse. A presentation's speaker notes follow each slide's content, under a "Slide notes" title, as HTML output shows them. Formatting is carried in ODF automatic styles, and the package is reproducible (pinned zip mtimes, deterministic style/id names).
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
@@ -1895,7 +1985,7 @@ writeFileSync('data.ods', value); // value is a Uint8Array
 
 Pass as `pptxConfig` inside `GeneratorConfig`. The PPTX generator writes a PowerPoint presentation (`.pptx`) with zero extra dependencies, so it runs identically in Node and the browser and returns a `Uint8Array`. What the slides hold depends on the source:
 
-- **A presentation** (PPTX, ODP) is written slide for slide at its slide size: each text box, shape (its outline, fill, line, turn and mirroring, with the text in it), picture and table in its place (`bounds`), the slide's background colour, and its speaker notes on the slide's notes page. A chart is a table of its data in the chart's place.
+- **A presentation** (PPTX, ODP) is written slide for slide at its slide size: each text box, shape (its outline, fill, line, turn and mirroring, with the text in it), picture and table in its place (`bounds`), the slide's background colour, and its speaker notes on the slide's notes page; a hidden slide stays hidden. A chart is a table of its data in the chart's place.
 - **A PDF** becomes a slide for each page, at the pages' most common size (a page of another size is scaled into it, centred). Each paragraph is a text box where the page set it, its lines broken and spaced as on the page (each line on the baseline the page drew it on, where the runs' `bounds.baseline` give it), in its runs' fonts, sizes and colours; a paragraph set beside a floating table or picture is a box for each group of its lines. Tables keep their measured row heights and their cells' shading, pictures their places, and footnotes and a page's notes are at the foot of their page. A page's invisible text (a scan's recognised words laid over its picture, `TextFormatting.invisible`) is written fully transparent: not seen, still there to select and search. A table whose text is all invisible is drawn without rules (its cells' text in their places where the page gave them).
 - **Any other document** flows onto 16:9 slides: a slide for each heading of the first two levels, titled by it, with the text under it as bullets (lower headings bold), carried on to more slides of the same title where it does not fit. Text before the first heading is under the document's title, from its metadata. Each table is on slides of its own, ten rows a slide with its header rows repeated, and each sheet of a workbook is a table under the sheet's name. Pictures (those in a table's cells too) are on slides of their own, charts are tables of their data, a presentation's speaker notes go with the slides its content made, and footnotes and endnotes, numbered where they are cited, are listed on slides at the end.
 
@@ -1990,8 +2080,8 @@ Pass as `csvConfig` inside `GeneratorConfig`.
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `sheets` | `string` | `''` | Sheet range to export: `'1'`, `'1-3'`, `'1,3'` (1-based). Empty = all sheets |
-| `mergeSheets` | `boolean` | `true` | Merge all sheets into one CSV. When more than one sheet is merged, each is preceded by a `# Sheet: <name>` marker row and followed by a blank line (officeParser's own CSV parser reads these back as `comment` nodes; Excel/pandas read them as data rows). If `false`, returns a ZIP archive with one CSV per sheet and no markers |
+| `sheets` | `string` | `''` | Sheet range to export: `'1'`, `'1-3'`, `'1,3'` (1-based), counting the sheets and tables. Empty = all sheets. Charts are not written: those in the sheets written (and, with no range, those outside any) are reported once (`CONTENT_NOT_REPRESENTABLE`) |
+| `mergeSheets` | `boolean` | `true` | Merge all sheets into one CSV. When more than one sheet is merged, each is preceded by a `# Sheet: <name>` marker row and followed by a blank line (officeParser's own CSV parser reads these back as `comment` nodes; Excel/pandas read them as data rows). If `false`, returns a ZIP archive with one CSV per sheet and no markers (two names that make the same file name, `A/B` and `A_B` or alike but for case, are numbered: `A_B.csv`, `A_B-2.csv`, never with a name another sheet has) |
 | `columnDelimiter` | `string` | `','` | Output column delimiter |
 
 ### TextGeneratorConfig
