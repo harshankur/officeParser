@@ -4136,6 +4136,18 @@ export interface ChartData {
          * indexes: the values then hold the points in order.
          */
         valueIndexes?: number[];
+        /**
+         * The value cache's Excel number format (`c:formatCode`, e.g. `"£"#,##0` or `0%`). Absent for General
+         * and for ODF charts.
+         */
+        formatCode?: string;
+        /**
+         * Each of `values` as the chart shows it (`£1,250,000`, `12%`), in the chart's date system. A point's
+         * own format wins over `formatCode`. Where the format has no text form here (scientific notation,
+         * fractions), the entry is the raw value. Present only with `formatCode`; its entries line up with
+         * `values`, so they share `valueIndexes`.
+         */
+        shownValues?: string[];
         /** Specific labels for each point in this dataset (if defined per point) */
         pointLabels: string[];
         /** The point index of each point label (OpenXML's `c:dLbl/c:idx`), ascending. */
@@ -4160,6 +4172,15 @@ export interface ChartData {
      * holds an entry for each of them.
      */
     pointCount?: number;
+
+    /** The category cache's Excel number format (e.g. `mmm\-yy`), read as a series' `formatCode` is. */
+    labelFormatCode?: string;
+
+    /**
+     * Each of `labels` as the chart shows it (`Jan-25` for 45658), read as a series' `shownValues` are; its
+     * entries line up with `labels`, so they share `labelIndexes`.
+     */
+    shownLabels?: string[];
 
     /** Every text node discovered in the chart XML (for keyword search/raw extraction) */
     rawTexts: string[];

@@ -1,6 +1,7 @@
 import { ChartData, OfficeParserConfig } from "../types";
 import { parseXmlString, getElementsByTagName, getDirectChildren, getFirstElementByTagName, getChildElements } from "./xmlUtils";
 import { repeatPreview, takeRepeats } from "./repeatUtils";
+import { excelShownText } from "./excelFormat";
 
 /**
  * Extracts a single text element located at:
@@ -96,25 +97,6 @@ const pointIndexes = () => {
 };
 
 /**
- * Reads the texts of every `c:v` below `cache` (at most `limit`, blank ones left out) and the point index
- * of each (its parent's `c:pt idx`). Gives no indexes for a `c:v` outside a `c:pt`, or for a cache of
- * several levels, whose indexes start again at 0 in each level.
- */
-const readPoints = (cache: Element, limit: number): { texts: string[]; indexes?: number[] } => {
-    const vNodes = getElementsByTagName(cache, "c:v");
-    const texts: string[] = [];
-    const indexes = pointIndexes();
-    for (let j = 0; j < vNodes.length && texts.length < limit; j++) {
-        const text = vNodes[j].textContent?.trim();
-        if (!text) continue;
-        texts.push(text);
-        const pt = vNodes[j].parentNode as Element | null;
-        indexes.add(pt?.nodeType === 1 && pt.tagName === "c:pt" ? pointIndex(pt.getAttribute("idx")) : undefined);
-    }
-    return { texts, indexes: indexes.get() };
-};
-
-/**
  * The point indexes that hold a label or a value, ascending: writers write one row or group per index and
  * pair each list's entries with it (see atPosition). Undefined when a list with entries has no valid point
  * indexes; writers then pair the lists by place. The result holds no more indexes than the lists hold
@@ -159,6 +141,46 @@ const repeats = (value: string | null): number => {
 };
 
 /**
+ * A series' values or categories: their texts, the point index of each (`indexes`, see readCache), and,
+ * with a number format, that format and each text as the chart shows it (`shown`, lining up with `texts`).
+ */
+interface OpenXmlCache {
+    texts: string[];
+    indexes?: number[];
+    formatCode?: string;
+    shown?: string[];
+}
+
+/**
+ * Reads the texts of every `c:v` below a series' `c:val`, `c:yVal`, `c:cat` or `c:xVal` (at most `limit`,
+ * blank ones left out), the point index of each (its parent's `c:pt idx`), and, where the cache has a number
+ * format (`c:formatCode`, not General), each as the chart shows it (see ChartData's `shownValues`; a
+ * point's own format wins). Gives no indexes for a `c:v` outside a `c:pt`, or for a cache of several
+ * levels, whose indexes start again at 0 in each level. `shown`, where given, shares `indexes`.
+ */
+const readCache = (node: Element, limit: number, date1904: boolean): OpenXmlCache => {
+    const cache = getElementsByTagName(node, "c:numCache")[0] ?? getElementsByTagName(node, "c:numLit")[0];
+    const code = cache ? getChildElements(cache, "c:formatCode")[0]?.textContent?.trim() : undefined;
+    const formatCode = code && code.length <= 255 && !/^general$/i.test(code) ? code : undefined;
+    const vNodes = getElementsByTagName(node, "c:v");
+    const texts: string[] = [];
+    const shown: string[] = [];
+    const indexes = pointIndexes();
+    for (let j = 0; j < vNodes.length && texts.length < limit; j++) {
+        const text = vNodes[j].textContent?.trim();
+        if (!text) continue;
+        texts.push(text);
+        const pt = vNodes[j].parentNode as Element | null;
+        indexes.add(pt?.nodeType === 1 && pt.tagName === "c:pt" ? pointIndex(pt.getAttribute("idx")) : undefined);
+        if (!formatCode) continue;
+        const pointCode = pt?.localName === "pt" ? pt.getAttribute("formatCode") : null;
+        shown.push(excelShownText(text, pointCode || formatCode, date1904) ?? text);
+    }
+    const positions = indexes.get();
+    return { texts, ...(positions && { indexes: positions }), ...(formatCode && { formatCode, shown }) };
+};
+
+/**
  * Extracts fully structured chart data from OpenXML (PPTX, XLSX) chart XML.
  * @param xmlBuffer Chart XML buffer
  */
@@ -189,9 +211,11 @@ const extractOpenXmlChartData = (xmlBuffer: Buffer, config?: OfficeParserConfig)
     const seriesNodes = getElementsByTagName(root, "c:ser").slice(0, MAX_CHART_SERIES);
     let valuesLeft = MAX_CHART_VALUES;
     const dataSets: ChartData['dataSets'] = [];
-    const sharedLabels: string[] = [];
-    let labelIndexes: number[] | undefined;
+    let sharedLabels: OpenXmlCache = { texts: [] };
     let pointCount: number | undefined;
+    // `c:date1904` with no `val` means true (OOXML's CT_Boolean default).
+    const date1904Val = getChildElements(root, "c:date1904")[0]?.getAttribute("val");
+    const date1904 = date1904Val !== undefined && !/^(?:0|false)$/i.test((date1904Val ?? "").trim());
 
     for (let i = 0; i < seriesNodes.length; i++) {
         const ser = seriesNodes[i] as Element;
@@ -201,8 +225,8 @@ const extractOpenXmlChartData = (xmlBuffer: Buffer, config?: OfficeParserConfig)
 
         // Values (c:val)
         const valNode = getChildElements(ser, "c:val")[0] || getChildElements(ser, "c:yVal")[0];
-        const { texts: values, indexes: valueIndexes } = valNode ? readPoints(valNode, valuesLeft) : { texts: [], indexes: undefined };
-        valuesLeft -= values.length;
+        const valCache: OpenXmlCache = valNode ? readCache(valNode, valuesLeft, date1904) : { texts: [] };
+        valuesLeft -= valCache.texts.length;
 
         // Point Labels (data labels)
         const pointLabels: string[] = [];
@@ -217,33 +241,40 @@ const extractOpenXmlChartData = (xmlBuffer: Buffer, config?: OfficeParserConfig)
 
         // Categories (labels) - c:cat or c:xVal
         const catNode = getChildElements(ser, "c:cat")[0] || getChildElements(ser, "c:xVal")[0];
-        if (catNode && sharedLabels.length === 0) {
-            const { texts, indexes } = readPoints(catNode, MAX_CHART_VALUES);
-            if (texts.length > 0) {
-                for (const label of texts) sharedLabels.push(label);
-                labelIndexes = indexes;
+        if (catNode && sharedLabels.texts.length === 0) {
+            const labels = readCache(catNode, MAX_CHART_VALUES, date1904);
+            if (labels.texts.length > 0) {
+                sharedLabels = labels;
                 pointCount = pointIndex(getElementsByTagName(catNode, "c:ptCount")[0]?.getAttribute("val"));
             }
         }
 
         const pointLabelIndexes = pointLabelPoints.get();
-        dataSets.push({ name, values, ...(valueIndexes && { valueIndexes }), pointLabels, ...(pointLabelIndexes && { pointLabelIndexes }) });
+        dataSets.push({
+            name,
+            values: valCache.texts,
+            ...(valCache.indexes && { valueIndexes: valCache.indexes }),
+            ...(valCache.formatCode && { formatCode: valCache.formatCode, shownValues: valCache.shown }),
+            pointLabels,
+            ...(pointLabelIndexes && { pointLabelIndexes }),
+        });
     }
 
     // A title of no text of its own is the one Office draws for it: a chart of one series its name, else "Chart
     // Title" (as PowerPoint, Excel and LibreOffice show it; it was left out).
     if (titleEl && title === undefined && !getDirectChildren(titleEl, "c:tx").length) title = dataSets.length === 1 && dataSets[0].name ? dataSets[0].name : "Chart Title";
 
-    const rawTexts = chartRawTexts(undefined, dataSets, sharedLabels);
+    const rawTexts = chartRawTexts(undefined, dataSets, sharedLabels.texts);
 
     return {
         title,
         xAxisTitle,
         yAxisTitle,
         dataSets,
-        labels: sharedLabels,
-        ...(labelIndexes && { labelIndexes }),
+        labels: sharedLabels.texts,
+        ...(sharedLabels.indexes && { labelIndexes: sharedLabels.indexes }),
         ...(pointCount !== undefined && { pointCount }),
+        ...(sharedLabels.formatCode && { labelFormatCode: sharedLabels.formatCode, shownLabels: sharedLabels.shown }),
         rawTexts
     };
 };
