@@ -182,6 +182,15 @@ export enum OfficeWarningType {
     TEMPLATE_NOT_A_TAG = 'TEMPLATE_NOT_A_TAG',
     /** A template check found as many problems as it lists (`details.limit`: 1,000 for one data entry, or 10,000 in all for a batch, `details.batch`) and stopped there, in `details.entry` of a batch, with `details.unchecked` entries after it not checked; fix these and check again */
     TEMPLATE_CHECK_LIMITED = 'TEMPLATE_CHECK_LIMITED',
+    /**
+     * A template condition ordered two texts that both read as numbers (`{{ if a > b }}` with `'250'` and
+     * `'1000'`) and, as `numericTextComparison` was not given, compared them as text, character by character.
+     * Raised by `OfficeTemplate.render` and `OfficeTemplate.check` once per tag (its first such comparison),
+     * with the tag, the texts and whether comparing them as numbers answers otherwise in `details` (see
+     * {@link TemplateNumbersAsTextDetails}). Set `numericTextComparison` to `'number'` to compare them as
+     * numbers, or to `'text'` to keep comparing them as text without the warning.
+     */
+    TEMPLATE_NUMBERS_COMPARED_AS_TEXT = 'TEMPLATE_NUMBERS_COMPARED_AS_TEXT',
     /** A config option was passed that this version does not recognize (e.g. a key renamed in a major release); it had no effect */
     UNRECOGNIZED_CONFIG_OPTION = 'UNRECOGNIZED_CONFIG_OPTION',
     /**
@@ -2709,8 +2718,9 @@ export type TemplateSyntaxReason =
     /**
      * A tag cannot be read; `detail` says why. Text that only starts like a block tag (`{{ If you call }}`)
      * stays text, and is named so only when the blocks around it fail to pair. Named at once: a block
-     * keyword spelt as other template languages spell it (`elseif`, `elif`, `end if`), and a filter
-     * given what it does not take (`format` with a picture that cannot be read, `upper "x"`).
+     * keyword spelt as other template languages spell it (`elseif`, `elif`, `end if`), and a filter, on a
+     * field or on a value in a condition, given what it does not take (`format` with a picture that cannot
+     * be read, `upper "x"`).
      */
     | 'unreadable'
     /** A block's opening tag has no closing tag. */
@@ -2756,7 +2766,20 @@ export type TemplateDataReason =
     /** A condition compares two values of different kinds (text with a number), or a list or object. */
     | 'incomparable'
     /** A filter cannot write the value: a number picture given text that is not a number, a date picture given one that is not a date. */
-    | 'unformattable';
+    | 'unformattable'
+    /** Text read as a number two ways of a `dataNumberSeparators` list read as different numbers (`1.250`: 1250 or 1.25); `readings` holds each. */
+    | 'ambiguous-number';
+
+/** One way of a `dataNumberSeparators` list that read a text as a number, and what it read. */
+export interface TemplateNumberReading {
+    /** The way's place in the list, from 0. */
+    separators: number;
+    /** Its decimal point and group separator (`''` for none). */
+    decimal: string;
+    group: string;
+    /** The number it read. */
+    value: number;
+}
 
 /** The `details` of a `TEMPLATE_DATA_INVALID` error. */
 export interface TemplateDataDetails {
@@ -2772,6 +2795,24 @@ export interface TemplateDataDetails {
     /** For `unformattable`, the filter, and what it takes (`number` or `date` for `format`). */
     filter?: string;
     takes?: string;
+    /** For `ambiguous-number`, each way that read the text and what it read. */
+    readings?: TemplateNumberReading[];
+}
+
+/** The `details` of a `TEMPLATE_NUMBERS_COMPARED_AS_TEXT` warning: the first such comparison of its tag a render or check met. */
+export interface TemplateNumbersAsTextDetails {
+    /** The tag as typed, delimiters included. */
+    tag: string;
+    /** The document part holding it. */
+    part: string;
+    operator: '<' | '<=' | '>' | '>=';
+    /** The two texts compared, as the condition had them (after their filters), each at most 80 characters (a longer one is its first 77 and `...`). */
+    left: string;
+    right: string;
+    /** Whether comparing them as numbers gives the other answer (`'250' > '1000'`: true). Left out when a text reads as two numbers (a `dataNumberSeparators` list). */
+    differs?: boolean;
+    /** For a batch, the data entry it was met in, from 0. */
+    entry?: number;
 }
 
 /** A loop a template tag is read in: the list as typed in its `for` tag (`lines`, `order.lines`), and the pass, from 0. */
@@ -2786,8 +2827,8 @@ export interface TemplateLoopPlace {
  * - `space-in-name`: text between the delimiters that is a name with white space in it, made of letters,
  *   digits, `_ . -` and white space, starting with a letter or `_`, at most 64 characters: `{{first name}}`
  *   (a field's name has no spaces; `{{first_name}}` with a data key `first_name` is one).
- * - `unknown-filter`: a field through a word after `|` that is no filter, built-in or in `formatters`:
- *   `{{ total | fromat "0.00" }}`.
+ * - `unknown-filter`: a field, or a value in a condition, through a word after `|` that is no filter,
+ *   built-in or in `formatters`: `{{ total | fromat "0.00" }}`, `{{ if answer | lowr == "yes" }}`.
  * - `missing-delimiter`: for delimiters of one character typed twice or more (the default `{{ }}`), a
  *   name between a start delimiter and an end delimiter one of which is a character short: `{{ name }`,
  *   `{ name }}` (a short start inside braces still open, or a short end whose brace a later one closes,
@@ -2820,7 +2861,10 @@ export interface TemplateTagInfo {
      * enclosing `for` tags name.
      */
     fields: string[];
-    /** A field's filters, by name, in order. */
+    /**
+     * A field's filters, by name, in order; for an `if` or `else if`, the filters its condition's values go
+     * through, by name, each once, in the order first written.
+     */
     filters?: string[];
     /** A `for` tag's item name (`line` in `{{ for line in lines }}`). */
     item?: string;
@@ -2908,18 +2952,43 @@ export interface TemplateConfig {
      */
     numberSeparators?: { decimal?: string; group?: string };
     /**
-     * How a number written as text in the data is read, by a number picture and where a condition
-     * compares it with a number: its decimal point and the separator of its groups of three digits.
+     * How a number written as text in the data is read, by a number picture, where a condition compares it
+     * with a number, and where two texts are compared under `numericTextComparison`: its decimal point and the separator of its groups of three digits.
      * `{ decimal: ',', group: '.' }` reads `12,50` and `1.234,50`; `{ decimal: ',', group: ' ' }` reads
      * `1 234,50` (a space separator matches a no-break space too). Each is one character; `group` may be
      * `''` (the default when left out) for none, and `decimal` defaults to `.`. A group separator where
      * groups of three do not follow makes the text no number (`1.5` with `.` for groups), nor is one
      * after a first group starting with 0 (`0.500`), so an ambiguous text is refused rather than misread. Not given (the default), text is read with `.` for the point and
      * no group separator (`1250.5`). `numberSeparators` says how numbers are written, this how they are
-     * read, so data written one way can fill a document written another. A value of the wrong shape is
-     * refused (`IMPROPER_ARGUMENTS`).
+     * read, so data written one way can fill a document written another.
+     *
+     * A list gives several ways, each tried: `[{ decimal: ',', group: '.' }, { decimal: '.' }]` reads `12,50`,
+     * `1.234,50` and `12.50`. Text read by more than one way is taken when they read the same number (`1250`),
+     * and refused when they differ (`1.250`: 1250 one way, 1.25 the other) with `TEMPLATE_DATA_INVALID`
+     * (`reason: 'ambiguous-number'`, each reading in `details.readings`); so such a list refuses a whole number
+     * written with one group separator (`1.000`), which `{ decimal: ',', group: '.' }` alone reads as 1000. One
+     * to 8 ways; one object, or a list of one, reads as before. A value of the wrong shape is refused
+     * (`IMPROPER_ARGUMENTS`).
      */
-    dataNumberSeparators?: { decimal?: string; group?: string };
+    dataNumberSeparators?: { decimal?: string; group?: string } | { decimal?: string; group?: string }[];
+    /**
+     * How a condition compares two texts that both read as numbers, as `dataNumberSeparators` reads them
+     * (by default with `.` for the point: `'250'`, `'-3.5'`, `'1e3'`), such as two columns of a spreadsheet,
+     * where every value is text:
+     * - not given (the default): as text, character by character (`'250' > '1000'` is true), and an order
+     *   comparison (`<`, `<=`, `>`, `>=`) of two such texts is reported, once per tag in a render or a check,
+     *   with a `TEMPLATE_NUMBERS_COMPARED_AS_TEXT` warning;
+     * - `'text'`: as text, without the warning;
+     * - `'number'`: as numbers, for every operator, exactly: `'250' < '1000'`, `'007' == '7'` and `'1.0' == '1'`
+     *   are true, and two 20-digit ids that differ in their last digit stay different. Text too large for
+     *   a double (past about 1.8e308: `'1e400'`, a whole number of 310 digits) is no number, as for a number
+     *   picture, so it compares as text; a very small one (`'1e-400'`) is a number, and compared exactly.
+     *   Text that a `dataNumberSeparators` list reads as two different numbers is refused (`ambiguous-number`).
+     * Text beside text that is no number compares as text. Text compared with a number typed in the tag
+     * (`{{ if total > 100 }}`) is read as a number whatever this says. Another value is reported
+     * (`INVALID_CONFIG_VALUE`) and the default used.
+     */
+    numericTextComparison?: 'text' | 'number';
     /**
      * The month and day names and AM/PM markers a date picture writes. Default English. A value that is
      * not an object of names, or a list of the wrong length, is refused (`IMPROPER_ARGUMENTS`).

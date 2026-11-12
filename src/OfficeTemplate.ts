@@ -35,8 +35,8 @@ import { decryptIfNeeded } from './crypto/decryptContainer.js';
 import { DEFAULT_OFFICE_PARSER_CONFIG, DEFAULT_TEMPLATE_CONFIG } from './defaults.js';
 import { CompiledTemplate, compileTemplate, DOCX_DIALECT, openPackage, renderDocxTemplate, renderParts, TAG_SKIPPED, TemplateOptions, TemplatePlace, templateTags, unlistedNearTags } from './template/templateEngine.js';
 import { ODT_DIALECT, odtEntries, renderOdtTemplate } from './template/odtTemplate.js';
-import { BlobLike, OfficeErrorType, OfficeParserConfig, OfficeWarningType, TemplateConfig, TemplateData, TemplateDataDetails, TemplateFormatter, TemplateProblem, TemplateSyntaxDetails, TemplateTagInfo } from './types.js';
-import { NumberTextSeparators, PictureSettings } from './template/templateFormat.js';
+import { BlobLike, OfficeErrorType, OfficeParserConfig, OfficeWarningType, TemplateConfig, TemplateData, TemplateDataDetails, TemplateFormatter, TemplateNumbersAsTextDetails, TemplateProblem, TemplateSyntaxDetails, TemplateTagInfo } from './types.js';
+import { MAX_NUMBER_TEXT_WAYS, NumberTextSeparators, PictureSettings } from './template/templateFormat.js';
 import { assertNode } from './utils/envUtils.js';
 import { buildOfficeError, getOfficeError, logWarning } from './utils/errorUtils.js';
 import { decompressionLimitsOf, maxPasswordAttemptsOf, PROTOTYPE_POLLUTION_KEYS } from './utils/configUtils.js';
@@ -65,7 +65,7 @@ const BUILT_IN_FILTER_NAMES = new Set(['format', 'upper', 'lower']);
 
 /** Every option render takes (the compiler holds this to TemplateConfig's own keys). */
 const TEMPLATE_OPTIONS: Record<keyof TemplateConfig, true> = {
-    data: true, delimiters: true, onMissing: true, numberSeparators: true, dataNumberSeparators: true, dateNames: true, utcOffsetMinutes: true, formatters: true,
+    data: true, delimiters: true, onMissing: true, numberSeparators: true, dataNumberSeparators: true, numericTextComparison: true, dateNames: true, utcOffsetMinutes: true, formatters: true,
     password: true, onPassword: true, maxPasswordAttempts: true, fileType: true, decompressionLimits: true, onWarning: true,
 };
 
@@ -134,6 +134,17 @@ function onMissingOf(config: TemplateConfig, errCfg: OfficeParserConfig): Templa
 }
 
 /**
+ * `numericTextComparison` as given when it is `'text'` or `'number'`; null when not given (the default:
+ * as text, an order comparison warned). Another value is reported (INVALID_CONFIG_VALUE) and the default used.
+ */
+function numericTextsOf(config: TemplateConfig, errCfg: OfficeParserConfig): TemplateOptions['numericTexts'] {
+    const value: unknown = config.numericTextComparison;
+    if (value === 'text' || value === 'number') return value;
+    if (value !== undefined && value !== null) logWarning(OfficeWarningType.INVALID_CONFIG_VALUE, errCfg, { option: 'numericTextComparison', value, expected: "'text' or 'number'", fallback: '' });
+    return null;
+}
+
+/**
  * The tag delimiters, each as given or its default when left out or empty. Delimiters that are not an
  * object, or one that is not text, are refused, typed: a number crashed the render untyped, and text
  * or a list in place of the object was passed over without a word.
@@ -153,21 +164,35 @@ function delimitersOf(config: TemplateConfig, errCfg: OfficeParserConfig): { sta
 const NUMBER_CHARACTERS = '0123456789+-eE';
 
 /**
- * How text in the data is read as a number (`dataNumberSeparators`): null when not given, which reads it
- * as before the option was (`.` for the point, no group separator). Each separator is one character, the
- * point not white space, neither a digit, a sign or an exponent's `e`, and the two not the same; another
- * value is refused, typed. A name the option does not have is added to `unknown`, to be reported.
+ * How text in the data is read as a number (`dataNumberSeparators`): the ways to try, in turn (one for an
+ * object, as many as a list of one to 8 gives); null when not given, which reads it as before the option
+ * was (`.` for the point, no group separator). Each separator is one character, the point not white
+ * space, neither a digit, a sign or an exponent's `e`, and the two not the same; another value is
+ * refused, typed, a list's entry named by its place (`dataNumberSeparators[1].decimal`). A name an entry
+ * does not have is added to `unknown`, to be reported.
  */
-function numberTextOf(config: TemplateConfig, errCfg: OfficeParserConfig, unknown: string[]): NumberTextSeparators | null {
+function numberTextOf(config: TemplateConfig, errCfg: OfficeParserConfig, unknown: string[]): NumberTextSeparators[] | null {
     const given: unknown = config.dataNumberSeparators;
     if (given === undefined || given === null) return null;
     const refuse = (detail: string): never => { throw getOfficeError(OfficeErrorType.IMPROPER_ARGUMENTS, errCfg, detail); };
-    if (typeof given !== 'object' || Array.isArray(given)) refuse('dataNumberSeparators is an object: decimal and group');
-    const { decimal = '.', group = '' } = given as { decimal?: unknown; group?: unknown };
-    for (const key of Object.keys(given as object)) if (key !== 'decimal' && key !== 'group') unknown.push(`dataNumberSeparators.${key}`);
-    if (typeof decimal !== 'string' || decimal.length !== 1 || /\s/.test(decimal) || NUMBER_CHARACTERS.includes(decimal)) refuse('dataNumberSeparators.decimal is one character, not white space, a digit, a sign or e');
-    if (typeof group !== 'string' || group.length > 1 || (group !== '' && NUMBER_CHARACTERS.includes(group)) || group === decimal) refuse('dataNumberSeparators.group is one character (or empty for none), not a digit, a sign or e, nor the decimal point');
-    return { decimal: decimal as string, group: group as string };
+    const shape = `dataNumberSeparators is an object: decimal and group, or a list of one to ${MAX_NUMBER_TEXT_WAYS} of them`;
+    const way = (entry: unknown, name: string): NumberTextSeparators => {
+        if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) refuse(`${name} is an object: decimal and group`);
+        const { decimal = '.', group = '' } = entry as { decimal?: unknown; group?: unknown };
+        for (const key of Object.keys(entry as object)) if (key !== 'decimal' && key !== 'group') unknown.push(`${name}.${key}`);
+        if (typeof decimal !== 'string' || decimal.length !== 1 || /\s/.test(decimal) || NUMBER_CHARACTERS.includes(decimal)) refuse(`${name}.decimal is one character, not white space, a digit, a sign or e`);
+        if (typeof group !== 'string' || group.length > 1 || (group !== '' && NUMBER_CHARACTERS.includes(group)) || group === decimal) refuse(`${name}.group is one character (or empty for none), not a digit, a sign or e, nor the decimal point`);
+        return { decimal: decimal as string, group: group as string };
+    };
+    if (Array.isArray(given)) {
+        if (given.length < 1 || given.length > MAX_NUMBER_TEXT_WAYS) refuse(shape);
+        // By index, not map: map passes over a hole ([, { decimal: ',' }]), which would reach the reader as no way.
+        const listed: NumberTextSeparators[] = [];
+        for (let place = 0; place < given.length; place++) listed.push(way(given[place], `dataNumberSeparators[${place}]`));
+        return listed;
+    }
+    if (typeof given !== 'object') refuse(shape);
+    return [way(given, 'dataNumberSeparators')];
 }
 
 /** The most a UTC offset can be: a day, either way. */
@@ -251,6 +276,11 @@ async function prepareTemplate(template: TemplateInput, config: Omit<TemplateCon
         throw getOfficeError(OfficeErrorType.TEMPLATE_UNSUPPORTED_FORMAT, errCfg, hint);
     }
 
+    // Each tag is reported once in a render or a check (one prepareTemplate each), at its first order
+    // comparison of two number texts compared as text: one key per tag, its compiled record (compiled once
+    // for the call). Not its typed text, which two tags can share, nor its place among its part's tags,
+    // counted from 0 again in each note that only a loop refers to (compiled on its own).
+    const reportedNumbersAsText = new Set<object>();
     const options: TemplateOptions = {
         start: delimiters.start,
         end: delimiters.end,
@@ -268,6 +298,14 @@ async function prepareTemplate(template: TemplateInput, config: Omit<TemplateCon
         onOutputLimit: (): never => { throw getOfficeError(OfficeErrorType.OUTPUT_TOO_LARGE, errCfg); },
         pictures,
         numberText,
+        numericTexts: numericTextsOf(config as TemplateConfig, errCfg),
+        reportNumbersAsText: (tag: object) => {
+            if (reportedNumbersAsText.has(tag)) return null;
+            return (details: TemplateNumbersAsTextDetails): void => {
+                reportedNumbersAsText.add(tag);
+                logWarning(OfficeWarningType.TEMPLATE_NUMBERS_COMPARED_AS_TEXT, errCfg, details);
+            };
+        },
         formatters: templateFormatters(config as TemplateConfig, errCfg),
         maxXmlElements: limits.maxXmlElements,
         onElementLimit: (): never => { throw getOfficeError(OfficeErrorType.XML_ELEMENT_LIMIT_EXCEEDED, errCfg, options.maxXmlElements); },
@@ -318,8 +356,8 @@ export class OfficeTemplate {
         const rows = dataRows(config, errCfg);
         const { compiled, options, write } = await prepareTemplate(template, config, errCfg);
         warnNotATag(compiled, templateTags(compiled, options), errCfg);
-        const renderOne = (data: TemplateData): Uint8Array => write(compiled, data, options);
-        return Array.isArray(config.data) ? rows.map(renderOne) : renderOne(config.data);
+        // A batch's entries are rendered each with its place, which what a render reports names.
+        return Array.isArray(config.data) ? rows.map((data, entry) => write(compiled, data, { ...options, entry })) : write(compiled, config.data, options);
     }
 
     /**
@@ -395,6 +433,7 @@ export class OfficeTemplate {
                 ...options,
                 onMissing: 'error',
                 checking: true,
+                ...(entry === undefined ? {} : { entry }),
                 onFieldMissing: (field, place) => {
                     const fieldNumber = numberOf(field);
                     note(place, `m${fieldNumber} ${numberOf(part)}`, () => ({
@@ -404,7 +443,9 @@ export class OfficeTemplate {
                     }));
                 },
                 onDataInvalid: (details, place): never => {
-                    const detailKey = numberOf(`${details.reason}\u0000${details.tag}\u0000${details.part}\u0000${details.kind}\u0000${details.otherKind ?? ''}\u0000${details.filter ?? ''}\u0000${details.takes ?? ''}`);
+                    // (Two different texts refused as ambiguous at one place are two problems: their readings differ.)
+                    const readings = details.readings?.map(r => `${r.separators}:${r.value}`).join(' ') ?? '';
+                    const detailKey = numberOf(`${details.reason}\u0000${details.tag}\u0000${details.part}\u0000${details.kind}\u0000${details.otherKind ?? ''}\u0000${details.filter ?? ''}\u0000${details.takes ?? ''}\u0000${readings}`);
                     note(place, `d${detailKey}`, () => ({
                         code: OfficeErrorType.TEMPLATE_DATA_INVALID,
                         message: messageOf(`d${detailKey}`, () => buildOfficeError(OfficeErrorType.TEMPLATE_DATA_INVALID, details).officeIssue!.message),

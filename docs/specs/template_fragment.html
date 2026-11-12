@@ -110,7 +110,7 @@ docs.forEach((d, i) => writeFileSync(`invoice-${i}.docx`, d));</code></pre>
             </tr>
             <tr>
                 <td><code>dataNumberSeparators</code></td>
-                <td><code>{ decimal?: string; group?: string }</code></td>
+                <td><code>{ decimal?: string; group?: string } | { decimal?: string; group?: string }[]</code></td>
                 <td><code>(none)</code></td>
                 <td>How a number written as text in the data is read, by a number picture and where a condition compares
                     it with a number: <code>{ decimal: ',', group: '.' }</code> reads <code>12,50</code> and
@@ -120,7 +120,29 @@ docs.forEach((d, i) => writeFileSync(`invoice-${i}.docx`, d));</code></pre>
                     (<code>1.5</code> with <code>.</code> for groups) is no number rather than a wrong one (nor is
                     <code>0.500</code>: a first group never starts with 0). Not given, text
                     is read as before: <code>.</code> for the point and no groups (<code>1250.5</code>).
-                    <code>numberSeparators</code> says how numbers are written, this how they are read.</td>
+                    <code>numberSeparators</code> says how numbers are written, this how they are read. A list of one to 8
+                    ways is tried in turn: <code>[{ decimal: ',', group: '.' }, { decimal: '.' }]</code> reads
+                    <code>12,50</code>, <code>12.50</code> and <code>1.234,50</code>. Text the ways read as one number is
+                    that number; text two ways read as different numbers (<code>1.250</code>: 1250 or 1.25) is refused with
+                    <code>TEMPLATE_DATA_INVALID</code> (<code>ambiguous-number</code>, each reading in
+                    <code>details.readings</code>), so such a list refuses a whole number with one group separator
+                    (<code>1.000</code>) that the German way alone reads. One object, or a list of one, reads as before.</td>
+            </tr>
+            <tr>
+                <td><code>numericTextComparison</code></td>
+                <td><code>'text' | 'number'</code></td>
+                <td><code>(none)</code></td>
+                <td>How a condition compares two texts that both read as numbers (as <code>dataNumberSeparators</code> reads
+                    them), such as two columns of a spreadsheet. Not given: as text, character by character
+                    (<code>'250' &gt; '1000'</code> is true), and an order comparison (<code>&lt;</code>, <code>&lt;=</code>,
+                    <code>&gt;</code>, <code>&gt;=</code>) of two such texts is reported once per tag in a render or a check
+                    with a <code>TEMPLATE_NUMBERS_COMPARED_AS_TEXT</code> warning. <code>'text'</code>: as text, without the
+                    warning. <code>'number'</code>: as numbers, for every operator, exactly (<code>'250' &lt; '1000'</code>,
+                    <code>'007' == '7'</code>, <code>'1.0' == '1'</code>; two 20-digit ids that differ in their last digit stay
+                    different). Text too large for a double (past about 1.8e308, <code>'1e400'</code>) is no number, as for
+                    <code>format</code>, and compares as text. Text beside text that is no number compares as text; text compared with a number typed in
+                    the tag is read as a number whatever this says. Another value is reported
+                    (<code>INVALID_CONFIG_VALUE</code>) and the default used.</td>
             </tr>
             <tr>
                 <td><code>dateNames</code></td>
@@ -211,7 +233,7 @@ if (problems.length === 0) await OfficeTemplate.render('invoice-template.docx', 
             <tr><td><code>tag</code></td><td><code>string</code></td><td>The tag as typed, delimiters included (a very long one is cut short); for <code>text</code>, the text as typed.</td></tr>
             <tr><td><code>part</code></td><td><code>string</code></td><td>The document part holding it: <code>word/document.xml</code>, <code>word/header1.xml</code>, ...; in an ODT <code>content.xml</code>, or <code>styles.xml</code> for headers and footers.</td></tr>
             <tr><td><code>fields</code></td><td><code>string[]</code></td><td>What it reads from the data, each as typed: a field's path, every path in a condition, a loop's list. A path may start with a loop's item (<code>line.qty</code>) or <code>loop</code>.</td></tr>
-            <tr><td><code>filters</code></td><td><code>string[]</code></td><td>A field's filters, by name, in order.</td></tr>
+            <tr><td><code>filters</code></td><td><code>string[]</code></td><td>A field's filters, by name, in order; for an <code>if</code> or <code>else if</code>, the filters its condition's values go through, by name, each once, in the order first written.</td></tr>
             <tr><td><code>item</code></td><td><code>string</code></td><td>A <code>for</code> tag's item name (<code>line</code> in <code>{{ for line in lines }}</code>).</td></tr>
             <tr><td><code>reason</code></td><td><code>TemplateTextReason</code></td><td>For <code>text</code>: why it is not a tag (below).</td></tr>
             <tr><td><code>loops</code></td><td><code>{ item, list }[]</code></td><td>The <code>for</code> tags it is inside, outermost first.</td></tr>
@@ -237,7 +259,7 @@ if (problems.length === 0) await OfficeTemplate.render('invoice-template.docx', 
         </thead>
         <tbody>
             <tr><td><code>space-in-name</code></td><td>Text between the delimiters that is a name with white space in it: letters, digits, <code>_ . -</code> and white space, starting with a letter or <code>_</code>, at most 64 characters.</td><td><code>{{first name}}</code></td></tr>
-            <tr><td><code>unknown-filter</code></td><td>A field through a word after <code>|</code> that is no filter, built in or in <code>formatters</code>.</td><td><code>{{ total | fromat "0.00" }}</code></td></tr>
+            <tr><td><code>unknown-filter</code></td><td>A field, or a value in a condition, through a word after <code>|</code> that is no filter, built in or in <code>formatters</code>.</td><td><code>{{ total | fromat "0.00" }}</code>, <code>{{ if answer | lowr == "yes" }}</code></td></tr>
             <tr><td><code>missing-delimiter</code></td><td>For delimiters of one character typed twice or more (the default), a name between delimiters one of which is a character short. A short start inside braces still open, or a short end whose brace a later one closes (code nesting them), is not reported. Braces are counted only when the start and the end are different characters: with <code>$$</code> and <code>$$</code>, every short delimiter around a name is reported.</td><td><code>{{ name }</code>, <code>{ name }}</code></td></tr>
             <tr><td><code>full-width</code></td><td>A name between delimiters typed with full-width characters (U+FF01 to U+FF5E), as a Japanese or Chinese keyboard types them.</td><td><code>&#xFF5B;&#xFF5B;nom&#xFF5D;&#xFF5D;</code></td></tr>
         </tbody>
@@ -333,7 +355,16 @@ Please pay {{ amount }} by {{ due }}.
         <li>A condition is a field (<code>{{ if paid }}</code>) or a comparison: <code>==</code>, <code>!=</code>,
             <code>&lt;</code>, <code>&lt;=</code>, <code>&gt;</code>, <code>&gt;=</code>, joined with <code>and</code>,
             <code>or</code>, <code>not</code> and parentheses, against numbers, quoted strings, <code>true</code>,
-            <code>false</code> and <code>null</code>.</li>
+            <code>false</code> and <code>null</code>. <code>&lt;&gt;</code> is <code>!=</code> too, as spreadsheets write it.</li>
+        <li>A value can go through filters, as a field's can, before it is compared, binding tighter than the comparison:
+            <code>{{ if answer | lower == "yes" }}</code> and <code>{{ if (answer | lower) == "yes" }}</code> are the same,
+            and <code>{{ if (a | upper) == (b | upper) }}</code> compares two values without case. Every filter works
+            (<code>upper</code>, <code>lower</code>, <code>format</code> and your own <code>formatters</code>; a formatter
+            returning a number compares as a number). <code>upper</code> matches more (<code>&szlig;</code> and
+            <code>SS</code>, <code>&#x131;</code> and <code>i</code>) and neither is language-aware, so for one language's
+            rules use a formatter of your own (<code>fold: v =&gt; String(v).toLocaleLowerCase('tr')</code>). A filter
+            follows a value, never parentheses (<code>(answer) | lower</code> cannot be read), and a word after
+            <code>|</code> that is no filter leaves the tag as text, as in a field.</li>
         <li><code>false</code>, <code>null</code>, <code>""</code>, <code>0</code>, an empty list and an invalid date count as
             false; everything else, the text <code>"0"</code> included, as true.</li>
         <li>A comparison takes two values of the same kind (two numbers, two strings, two dates, two booleans) or an empty
@@ -341,7 +372,13 @@ Please pay {{ amount }} by {{ due }}.
             a number, compares as that number (<code>{{ if total &gt; 100 }}</code> with <code>total: '250'</code>, as a
             form or a spreadsheet gives it), read with <code>dataNumberSeparators</code> when set; other text compared
             with a number (<code>"150 EUR"</code>) rejects with <code>TEMPLATE_DATA_INVALID</code> rather than silently
-            picking a branch. Two texts compare as text.</li>
+            picking a branch.</li>
+        <li>Two texts compare as text, character by character, even when both read as numbers (<code>'250' &gt; '1000'</code>
+            is true), so <code>'007'</code> and <code>'7'</code> stay different. An order comparison of two such texts
+            warns once per tag in a render or a check (<code>TEMPLATE_NUMBERS_COMPARED_AS_TEXT</code>), and
+            <code>numericTextComparison: 'number'</code> compares them as numbers, exactly (text too large for a double,
+            past about 1.8e308, <code>'1e400'</code>, is no number, as for <code>format</code>, and compares as text), or
+            <code>'text'</code> keeps the text comparison without the warning.</li>
         <li>Keywords are case-insensitive (<code>{{ If paid }}</code>, as AutoCorrect may capitalize it), and a string may
             be quoted with straight or curly quotes, which AutoCorrect writes in Word.</li>
     </ul>
@@ -395,13 +432,13 @@ Please pay {{ amount }} by {{ due }}.
         <li><strong>The same on every machine:</strong> the formatting is officeParser's own, not the runtime's
             <code>Intl</code>. <code>numberSeparators</code>, <code>dateNames</code> and <code>utcOffsetMinutes</code> set
             what it writes.</li>
-        <li><code>upper</code> and <code>lower</code> change case; filters chain left to right; <code>formatters</code>
+        <li><code>upper</code> and <code>lower</code> change case, in a field or a condition; filters chain left to right; <code>formatters</code>
             adds filters of your own, each given the value as the data holds it and the strings and numbers after its
             name.</li>
         <li>A picture given the wrong kind of value rejects with <code>TEMPLATE_DATA_INVALID</code>
             (<code>unformattable</code>); a picture that cannot be read with <code>TEMPLATE_SYNTAX</code>. A word after
-            <code>|</code> that is no filter leaves the tag as text. An empty value stays empty; a missing one follows
-            <code>onMissing</code>.</li>
+            <code>|</code> that is no filter leaves the tag as text, in a field or a condition. An empty value stays empty;
+            a missing one follows <code>onMissing</code>.</li>
     </ul>
 
     <h3>Errors</h3>
@@ -429,10 +466,13 @@ Please pay {{ amount }} by {{ due }}.
             </tr>
             <tr>
                 <td><code>TEMPLATE_DATA_INVALID</code></td>
-                <td><code>not-a-list</code>, <code>not-text</code>, <code>incomparable</code>, <code>unformattable</code></td>
+                <td><code>not-a-list</code>, <code>not-text</code>, <code>incomparable</code>, <code>unformattable</code>,
+                    <code>ambiguous-number</code></td>
                 <td>A value does not fit its tag: a loop over something that is not a list, a list or object placed as a
-                    field, a comparison of two kinds of value. <code>details.kind</code> (and <code>otherKind</code>) name
-                    the values' kinds.</td>
+                    field, a comparison of two kinds of value, a filter given a value it does not take, or a number text two
+                    ways of <code>dataNumberSeparators</code> read differently (each reading in
+                    <code>details.readings</code>: the way's place, its separators and the number). <code>details.kind</code>
+                    (and <code>otherKind</code>) name the values' kinds.</td>
             </tr>
             <tr>
                 <td><code>TEMPLATE_FIELD_MISSING</code></td>
@@ -443,6 +483,28 @@ Please pay {{ amount }} by {{ due }}.
                 <td><code>MAX_NESTING_DEPTH_EXCEEDED</code></td>
                 <td></td>
                 <td>Blocks nest more than 64 deep.</td>
+            </tr>
+        </tbody>
+    </table>
+
+    <h3>Warnings</h3>
+    <table>
+        <thead>
+            <tr>
+                <th>Code</th>
+                <th>When</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td><code>TEMPLATE_NUMBERS_COMPARED_AS_TEXT</code></td>
+                <td>A condition ordered two texts that both read as numbers (<code>{{ if a &gt; b }}</code> with
+                    <code>'250'</code> and <code>'1000'</code>) and compared them as text, as <code>numericTextComparison</code>
+                    was not given. Raised by <code>render()</code> and <code>check()</code> once per tag; <code>details</code>
+                    holds the <code>tag</code>, the <code>part</code>, the <code>operator</code>, the two texts
+                    (<code>left</code>, <code>right</code>, each at most 80 characters), whether comparing them as numbers
+                    answers otherwise (<code>differs</code>, left out when a text reads as two numbers) and, in a batch, the
+                    <code>entry</code>.</td>
             </tr>
         </tbody>
     </table>

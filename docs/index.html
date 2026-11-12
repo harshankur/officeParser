@@ -4326,7 +4326,7 @@
                     <span class="feature-icon">✉️</span>
                     <h3>Templates and Mail Merge</h3>
                     <p>Fill Word and OpenDocument templates (<strong>.docx, .odt, .ott</strong>) with
-                        <code>OfficeTemplate</code>: fields, conditions, loops down to one table row per item, Word-style
+                        <code>OfficeTemplate</code>: fields, conditions (with filters, so <code>Yes</code> matches <code>yes</code>), loops down to one table row per item, Word-style
                         number and date pictures, and one document per row of a batch. <code>tags()</code> lists a template's
                         tags and <code>check()</code> checks your data before anything is written.
                         <a href="#template-studio">Try the Template Studio</a>.</p>
@@ -5292,6 +5292,7 @@
                                     <option value="invoice.odt">Invoice (OpenDocument, .odt)</option>
                                     <option value="invoice.ott">Invoice (OpenDocument template, .ott)</option>
                                     <option value="near-tags.odt">Text that looks like tags (.odt)</option>
+                                    <option value="conditions.docx">Conditions: case and number texts (Word, .docx)</option>
                                 </select>
                             </label>
                             <button class="btn btn-outline ts-sample-btn" id="ts-load-sample" type="button">↓ Load sample</button>
@@ -5304,7 +5305,8 @@
                             last cells, one row per item. Format a value as Word does:
                             <code>{{ total | format "$#,##0.00" }}</code>, <code>{{ due | format "MMMM d, yyyy" }}</code>; a
                             number your data holds as text (<code>"1.234,50"</code>) is read with the Data numbers
-                            separators.</div>
+                            separators. Compare without case with <code>{{ if (answer | lower) == "yes" }}</code>;
+                            <code>&lt;&gt;</code> is <code>!=</code>.</div>
                     </div>
 
                     <div class="ts-panel">
@@ -5326,9 +5328,21 @@
                                 <input id="ts-sep-decimal" class="ts-mini" value="." maxlength="4" aria-label="decimal separator the document is written with">
                                 <input id="ts-sep-group" class="ts-mini" value="," maxlength="4" aria-label="group separator the document is written with">
                             </label>
-                            <label title="How numbers written as text in your data are read, by a number picture and by a condition comparing numbers: ',' and '.' read '1.234,50'. One character each; leave the group empty for none (the default).">Data numbers
+                            <label title="How numbers written as text in your data are read, by a number picture and by a condition comparing numbers: ',' and '.' read '1.234,50'. One character each; leave the group empty for none (the default). With or, both ways are tried, and text they read differently (1.250) is refused.">Data numbers
                                 <input id="ts-data-sep-decimal" class="ts-mini" value="." maxlength="1" aria-label="decimal separator your data's numbers are read with">
                                 <input id="ts-data-sep-group" class="ts-mini" value="" maxlength="1" placeholder="none" aria-label="group separator your data's numbers are read with (empty for none)">
+                            </label>
+                            <label title="Also read your data's numbers a second way: both ways are tried, and text they read as different numbers (1.250: 1250 one way, 1.25 the other) is refused.">
+                                <input id="ts-data-sep-also" type="checkbox" aria-label="also read your data's numbers a second way">or
+                                <input id="ts-data-sep2-decimal" class="ts-mini" value="." maxlength="1" disabled aria-label="decimal separator of the second way your data's numbers are read with">
+                                <input id="ts-data-sep2-group" class="ts-mini" value="" maxlength="1" placeholder="none" disabled aria-label="group separator of the second way your data's numbers are read with (empty for none)">
+                            </label>
+                            <label title="How a condition compares two texts that both read as numbers, such as two columns of a spreadsheet: as text, character by character ('250' > '1000' is true), warning when two are ordered; as text, quietly; or as numbers, exactly ('250' < '1000', '007' == '7').">Number texts
+                                <select id="ts-numeric-texts" class="ts-mini">
+                                    <option value="">as text, warn when ordered</option>
+                                    <option value="text">as text</option>
+                                    <option value="number">as numbers</option>
+                                </select>
                             </label>
                             <label title="Minutes from UTC that a date picture writes dates in; a date without an offset is read as UTC">UTC offset (min)
                                 <input id="ts-utc-offset" class="ts-mini" type="number" value="0" min="-1080" max="1080" step="1" style="width: 4.5rem;" aria-label="UTC offset in minutes">
@@ -8894,6 +8908,8 @@ ${sectioning.filter(Boolean).join('\n')}
                 onMissing: $('ts-onmissing'), batchHint: $('ts-batch-hint'),
                 sepDecimal: $('ts-sep-decimal'), sepGroup: $('ts-sep-group'), utcOffset: $('ts-utc-offset'),
                 dataSepDecimal: $('ts-data-sep-decimal'), dataSepGroup: $('ts-data-sep-group'), password: $('ts-password'),
+                dataSepAlso: $('ts-data-sep-also'), dataSep2Decimal: $('ts-data-sep2-decimal'), dataSep2Group: $('ts-data-sep2-group'),
+                numericTexts: $('ts-numeric-texts'),
                 render: $('ts-render'), check: $('ts-check'), download: $('ts-download'), toVisualizer: $('ts-to-visualizer'),
                 status: $('ts-status'), summary: $('ts-summary'), notices: $('ts-notices'), problems: $('ts-problems'),
                 compare: $('ts-compare'), before: $('ts-before'), after: $('ts-after'), batchTabs: $('ts-batch-tabs'),
@@ -8919,7 +8935,25 @@ ${sectioning.filter(Boolean).join('\n')}
                 contacts: [{ name: 'Ann Lee' }, { name: 'Bo Chen' }],
             }, null, 2);
 
+            // A sample with data of its own replaces the data with it, and sets the options it is made for; the
+            // invoices fill the data only when it is empty.
+            const SAMPLE_DATA_BY_FILE = {
+                'conditions.docx': {
+                    data: JSON.stringify([
+                        { name: 'Ann', answer: 'Yes', score: '250', target: '1000', status: 'open', amount: '12.50' },
+                        { name: 'Bo', answer: 'no', score: '1200', target: '1000', status: 'paid', amount: '1.234,50' },
+                    ], null, 2),
+                    // Amounts are written with a decimal comma or a point: both ways are tried.
+                    dataNumbers: [{ decimal: ',', group: '.' }, { decimal: '.', group: '' }],
+                },
+            };
+
             const state = { buffer: null, name: '', outputs: [], rows: [], active: 0 };
+
+            // The second way of reading data numbers is read only when "or" is ticked.
+            const syncDataSepAlso = () => { els.dataSep2Decimal.disabled = els.dataSep2Group.disabled = !els.dataSepAlso.checked; };
+            els.dataSepAlso.addEventListener('change', syncDataSepAlso);
+            syncDataSepAlso();
 
             els.data.value = SAMPLE_DATA;
 
@@ -8972,7 +9006,16 @@ ${sectioning.filter(Boolean).join('\n')}
                     const res = await fetch('test/files/template/' + file);
                     if (!res.ok) throw new Error('sample not found (' + res.status + ')');
                     await setTemplate(await res.arrayBuffer(), file);
-                    if (!els.data.value.trim()) els.data.value = SAMPLE_DATA;
+                    const own = SAMPLE_DATA_BY_FILE[file];
+                    if (own) {
+                        els.data.value = own.data;
+                        const [first, second] = own.dataNumbers;
+                        els.dataSepDecimal.value = first.decimal; els.dataSepGroup.value = first.group;
+                        els.dataSepAlso.checked = !!second;
+                        if (second) { els.dataSep2Decimal.value = second.decimal; els.dataSep2Group.value = second.group; }
+                        syncDataSepAlso();
+                        els.data.dispatchEvent(new Event('input'));
+                    } else if (!els.data.value.trim()) els.data.value = SAMPLE_DATA;
                 } catch (err) { setStatus('Could not load sample: ' + err.message, true); }
             });
 
@@ -9151,7 +9194,9 @@ ${sectioning.filter(Boolean).join('\n')}
                 const detail = (p) => {
                     const d = p.details;
                     if (!d) return '';
-                    const bits = [d.reason, d.kind && ('value: ' + d.kind), d.otherKind && ('compared with: ' + d.otherKind), d.filter && ('filter: ' + d.filter + (d.takes ? ', takes ' + d.takes : ''))].filter(Boolean);
+                    // Each way of dataNumberSeparators that read an ambiguous text, and what it read.
+                    const readings = d.readings && d.readings.length && ('readings: ' + d.readings.map(r => r.value + ' (decimal ' + r.decimal + (r.group ? ' group ' + r.group : '') + ')').join(', '));
+                    const bits = [d.reason, d.kind && ('value: ' + d.kind), d.otherKind && ('compared with: ' + d.otherKind), d.filter && ('filter: ' + d.filter + (d.takes ? ', takes ' + d.takes : '')), readings].filter(Boolean);
                     return bits.length ? '<div class="ts-dim">' + escapeHtml(bits.join(' · ')) + '</div>' : '';
                 };
                 const table = (list) => !list.length
@@ -9191,14 +9236,17 @@ ${sectioning.filter(Boolean).join('\n')}
             function readOptions() {
                 const start = els.delimStart.value || '{{';
                 const end = els.delimEnd.value || '}}';
-                const dataNumberSeparators = { group: els.dataSepGroup.value };
                 // Each is one character: an empty decimal is the library's default ('.').
-                if (els.dataSepDecimal.value) dataNumberSeparators.decimal = els.dataSepDecimal.value;
+                const way = (decimal, group) => decimal.value ? { decimal: decimal.value, group: group.value } : { group: group.value };
+                const firstWay = way(els.dataSepDecimal, els.dataSepGroup);
+                // With "or" ticked, a list of both ways, each tried.
+                const dataNumberSeparators = els.dataSepAlso.checked ? [firstWay, way(els.dataSep2Decimal, els.dataSep2Group)] : firstWay;
                 return {
                     delimiters: { start, end },
                     onMissing: els.onMissing.value,
                     numberSeparators: { decimal: els.sepDecimal.value, group: els.sepGroup.value },
                     dataNumberSeparators,
+                    ...(els.numericTexts.value ? { numericTextComparison: els.numericTexts.value } : {}),
                     utcOffsetMinutes: Number(els.utcOffset.value || 0),
                     password: els.password.value || undefined,
                     fileType: templateFileType(state.name),

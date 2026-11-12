@@ -6,7 +6,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Templates: filters in conditions.** A condition's values go through the same filters as a field's, so `{{ if (answer | lower) == "yes" }}` matches `Yes` and `YES`. `upper`, `lower`, `format` and your own `formatters` all work; `tags()` lists them in an `if` tag's `filters`, and a word after `|` that is no filter leaves the tag as text, as in a field.
+- **Templates: `<>` reads as `!=`** in a condition, as spreadsheets write it.
+- **Templates: `numericTextComparison`.** Two texts that both read as numbers compare as text, as before, unless it is `'number'`, which compares them as numbers, exactly (`'250' < '1000'`; two 20-digit ids that differ in their last digit stay different). Text too large for a double (past about 1.8e308) is no number, as for `format`. An order comparison of two such texts compared as text is reported once per tag by `render()` and `check()` with `TEMPLATE_NUMBERS_COMPARED_AS_TEXT`; `'text'` keeps comparing them as text without it.
+- **Templates: `dataNumberSeparators` takes a list**, tried in turn: `[{ decimal: ',', group: '.' }, { decimal: '.' }]` reads `12,50`, `12.50` and `1.234,50`. Text two ways read as different numbers (`1.250`: 1250 or 1.25) is refused with `TEMPLATE_DATA_INVALID` (`reason: 'ambiguous-number'`, the readings in `details.readings`), so such a list refuses a whole number with one group separator (`1.000`) that the first way alone reads. One object reads as before.
+
 ### Fixed
+- **A configuration value that JSON cannot write is reported, not thrown.** An option given a bigint (`onMissing: 10n`, `maxPasswordAttempts: 10n`, a decompression limit, a `pdfParserConfig` option, a generator's choice options and page margins), or a template or parser option given an object that refers to itself, threw a `TypeError` while its `INVALID_CONFIG_VALUE` warning was being written; it is now reported, and the default used.
 - **Equations keep the braces a command's argument needs.** A fraction, root, bar, accent, math alphabet or function name of one-letter arguments was written as an undefined command (`\fracab`) in LaTeX and Markdown output and to KaTeX or MathJax; it is `\frac{a}{b}`, and a command before a letter is spaced (`\int x`).
 
 ## [8.7.1] - 2026-11-09

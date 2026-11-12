@@ -34,11 +34,12 @@
  */
 
 import { zipSync, Zippable } from 'fflate';
-import { DecompressionLimits, OfficeErrorType, OfficeParserConfig, TemplateData, TemplateDataDetails, TemplateFormatter, TemplateLoopPlace, TemplateSyntaxDetails, TemplateTagInfo, TemplateTextReason, TemplateValue } from '../types.js';
+import { DecompressionLimits, OfficeErrorType, OfficeParserConfig, TemplateData, TemplateDataDetails, TemplateFormatter, TemplateLoopPlace, TemplateNumbersAsTextDetails, TemplateSyntaxDetails, TemplateTagInfo, TemplateTextReason, TemplateValue } from '../types.js';
+import { shownTo80 } from '../utils/errorUtils.js';
 import { escapeXml, stripInvalidXmlChars } from '../utils/sanitize.js';
 import { extractFiles } from '../utils/zipUtils.js';
-import { dateOf, formatDate, formatNumber, numberOf, NumberTextSeparators, Picture, PictureSettings, readPicture } from './templateFormat.js';
-import { conditionSize, ConditionValue, evaluateCondition, Incomparable, kindOfValue, LOOP_DETAILS_NAME, MISSING, readTag, TemplateExpression, TemplatePath, TemplateTag } from './templateTags.js';
+import { compareExact, compareExactCost, dateOf, ExactNumber, formatDate, formatNumber, NumberTextReading, NumberTextSeparators, Picture, PictureSettings, readNumberTexts, readPicture } from './templateFormat.js';
+import { CompareOperator, conditionFilterNames, conditionFilters, ConditionReader, conditionSize, ConditionValue, evaluateCondition, Incomparable, kindOfValue, LOOP_DETAILS_NAME, MISSING, readTag, TemplateExpression, TemplatePath, TemplateTag } from './templateTags.js';
 
 /** The `word/*.xml` parts that carry body text a tag could live in. */
 const TEXT_PART = /^word\/(document\d*|header\d*|footer\d*|footnotes|endnotes|comments)\.xml$/;
@@ -277,8 +278,23 @@ export interface TemplateOptions {
     onElementLimit: () => never;
     /** What a picture writes: separators, month and day names, the UTC offset. */
     pictures: PictureSettings;
-    /** How text in the data is read as a number (null: `.` for the point, no group separator). */
-    numberText: NumberTextSeparators | null;
+    /** How text in the data is read as a number: each way tried in turn (see readNumberTexts); null: `.` for the point, no group separator. */
+    numberText: readonly NumberTextSeparators[] | null;
+    /**
+     * How two texts that both read as numbers compare (`numericTextComparison`): null (not given) as text,
+     * an order comparison reported through `reportNumbersAsText`; 'text' as text; 'number' as numbers, exactly.
+     */
+    numericTexts: 'text' | 'number' | null;
+    /**
+     * The report of an order comparison of two texts that both read as numbers, compared as text, for the tag
+     * `tag` (its compiled record: one object for each tag of the compiled template, the same in every pass and
+     * every entry): a function taking the comparison's details, or null once that tag was reported in this
+     * render or check (every entry of a batch included), so its later comparisons are not read only to be
+     * reported.
+     */
+    reportNumbersAsText: (tag: object) => ((details: TemplateNumbersAsTextDetails) => void) | null;
+    /** The data entry of a batch being rendered or checked, from 0, for what is reported. */
+    entry?: number;
     /**
      * A check, not a render: a block whose condition or list is missing is not written as typed (nothing
      * inside it is read until the data gives it, and writing it would only spend the budget a check needs).
@@ -310,6 +326,8 @@ interface TagRecord {
     length: number;
     /** A field's filters, compiled (none when it has none). */
     filters?: CompiledFilter[];
+    /** An if's or else if's filter chains, compiled, by their place (see the 'filtered' condition). */
+    chains?: CompiledFilter[][];
 }
 
 /**
@@ -494,7 +512,16 @@ function findTagSpans(joined: string, ctx: PartContext): TagSpan[] {
         // `name | word` where the word is no filter is prose, as text between the delimiters always was;
         // reported as text that looks like a tag, as is a name with spaces in it.
         if (span.tag?.kind === 'field' && span.tag.filters?.some(f => !isFilter(f.name, ctx))) { span.tag = null; span.near = 'unknown-filter'; }
-        else if (!span.tag && !span.unreadable && inner.length <= MAX_NEAR_NAME * 8 && NAME_WITH_SPACES.test(decodeXmlText(inner).trim())) span.near = 'space-in-name';
+        else if (span.tag?.kind === 'if' || span.tag?.kind === 'elseif') {
+            // So is a condition's value through a word that is no filter; remembered, so that when its block
+            // then fails to pair, the error names the word and why.
+            const unknown = conditionFilterNames(span.tag.condition).find(name => !isFilter(name, ctx));
+            if (unknown !== undefined) {
+                span.tag = null;
+                span.unreadable = `uses ${unknown} after |, which is not a filter (format, upper, lower, or one of formatters)`;
+                span.near = 'unknown-filter';
+            }
+        } else if (!span.tag && !span.unreadable && inner.length <= MAX_NEAR_NAME * 8 && NAME_WITH_SPACES.test(decodeXmlText(inner).trim())) span.near = 'space-in-name';
         if (span.tag || span.unreadable || span.near) spans.push(span);
         // A tag consumes its end delimiter. Text that is not one does not: its end delimiter may begin the
         // next tag's start (`$5 for $name$` with `$` delimiters), so the search resumes inside it, as the
@@ -547,7 +574,7 @@ function isFilter(name: string, ctx: PartContext): boolean {
 }
 
 /**
- * A field's filters, read once: `format` takes one picture (read here, so a picture that cannot be read
+ * A field's filters, or one chain of a condition's, read once: `format` takes one picture (read here, so a picture that cannot be read
  * is a typed error before anything is rendered), `upper` and `lower` take nothing, and any other name
  * must be one of the caller's `formatters`.
  */
@@ -650,6 +677,10 @@ export function markRuns(segs: TextRun[], ctx: PartContext, spaces?: TemplateDia
         copy(copied, mt.start);
         const record: TagRecord = { tag: mt.tag, index: ctx.tags.length, inner: mt.inner, length: mt.end - mt.start };
         if (mt.tag.kind === 'field' && mt.tag.filters?.length) record.filters = compileFilters(mt.tag.filters, record, ctx);
+        else if (mt.tag.kind === 'if' || mt.tag.kind === 'elseif') {
+            const chains = conditionFilters(mt.tag.condition);
+            if (chains.length) record.chains = chains.map(chain => compileFilters(chain, record, ctx));
+        }
         const tagIndex = ctx.tags.push(record) - 1;
         if (mt.tag.kind !== 'field') ctx.hasBlocks = true;
         // Each segment the tag overlaps gets one marker, holding that segment's part of the tag.
@@ -2308,6 +2339,7 @@ function conditionFields(expression: TemplateExpression, out: string[]): void {
             case 'not': todo.push(e.operand); break;
             case 'and': case 'or': for (let i = e.operands.length - 1; i >= 0; i--) todo.push(e.operands[i]); break;
             case 'compare': todo.push(e.right, e.left); break;
+            case 'filtered': todo.push(e.operand); break;
         }
     }
 }
@@ -2362,7 +2394,10 @@ export function templateTags(compiled: CompiledTemplate, opts: TemplateOptions):
                     if (branch.condition) conditionFields(branch.condition, fields);
                     const kind = branch.condition === null ? 'else' : index === 0 ? 'if' : 'elseif';
                     nearUpTo(branch.record.index, part, loops);
-                    out.push({ kind, tag: typedOf(branch.record, opts), part, fields, loops });
+                    const tag: TemplateTagInfo = { kind, tag: typedOf(branch.record, opts), part, fields, loops };
+                    const filters = branch.condition ? conditionFilterNames(branch.condition) : [];
+                    if (filters.length) tag.filters = filters;
+                    out.push(tag);
                     walk(node.sections[index], part, loops);
                 });
                 nearUpTo(node.kept.lastTag, part, loops);
@@ -2835,7 +2870,7 @@ function renderField(node: FieldNode, scope: Scope | null, state: RenderState, o
     if (!custom && !cache) state.valueXml.set(container, cache = new Map());
     let xml = cache?.get(key);
     if (xml === undefined && !unlessSkipped(() => {
-        if (node.record.filters) value = applyFilters(value, node.record.filters, node, scope, state);
+        if (node.record.filters) value = applyFilters(value, node.record.filters, node.record, scope, state);
         // A list, an object, a function or a symbol has no text of its own (a function's would be its source).
         if (isContainer(value) || typeof value === 'function' || typeof value === 'symbol') {
             state.opts.onDataInvalid({ reason: 'not-text', tag: typedOf(node.record, state.opts), part: state.part, kind: kindOfValue(value) }, placeOf(scope, state));
@@ -2864,29 +2899,30 @@ function renderField(node: FieldNode, scope: Scope | null, state: RenderState, o
 }
 
 /**
- * A value through a field's filters, in order. `format` writes a number with a number picture and a date
+ * A value through a field's filters, or a condition's value through one chain, in order (`record` is the
+ * tag's, which an error names). `format` writes a number with a number picture and a date
  * with a date picture (taking text that is a number, or a date in ISO 8601 form, as form data carries
  * them); `upper` and `lower` change case; the caller's own get the value as the data holds it. An empty
  * value (null or undefined) stays empty through the built-in filters.
  */
-function applyFilters(value: TemplateValue, filters: CompiledFilter[], node: FieldNode, scope: Scope | null, state: RenderState): TemplateValue {
+function applyFilters(value: TemplateValue, filters: CompiledFilter[], record: TagRecord, scope: Scope | null, state: RenderState): TemplateValue {
     const unformattable = (filter: string, takes: string, v: TemplateValue): never => state.opts.onDataInvalid({
-        reason: 'unformattable', tag: typedOf(node.record, state.opts), part: state.part, kind: kindOfValue(v), filter, takes,
+        reason: 'unformattable', tag: typedOf(record, state.opts), part: state.part, kind: kindOfValue(v), filter, takes,
     }, placeOf(scope, state));
     let current = value;
     for (const filter of filters) {
         if (filter.kind === 'custom') { current = filter.run(current, ...filter.args); continue; }
         if (current === null || current === undefined) continue;
         if (filter.kind === 'format') {
-            // Reading a number or a date from text reads the whole text.
-            if (typeof current === 'string') state.charge(current.length);
             const { picture } = filter;
             if (picture.kind === 'number') {
-                const n = numberOf(current, state.opts.numberText);
+                const n = dataNumber(current, record, scope, state);
                 const written = n === null ? null : formatNumber(n, picture, state.opts.pictures);
                 if (written === null) unformattable('format', 'number', current);
                 current = written;
             } else {
+                // Reading a date from text reads the whole text.
+                if (typeof current === 'string') state.charge(current.length);
                 const date = dateOf(current);
                 if (!date) unformattable('format', 'date', current);
                 const written = formatDate(date as Date, picture, state.opts.pictures);
@@ -2905,6 +2941,36 @@ function applyFilters(value: TemplateValue, filters: CompiledFilter[], node: Fie
     return current;
 }
 
+/**
+ * What text in the data reads as, with `dataNumberSeparators` (see readNumberTexts): charged by the
+ * characters each way read. Text two ways read as different numbers is refused (`ambiguous-number`), on
+ * behalf of the tag `record`.
+ */
+function dataNumberText(text: string, record: TagRecord, scope: Scope | null, state: RenderState): ExactNumber | null {
+    const reading = readNumberTexts(text, state.opts.numberText, chars => state.charge(chars));
+    if (reading === null) return null;
+    if ('exact' in reading) return reading.exact;
+    return ambiguousNumber(reading.readings, record, scope, state);
+}
+
+/** Refuses text two ways of `dataNumberSeparators` read as different numbers, naming each reading. */
+function ambiguousNumber(readings: NumberTextReading[], record: TagRecord, scope: Scope | null, state: RenderState): never {
+    return state.opts.onDataInvalid({ reason: 'ambiguous-number', tag: typedOf(record, state.opts), part: state.part, kind: 'text', readings }, placeOf(scope, state));
+}
+
+/**
+ * The number a value is for a number picture or a comparison with a number: a number, or text that is
+ * one (see {@link dataNumberText}); null when it is neither, or past a double's range (1e400, a bigint of
+ * 400 digits).
+ */
+function dataNumber(value: unknown, record: TagRecord, scope: Scope | null, state: RenderState): number | null {
+    const n = typeof value === 'number' ? value
+        : typeof value === 'bigint' ? Number(value)
+            : typeof value === 'string' ? dataNumberText(value, record, scope, state)?.value ?? NaN
+                : NaN;
+    return Number.isFinite(n) ? n : null;
+}
+
 /** A condition's or a list's value, with `onMissing` applied: MISSING only for 'keep'. */
 function blockValue(path: TemplatePath, text: string, scope: Scope | null, state: RenderState): ConditionValue {
     const found = lookup(path, text, scope, state.data);
@@ -2915,21 +2981,88 @@ function blockValue(path: TemplatePath, text: string, scope: Scope | null, state
 
 function renderIf(node: IfNode, scope: Scope | null, state: RenderState, out: string[]): void {
     let branch = 0;
-    const read = (path: TemplatePath, text: string): ConditionValue => blockValue(path, text, scope, state);
-    // Comparing two strings reads them: as long as the shorter one.
-    const compared = (length: number): void => state.charge(length);
-    // Reading text compared with a number reads the whole text.
-    const readNumber = (text: string): number | null => { state.charge(text.length); return numberOf(text, state.opts.numberText); };
-    const incomparable = (why: Incomparable): never => state.opts.onDataInvalid({ reason: 'incomparable', tag: typedOf(node.branches[branch].record, state.opts), part: state.part, kind: why.left, otherKind: why.right }, placeOf(scope, state));
+    const reader: ConditionReader = {
+        lookup: (path: TemplatePath, text: string): ConditionValue => blockValue(path, text, scope, state),
+        // Comparing two strings reads them: as long as the shorter one.
+        compared: (length: number): void => state.charge(length),
+        // Reading text compared with a number is charged by what each way of reading it read.
+        readNumber: (text: string): number | null => dataNumber(text, node.branches[branch].record, scope, state),
+        incomparable: (why: Incomparable): never => state.opts.onDataInvalid({ reason: 'incomparable', tag: typedOf(node.branches[branch].record, state.opts), part: state.part, kind: why.left, otherKind: why.right }, placeOf(scope, state)),
+        // A value through its filters is worked out afresh at each test, and charged as a field's filters are.
+        filter: (chain: number, value: TemplateValue): TemplateValue => {
+            const { record } = node.branches[branch];
+            return applyFilters(value, record.chains![chain], record, scope, state);
+        },
+        compareTexts: (operator: CompareOperator, left: string, right: string): boolean | undefined => numericTexts(operator, left, right, node.branches[branch].record, scope, state),
+    };
     for (; branch < node.branches.length; branch++) {
         const { condition, cost } = node.branches[branch];
         state.charge(cost);
         let holds: boolean | typeof MISSING;
-        try { holds = condition === null ? true : evaluateCondition(condition, read, incomparable, compared, readNumber); }
+        try { holds = condition === null ? true : evaluateCondition(condition, reader); }
         catch (e) { if (e === TAG_SKIPPED) return; throw e; }
         if (holds === MISSING) { if (!state.opts.checking) renderKept(node.kept, scope, state, out); return; }
         if (holds) { renderNodes(node.sections[branch], scope, state, out); return; }
     }
+}
+
+/** Whether `order` (-1, 0 or 1, as `a` is less than, equal to or more than `b`) holds for the operator. */
+function holdsFor(operator: CompareOperator, order: number): boolean {
+    switch (operator) {
+        case '==': return order === 0;
+        case '!=': return order !== 0;
+        case '<': return order < 0;
+        case '<=': return order <= 0;
+        case '>': return order > 0;
+        case '>=': return order >= 0;
+    }
+}
+
+/**
+ * Two texts compared in a condition, when both read as numbers (as `dataNumberSeparators` reads them):
+ * under `numericTextComparison: 'number'`, the answer as numbers, exactly (text two ways read differently
+ * is refused, `ambiguous-number`); not given, an order comparison is reported through
+ * `reportNumbersAsText` and answered as text; under `'text'`, and for text that is no number, undefined
+ * (compared as text). Each reading is charged by the characters it examined, the shorter text read first;
+ * an exact comparison by `compareExactCost`. Under the default nothing is read once the tag was reported,
+ * the text comparison made for a report is returned, and `==` and `!=` read nothing.
+ */
+function numericTexts(operator: CompareOperator, left: string, right: string, record: TagRecord, scope: Scope | null, state: RenderState): boolean | undefined {
+    const mode = state.opts.numericTexts;
+    if (mode === 'text' || (mode === null && (operator === '==' || operator === '!='))) return undefined;
+    // Under the default the readings only serve the report: none once the tag was reported.
+    const report = mode === null ? state.opts.reportNumbersAsText(record) : null;
+    if (mode === null && report === null) return undefined;
+    const charge = (chars: number): void => state.charge(chars);
+    // The shorter first: when it is no number (a word, an empty cell) the longer is not read at all.
+    const leftFirst = left.length <= right.length;
+    const first = readNumberTexts(leftFirst ? left : right, state.opts.numberText, charge);
+    if (!first) return undefined;
+    const second = readNumberTexts(leftFirst ? right : left, state.opts.numberText, charge);
+    if (!second) return undefined;
+    const [a, b] = leftFirst ? [first, second] : [second, first];
+    if (mode === 'number') {
+        if ('readings' in a) return ambiguousNumber(a.readings, record, scope, state);
+        if ('readings' in b) return ambiguousNumber(b.readings, record, scope, state);
+        state.charge(compareExactCost(a.exact, b.exact));
+        return holdsFor(operator, compareExact(a.exact, b.exact));
+    }
+    // Compared as text, as before, and reported, with whether comparing them as numbers answers otherwise.
+    // The text comparison is made here, once, and its answer returned (compareValues would make it again).
+    let differs: boolean | undefined;
+    let asText: boolean | undefined;
+    if ('exact' in a && 'exact' in b) {
+        state.charge(compareExactCost(a.exact, b.exact) + Math.min(left.length, right.length));
+        asText = holdsFor(operator, left < right ? -1 : left > right ? 1 : 0);
+        differs = holdsFor(operator, compareExact(a.exact, b.exact)) !== asText;
+    }
+    (report as (details: TemplateNumbersAsTextDetails) => void)({
+        tag: typedOf(record, state.opts), part: state.part, operator: operator as TemplateNumbersAsTextDetails['operator'],
+        left: shownTo80(left), right: shownTo80(right),
+        ...(differs === undefined ? {} : { differs }),
+        ...(state.opts.entry === undefined ? {} : { entry: state.opts.entry }),
+    });
+    return asText;
 }
 
 function renderFor(node: ForNode, scope: Scope | null, state: RenderState, out: string[]): void {

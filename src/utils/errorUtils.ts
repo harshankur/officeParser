@@ -6,7 +6,7 @@
  * consistent error reporting across all parsers and the main entry point.
  */
 
-import { OfficeError, OfficeErrorType, OfficeIssue, OfficeParserConfig, OfficeWarningType, TemplateDataDetails, TemplateSyntaxDetails } from '../types.js';
+import { OfficeError, OfficeErrorType, OfficeIssue, OfficeParserConfig, OfficeWarningType, TemplateDataDetails, TemplateNumbersAsTextDetails, TemplateSyntaxDetails } from '../types.js';
 
 /** Error header prefix for all error messages */
 const ERRORHEADER = "[OfficeParser]: ";
@@ -42,6 +42,11 @@ function templateDataReason(info: TemplateDataDetails): string {
         case 'not-text': return `fills in a value that is a${info.kind === 'object' ? 'n' : ''} ${info.kind}, which has no text of its own; loop over a list with for, or name a field inside an object with a path`;
         case 'incomparable': return `compares a value that is ${info.kind} with one that is ${info.otherKind}; a comparison takes two values of the same kind (or empty)`;
         case 'unformattable': return `formats a value that is ${info.kind} with ${info.filter}, which takes ${info.takes === 'date' ? 'a date, or text that is one in ISO 8601 form (2026-11-01)' : info.takes === 'number' ? 'a number, or text that is one' : 'text, a number, true/false or a date'}`;
+        case 'ambiguous-number': {
+            const readings = (info.readings ?? []).map(r => `${r.value} (decimal '${r.decimal}'${r.group ? `, group '${r.group}'` : ''})`);
+            const listed = readings.length > 1 ? `${readings.slice(0, -1).join(', ')} and as ${readings[readings.length - 1]}` : readings.join('');
+            return `reads text as a number ${['two', 'three', 'four', 'five', 'six', 'seven', 'eight'][readings.length - 2] ?? readings.length} ways with dataNumberSeparators, as ${listed}; write the number so that one way reads it, or list only the ways the data is written`;
+        }
     }
 }
 
@@ -94,11 +99,24 @@ const ERROR_MESSAGES: Record<OfficeErrorType, string | ((...args: any[]) => stri
 const MAX_FONTS_NAMED = 10;
 
 /** `text` shown to 80 characters: when longer, its first 77 and `...`, not splitting a surrogate pair. */
-const shownTo80 = (text: string): string => {
+export const shownTo80 = (text: string): string => {
     if (text.length <= 80) return text;
     const code = text.charCodeAt(76);
     return `${text.slice(0, code >= 0xD800 && code <= 0xDBFF ? 76 : 77)}...`;
 };
+
+/**
+ * A configuration value as a message writes it: a number as itself (NaN, -Infinity) and a bigint with its n
+ * (10n); else as JSON, or as String gives it where JSON writes nothing (undefined, a function, a symbol); and
+ * an object neither can write (one that refers to itself, holds a bigint, or has a toJSON, getter or proxy
+ * that throws) by what it is. Never throws, so a mistaken value is reported, typed, whatever it is.
+ */
+function shownConfigValue(value: unknown): string {
+    if (typeof value === 'number') return String(value);
+    if (typeof value === 'bigint') return `${value}n`;
+    try { return JSON.stringify(value) ?? String(value); } catch { /* written below */ }
+    return 'an object that cannot be written out';
+}
 
 /**
  * Lookup table for warning messages.
@@ -199,8 +217,7 @@ const WARNING_MESSAGES: Record<OfficeWarningType, string | ((...args: any[]) => 
         `${info.runtime} has a flaw in its Brotli decoder (CVE-2026-111497) that a crafted file can use to run code, so ${info.what} decoded by a slower decoder written in JavaScript instead. What it decodes is the same, and what it cannot decode is reported or left out as with any other. Upgrade to ${info.fixed}: this protects officeParser's own reading only, not anything else in your application that decompresses Brotli, such as fetch().`,
     [OfficeWarningType.OCR_REQUIRES_ATTACHMENTS]: () => `'ocr: true' was set without 'extractAttachments: true'; OCR runs over extracted images, so no OCR was performed. Add 'extractAttachments: true' to recognize text from the document's images.`,
     [OfficeWarningType.INVALID_CONFIG_VALUE]: (info: { option: string; value: unknown; expected: string; fallback: unknown }) => {
-        // A number JSON cannot write (NaN, -Infinity) is shown as itself, not as null.
-        const shown = (typeof info.value === 'number' ? String(info.value) : JSON.stringify(info.value)) ?? String(info.value);
+        const shown = shownConfigValue(info.value);
         const value = shownTo80(shown);
         const fallback = info.fallback === '' || info.fallback === undefined ? 'the default is' : `the default (${JSON.stringify(info.fallback)}) is`;
         return `Invalid ${info.option}: ${value}. Expected ${info.expected}; ${fallback} used instead.`;
@@ -217,6 +234,12 @@ const WARNING_MESSAGES: Record<OfficeWarningType, string | ((...args: any[]) => 
         const cut = found > info.texts.length ? ` (only the first ${info.texts.length} are listed)` : '';
         const one = found === 1;
         return `${one ? 'Text that looks like a template tag is' : `${found} texts that look like template tags are`} not ${one ? 'a tag' : 'tags'} and ${one ? 'is' : 'are'} written as typed${cut}: ${shown}${more}.`;
+    },
+    [OfficeWarningType.TEMPLATE_NUMBERS_COMPARED_AS_TEXT]: (info: TemplateNumbersAsTextDetails) => {
+        const answer = info.differs === true ? ', which here answers otherwise than comparing them as numbers'
+            : info.differs === false ? ' (here the same as comparing them as numbers, which other values need not be)' : '';
+        const entry = info.entry === undefined ? '' : ` (data entry ${info.entry})`;
+        return `Template tag '${info.tag}' in ${info.part} compares two texts that read as numbers, '${info.left}' ${info.operator} '${info.right}', as text, character by character${answer}${entry}. Set numericTextComparison to 'number' to compare such texts as numbers, or to 'text' to keep comparing them as text without this warning.`;
     },
     [OfficeWarningType.TEMPLATE_CHECK_LIMITED]: (info: { limit: number; entry?: number; batch?: boolean; unchecked?: number }) => info.batch
         ? `A template check stopped after ${info.limit} problems in all, in data entry ${info.entry}${info.unchecked ? `; the ${info.unchecked} entr${info.unchecked === 1 ? 'y' : 'ies'} after it ${info.unchecked === 1 ? 'was' : 'were'} not checked` : ''}. Fix these and check again.`

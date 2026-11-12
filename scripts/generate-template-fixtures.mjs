@@ -13,6 +13,12 @@
  *    keeps or drops, and an inline loop holding a condition (`{{ if not loop.last }}`) inside one paragraph.
  *  - Values formatted with pictures: `{{ total | format "$#,##0.00" }}` and `{{ dueDate | format "MMMM d, yyyy" }}`.
  *
+ * And the Template Studio's conditions sample, `test/files/template/conditions.docx`: a condition that
+ * compares without case through a filter (`{{ if (answer | lower) == "yes" }}`), one ordering two number
+ * texts (`{{ if score > target }}`, which spreadsheet data writes as text), one with `<>`, and an amount
+ * written in either of two ways (`12.50`, `1.234,50`) through a number picture. Deterministic (a fixed zip
+ * time), so running it again writes the same bytes.
+ *
  * Run: `node scripts/generate-template-fixtures.mjs`
  */
 import { zipSync } from 'fflate';
@@ -62,4 +68,20 @@ fs.writeFileSync(path.join(OUT, 'invoice.docx'), Buffer.from(zipSync({
     'word/document.xml': S(document),
     'word/header1.xml': S(header),
 })));
+
+// The conditions sample: one paragraph per condition, its label bold (text written as XML: `<>` as `&lt;&gt;`).
+const MTIME = new Date(2001, 0, 1, 0, 0, 0);
+const conditionsCt = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>`;
+const heading = t => `<w:p><w:pPr><w:spacing w:after="240"/></w:pPr><w:r><w:rPr><w:b/><w:sz w:val="32"/></w:rPr><w:t xml:space="preserve">${t}</w:t></w:r></w:p>`;
+const line = (label, text) => para(r(label, true), r(text));
+const conditionsBody = heading('Event reply for {{ name }}')
+    + line('Reply: ', '{{ if (answer | lower) == "yes" }}Attending{{ else }}Not attending{{ endif }}')
+    + line('Score: ', '{{ score }} against a target of {{ target }}: {{ if score > target }}Above target{{ else }}At or below target{{ endif }}')
+    + line('Amount: ', '{{ amount | format "#,##0.00" }}{{ if status &lt;&gt; "paid" }} (Payment due){{ endif }}');
+const conditions = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document ${W}><w:body>${conditionsBody}<w:sectPr/></w:body></w:document>`;
+fs.writeFileSync(path.join(OUT, 'conditions.docx'), Buffer.from(zipSync({
+    '[Content_Types].xml': S(conditionsCt),
+    '_rels/.rels': S(rels),
+    'word/document.xml': S(conditions),
+}, { mtime: MTIME })));
 console.log('wrote', fs.readdirSync(OUT).join(', '));

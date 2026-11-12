@@ -8,6 +8,7 @@
  * @module template/templateFormat
  */
 
+import type { TemplateNumberReading } from '../types.js';
 import { DOUBLE_QUOTES, SINGLE_QUOTES } from './templateTags.js';
 
 /** The names a date picture writes, and the separators a number picture writes. */
@@ -321,16 +322,17 @@ export function formatDate(date: Date, picture: Extract<Picture, { kind: 'date' 
 /** The largest UTC offset ISO 8601 text may carry, in hours. */
 const MAX_OFFSET_HOURS = 18;
 
-/** Text that is a number, as form data and CSV carry numbers: `1250`, `-3.5`, `+1e3`, `.5`. */
-// `\d+(?:\.\d*)?`, not `\d+\.?\d*`: with the point optional between two digit runs, a long run of
-// digits that is no number was split every way before failing, in time quadratic in its length.
-const NUMBER_TEXT = /^\s*[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?\s*$/;
-
 /**
  * How numbers written as text in a template's data are read: the decimal point, and the separator of
  * groups of three digits (`''` for none). `{ decimal: ',', group: '.' }` reads `1.234,50`.
  */
 export interface NumberTextSeparators { decimal: string; group: string }
+
+/** The most ways of reading a number's text `dataNumberSeparators` may list. */
+export const MAX_NUMBER_TEXT_WAYS = 8;
+
+/** The way text is read when no `dataNumberSeparators` is given: `.` for the point, no group separator (`1250.5`, `-3`, `1e3`, `.5`). */
+const POINT_ONLY: readonly NumberTextSeparators[] = Object.freeze([Object.freeze({ decimal: '.', group: '' })]);
 
 /** Separators that are a space, any of which a space group separator matches (French data writes either no-break space). */
 const SPACE_SEPARATORS = ' \u00A0\u202F';
@@ -341,37 +343,116 @@ function isSpace(c: string): boolean {
 }
 
 /**
- * Text read as a number with the given separators: an optional sign, the integer digits (in groups of
- * exactly three after the first, one to three, when a group separator is given), an optional decimal
- * point and fraction, an optional exponent, white space around it. Digits are needed before or after
- * the point. A group separator where groups do not fit (`1.5` with `.` for groups) makes it no number,
- * so an ambiguous text is refused rather than misread. One forward pass, no pattern built from the
- * caller's text.
+ * A number read exactly from text: its sign, its digits with no leading or trailing zero ('' for zero), how
+ * many of them stand before the point (`12.5`: '125', 2; `0.05`: '5', -1; `1e3`: '1', 4; zero: 0), and its
+ * value as a double, which is what a picture writes. Zero is never negative. `point` is a number while the
+ * exponent has at most 15 digits; past that (a number too small for a double, whose value is 0) it is its
+ * exact decimal text, as '-1000000000000000007'.
  */
-function readNumberText(text: string, separators: NumberTextSeparators): number {
+export interface ExactNumber { negative: boolean; digits: string; point: number | string; value: number }
+
+/**
+ * The decimal text of `m` (digits, no leading zero, at least 16 of them) plus `t` (a whole number under 2^31
+ * either way): the last 15 digits as a number, one carry or borrow into the rest. Linear in `m`.
+ */
+function plusSmall(m: string, t: number): string {
+    const cut = m.length - 15;
+    let low = Number(m.slice(cut)) + t;
+    let head = m.slice(0, cut);
+    const step = (h: string, up: boolean): string => {
+        let i = h.length - 1;
+        while (i >= 0 && h[i] === (up ? '9' : '0')) i--;
+        // Only up: 999 + 1 (the head is at least 1, so never down from 0).
+        if (i < 0) return '1' + '0'.repeat(h.length);
+        return h.slice(0, i) + String.fromCharCode(h.charCodeAt(i) + (up ? 1 : -1)) + (up ? '0' : '9').repeat(h.length - 1 - i);
+    };
+    if (low >= 1e15) { low -= 1e15; head = step(head, true); }
+    else if (low < 0) { low += 1e15; head = step(head, false); }
+    const joined = head + String(low).padStart(15, '0');
+    let lead = 0;
+    while (lead < joined.length - 1 && joined.charCodeAt(lead) === 0x30) lead++;
+    return joined.slice(lead);
+}
+
+/** Two points compared (see ExactNumber): numbers as numbers; else as decimal texts, by sign, length and digits. */
+function comparePoints(p: number | string, q: number | string): -1 | 0 | 1 {
+    if (typeof p === 'number' && typeof q === 'number') return p === q ? 0 : p < q ? -1 : 1;
+    // A safe integer's String is its plain digits, never exponent notation, so it compares as a text point does.
+    const a = String(p), b = String(q);
+    const negativeA = a[0] === '-', negativeB = b[0] === '-';
+    if (negativeA !== negativeB) return negativeA ? -1 : 1;
+    const order = a.length !== b.length ? (a.length < b.length ? -1 : 1) : a === b ? 0 : a < b ? -1 : 1;
+    return (negativeA ? -order : order) as -1 | 0 | 1;
+}
+
+/** The characters `compareExact(a, b)` reads: the shorter digits, and the shorter point when one is text. */
+export function compareExactCost(a: ExactNumber, b: ExactNumber): number {
+    const pointSize = (p: number | string): number => typeof p === 'string' ? p.length : 0;
+    return Math.min(a.digits.length, b.digits.length) + Math.min(pointSize(a.point), pointSize(b.point));
+}
+
+/**
+ * -1, 0 or 1 as `a` is less than, equal to or more than `b`, exactly: by sign, then point, then digits
+ * (compared as text: with no trailing zeros, a prefix is the smaller). Linear in the shorter digits and
+ * point (see compareExactCost).
+ */
+export function compareExact(a: ExactNumber, b: ExactNumber): -1 | 0 | 1 {
+    const signA = a.digits === '' ? 0 : a.negative ? -1 : 1;
+    const signB = b.digits === '' ? 0 : b.negative ? -1 : 1;
+    if (signA !== signB) return signA < signB ? -1 : 1;
+    if (signA === 0) return 0;
+    const points = comparePoints(a.point, b.point);
+    const magnitude = points !== 0 ? points : a.digits === b.digits ? 0 : a.digits < b.digits ? -1 : 1;
+    return (signA < 0 ? -magnitude : magnitude) as -1 | 0 | 1;
+}
+
+/**
+ * Text read as a number with the given separators, forward only: white space, an optional sign, the
+ * integer digits (in groups of exactly three after the first, one to three, when a group separator is
+ * given), an optional decimal point and fraction, an optional exponent, then only white space to the end.
+ * Digits are needed before or after the point. A group separator where groups do not fit (`1.5` with `.`
+ * for groups) makes it no number, so an ambiguous text is refused rather than misread. A number past a
+ * double's range (`1e400`) is none. Returns the number (null when it is none) and how many characters it
+ * looked at: every way out charges the furthest character it examined, so a long word costs a character or
+ * two, and a long run of white space is charged only when the reading crosses it. One forward pass, no
+ * pattern built from the caller's text.
+ */
+function readNumberText(text: string, separators: NumberTextSeparators): { exact: ExactNumber | null; read: number } {
     const digit = (c: string | undefined): boolean => c !== undefined && c >= '0' && c <= '9';
     const isGroup = (c: string | undefined): boolean => c !== undefined && separators.group !== ''
         && (c === separators.group || (SPACE_SEPARATORS.includes(separators.group) && SPACE_SEPARATORS.includes(c)));
+    const end = text.length;
     let at = 0;
-    let end = text.length;
-    while (end > at && isSpace(text[end - 1])) end--;
+    // One past the furthest character looked at ahead of `at`: groupAt looks at the character after a
+    // white-space separator, which a failure that stops before it has examined too.
+    let seen = 0;
+    const none = (): { exact: null; read: number } => ({ exact: null, read: Math.min(Math.max(at + 1, seen), end) });
     while (at < end && isSpace(text[at])) at++;
-    let normal = '';
-    if (text[at] === '+' || text[at] === '-') normal += text[at++];
+    let negative = false;
+    if (text[at] === '+' || text[at] === '-') negative = text[at++] === '-';
     const digitsFrom = (from: number): number => {
         let to = from;
         while (to < end && digit(text[to])) to++;
         return to;
     };
+    // A group separator that is white space separates groups only when a digit follows it; otherwise it is
+    // white space (after the number, or before text that makes it none), which the rest of the reading takes
+    // as such. One character of look-ahead, never along the run.
+    const groupAt = (from: number): boolean => {
+        if (from >= end || !isGroup(text[from])) return false;
+        if (!isSpace(text[from])) return true;
+        seen = Math.max(seen, from + 2);
+        return digit(text[from + 1]);
+    };
     let next = digitsFrom(at);
     let integer = text.slice(at, next);
     at = next;
-    if (at < end && isGroup(text[at])) {
+    if (groupAt(at)) {
         // A first group of one to three digits, not starting with 0: `0.500` with `.` for groups is no number (0.5 or 500?).
-        if (integer.length < 1 || integer.length > 3 || integer[0] === '0') return NaN;
-        while (at < end && isGroup(text[at])) {
+        if (integer.length < 1 || integer.length > 3 || integer[0] === '0') return none();
+        while (groupAt(at)) {
             next = digitsFrom(at + 1);
-            if (next - at - 1 !== 3) return NaN;
+            if (next - at - 1 !== 3) { at = next; return none(); }
             integer += text.slice(at + 1, next);
             at = next;
         }
@@ -382,31 +463,87 @@ function readNumberText(text: string, separators: NumberTextSeparators): number 
         fraction = text.slice(at + 1, next);
         at = next;
     }
-    if (!integer && !fraction) return NaN;
-    normal += `${integer || '0'}.${fraction || '0'}`;
+    if (!integer && !fraction) return none();
+    let exponentText = '';
     if (at < end && (text[at] === 'e' || text[at] === 'E')) {
         let expAt = at + 1;
         const sign = text[expAt] === '+' || text[expAt] === '-' ? text[expAt++] : '';
         next = digitsFrom(expAt);
-        if (next === expAt) return NaN;
-        normal += `e${sign}${text.slice(expAt, next)}`;
+        if (next === expAt) { at = next; return none(); }
+        exponentText = sign + text.slice(expAt, next);
         at = next;
     }
-    return at === end ? Number(normal) : NaN;
+    while (at < end && isSpace(text[at])) at++;
+    if (at !== end) return none();
+    const value = Number(`${negative ? '-' : ''}${integer || '0'}.${fraction || '0'}${exponentText ? `e${exponentText}` : ''}`);
+    if (!Number.isFinite(value)) return { exact: null, read: end };
+    // The digits without leading or trailing zeros (cut by index, never by a pattern), and where the point stands among them.
+    const all = integer + fraction;
+    let lead = 0;
+    while (lead < all.length && all.charCodeAt(lead) === 0x30) lead++;
+    let trail = all.length;
+    while (trail > lead && all.charCodeAt(trail - 1) === 0x30) trail--;
+    const digits = all.slice(lead, trail);
+    let point: number | string = 0;
+    if (digits !== '') {
+        const offset = integer.length - lead;
+        // The exponent's digits without its sign and leading zeros: at most 15 keep the point a safe integer.
+        // With more, the point's sign is the exponent's and its size the exponent's give or take the offset,
+        // which is under 2^30 (the longest text a string holds).
+        const negativeExponent = exponentText[0] === '-';
+        let e = negativeExponent || exponentText[0] === '+' ? 1 : 0;
+        while (e < exponentText.length && exponentText.charCodeAt(e) === 0x30) e++;
+        const magnitude = exponentText.slice(e);
+        point = magnitude.length <= 15
+            ? offset + (negativeExponent ? -1 : 1) * Number(magnitude || '0')
+            : (negativeExponent ? '-' : '') + plusSmall(magnitude, negativeExponent ? -offset : offset);
+    }
+    return { exact: { negative: digits !== '' && negative, digits, point, value }, read: end };
+}
+
+/** One way of reading text that gave a number: its place in `dataNumberSeparators`, its separators and the number. */
+export type NumberTextReading = TemplateNumberReading;
+
+/**
+ * What text reads as, each way tried in turn: one number (`exact`), when every way that reads it gives the
+ * same; the readings, when they differ; null when no way reads it. Null `ways` reads as before
+ * `dataNumberSeparators` existed (`.` for the point, no groups). `read` is told how many characters each
+ * way examined, and each comparison of two ways' readings. Linear in the text's length for each way.
+ */
+export function readNumberTexts(text: string, ways: readonly NumberTextSeparators[] | null, read?: (chars: number) => void): { exact: ExactNumber } | { readings: NumberTextReading[] } | null {
+    const tried = ways ?? POINT_ONLY;
+    let first: ExactNumber | null = null;
+    let differ = false;
+    const found: { way: number; exact: ExactNumber }[] = [];
+    for (let way = 0; way < tried.length; way++) {
+        const reading = readNumberText(text, tried[way]);
+        read?.(reading.read);
+        if (!reading.exact) continue;
+        found.push({ way, exact: reading.exact });
+        if (!first) first = reading.exact;
+        else {
+            read?.(compareExactCost(first, reading.exact));
+            if (compareExact(first, reading.exact) !== 0) differ = true;
+        }
+    }
+    if (!first) return null;
+    if (!differ) return { exact: first };
+    return { readings: found.map(({ way, exact }) => ({ separators: way, decimal: tried[way].decimal, group: tried[way].group, value: exact.value })) };
 }
 
 /**
  * The number a value is for a number picture or a comparison: a number, or text that is one; null when
- * it is neither. Text is read with `separators` when given (see {@link NumberTextSeparators}), else as
- * before they could be given: `.` for the point and no group separator (`1250.5`, `-3`, `1e3`, `.5`).
+ * it is neither, or when the ways of reading it give different numbers. Text is read with `ways` when
+ * given (see {@link readNumberTexts}), else as before they could be given: `.` for the point and no group
+ * separator (`1250.5`, `-3`, `1e3`, `.5`).
  */
-export function numberOf(value: unknown, separators?: NumberTextSeparators | null): number | null {
+export function numberOf(value: unknown, ways?: readonly NumberTextSeparators[] | null): number | null {
     // A value past a double's range (1e400, a bigint of 400 digits) is no number a picture can write.
-    const n = typeof value === 'number' ? value
-        : typeof value === 'bigint' ? Number(value)
-            : typeof value !== 'string' ? NaN
-                : separators ? readNumberText(value, separators)
-                    : NUMBER_TEXT.test(value) ? Number(value) : NaN;
+    let n = typeof value === 'number' ? value : typeof value === 'bigint' ? Number(value) : NaN;
+    if (typeof value === 'string') {
+        const reading = readNumberTexts(value, ways ?? null);
+        n = reading && 'exact' in reading ? reading.exact.value : NaN;
+    }
     return Number.isFinite(n) ? n : null;
 }
 

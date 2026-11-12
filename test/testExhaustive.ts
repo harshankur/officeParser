@@ -19,8 +19,9 @@ import { fillPageNumber, pageNumberText } from '../src/utils/pageNumbers';
 import { guardShaping } from '../src/generators/pdf/nativePdfEngine';
 import { OfficeTemplate } from '../src/OfficeTemplate';
 import { readTag } from '../src/template/templateTags';
+import { numberOf, readNumberTexts } from '../src/template/templateFormat';
 import { pictureKindOf, pictureKindOfBase64 } from '../src/utils/imageUtils';
-import { getWarningMessage } from '../src/utils/errorUtils';
+import { getWarningMessage, shownTo80 } from '../src/utils/errorUtils';
 import { markDroppedHyphen } from '../src/utils/lineJoins';
 import { runHyphenBreakGenerator } from './helpers/hyphenBreakGenerator';
 import { OfficeConverter } from '../src/OfficeConverter';
@@ -4331,6 +4332,755 @@ async function testTemplateNumbersAsText(): Promise<void> {
         assert.deepStrictEqual(problems.map(x => [x.details?.reason, x.details?.kind, x.details?.otherKind]), [['incomparable', 'text', 'number']], `${JSON.stringify(total)} is no number: incomparable, as before`);
     }
     console.log('  Template numbers as text: All assertions passed ✓');
+}
+
+/**
+ * The template condition cases, run alike in DOCX and in ODT: a template of one paragraph
+ * holding `text` (XML-escaped here), rendered, listed or checked, with what was warned.
+ */
+function templateFormats() {
+    const ooxml = ooxmlHelpers();
+    const od = odtHelpers();
+    const escape = (text: string) => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const unescape = (xml: string) => xml.replace(/<[^>]+>/g, '').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, '\'').replace(/&amp;/g, '&');
+    const formats = [
+        {
+            name: 'DOCX',
+            template: (text: string, raw = false) => ooxml.docx(raw ? `<w:p>${text}</w:p>` : ooxml.p(escape(text))),
+            text: (out: Uint8Array) => { const xml = strFromU8(unzipSync(out)['word/document.xml']); return unescape(xml.slice(xml.indexOf('<w:body>'))); },
+        },
+        {
+            name: 'ODT',
+            template: (text: string, raw = false) => od.odt(od.p(raw ? text : escape(text))),
+            text: (out: Uint8Array) => { const xml = od.part(out); return unescape(xml.slice(xml.indexOf('<office:text>'), xml.indexOf('</office:text>'))); },
+        },
+    ];
+    return formats.map(f => ({
+        ...f,
+        /** The rendered text, and the warnings. `raw` takes `text` as the paragraph's XML. */
+        render: async (text: string, data: any, cfg: any = {}, raw = false) => {
+            const warnings: any[] = [];
+            const out = await OfficeTemplate.render(f.template(text, raw), { data, onWarning: (w: any) => warnings.push(w), ...cfg }) as Uint8Array | Uint8Array[];
+            // A batch's texts, one per entry, joined by a line.
+            return { text: Array.isArray(out) ? out.map(f.text).join('\n') : f.text(out), warnings };
+        },
+        check: async (text: string, data: any, cfg: any = {}) => {
+            const warnings: any[] = [];
+            const problems = await OfficeTemplate.check(f.template(text), { data, onWarning: (w: any) => warnings.push(w), ...cfg });
+            return { problems: problems as any[], warnings };
+        },
+        tags: async (text: string, cfg: any = {}) => OfficeTemplate.tags(f.template(text), cfg),
+        /** The error a render rejects with (failing when it does not reject). */
+        rejection: async (text: string, data: any, cfg: any = {}) => {
+            let error: any;
+            try { await OfficeTemplate.render(f.template(text), { data, ...cfg }); } catch (e) { error = e; }
+            assert.ok(error?.officeIssue, `${f.name}: ${text.slice(0, 120)} rejects; got ${error ?? 'a render'}`);
+            return error;
+        },
+    }));
+}
+
+/** Holds a shape to linear time: `run(n)` within 8 times `run(n / 4)` and 250 ms, measured again once when over. */
+async function templateLinear(name: string, n: number, run: (n: number) => unknown): Promise<void> {
+    const timed = async (m: number) => { const started = performance.now(); await run(m); return performance.now() - started; };
+    let small = await timed(n / 4);
+    let big = await timed(n);
+    if (big > 8 * small + 250) {
+        small = Math.max(small, await timed(n / 4));
+        big = Math.min(big, await timed(n));
+    }
+    assert.ok(big <= 8 * small + 250, `${name}: ${n} in ${big.toFixed(0)} ms, ${n / 4} in ${small.toFixed(0)} ms`);
+}
+
+/**
+ * A condition's values go through the filters a field's go through (`upper`, `lower`, `format` and the
+ * caller's `formatters`), written after the value: `{{ if (answer | lower) == "yes" }}` matches `Yes`. A
+ * word after `|` that is no filter leaves the tag as text, as in a field; `<>` reads as `!=`. In DOCX and ODT.
+ */
+async function testTemplateConditionFilters(): Promise<void> {
+    for (const f of templateFormats()) {
+        const out = async (text: string, data: any, cfg: any = {}) => (await f.render(text, data, cfg)).text;
+        // Without case, either way of writing it.
+        for (const tag of ['{{ if (answer | lower) == "yes" }}', '{{ if answer | lower == "yes" }}', '{{ if "yes" == answer | lower }}']) {
+            for (const [answer, expected] of [['Yes', 'YES'], ['YES', 'YES'], ['yes', 'YES'], ['No', 'NO']]) {
+                assert.strictEqual(await out(`${tag}YES{{ else }}NO{{ endif }}`, { answer }), expected, `${f.name}: ${tag} with ${answer}`);
+            }
+        }
+        assert.strictEqual(await out('{{ if (a | upper) == (b | upper) }}S{{ else }}D{{ endif }}', { a: 'straße', b: 'STRASSE' }), 'S', `${f.name}: upper maps ß to SS, JavaScript's case mapping`);
+        assert.strictEqual(await out('{{ if (a | lower) == (b | lower) }}S{{ else }}D{{ endif }}', { a: 'straße', b: 'STRASSE' }), 'D', `${f.name}: lower keeps ß, so the two differ`);
+        // format, a formatter of the caller's own (text or a number), a filter alone, a literal filtered.
+        assert.strictEqual(await out('{{ if (due | format "yyyy") == "2026" }}Y{{ else }}N{{ endif }}', { due: '2026-11-01' }), 'Y', `${f.name}: format in a condition`);
+        const fold = { formatters: { fold: (v: any) => String(v).toLocaleLowerCase('tr'), length: (v: any) => String(v).length, trim: (v: any) => String(v).trim() } };
+        assert.strictEqual(await out('{{ if (city | fold) == "istanbul" }}Y{{ else }}N{{ endif }}', { city: 'İSTANBUL' }, fold), 'Y', `${f.name}: a language's case rules through a formatter`);
+        assert.strictEqual(await out('{{ if (name | length) > 3 }}LONG{{ else }}SHORT{{ endif }}', { name: 'Annabel' }, fold), 'LONG', `${f.name}: a formatter returning a number compares as a number`);
+        assert.strictEqual(await out('{{ if (name | length) > 3 }}LONG{{ else }}SHORT{{ endif }}', { name: 'Bo' }, fold), 'SHORT', `${f.name}: a formatter's number, false`);
+        assert.strictEqual(await out('{{ if note | trim }}T{{ else }}F{{ endif }}', { note: '  ' }, fold), 'F', `${f.name}: a filtered value alone is tested as true or false`);
+        assert.strictEqual(await out('{{ if note | trim }}T{{ else }}F{{ endif }}', { note: ' x ' }, fold), 'T', `${f.name}: a filtered value alone, true`);
+        assert.strictEqual(await out('{{ if answer == "YES" | lower }}T{{ else }}F{{ endif }}', { answer: 'yes' }), 'T', `${f.name}: a literal through a filter`);
+        assert.strictEqual(await out('{{ if (a | lower) == (b | lower) and c | upper == "X" }}T{{ else }}F{{ endif }}', { a: 'A', b: 'a', c: 'x' }), 'T', `${f.name}: several chains in one condition`);
+        assert.strictEqual(await out('{{ if a | lower | upper == "Q" }}T{{ else }}F{{ endif }}', { a: 'q' }), 'T', `${f.name}: filters chain in order`);
+        assert.strictEqual(await out('{{ if a == "y" }}y{{ else if (a | lower) == "x" }}x{{ else }}other{{ endif }}', { a: 'X' }), 'x', `${f.name}: an else if's condition takes filters`);
+        // Missing and empty.
+        const missing = '{{ if (nope | lower) == "x" }}T{{ else }}F{{ endif }}';
+        assert.strictEqual(await out(missing, {}, { onMissing: 'keep' }), missing, `${f.name}: a missing value keeps the block as typed`);
+        assert.strictEqual(await out(missing, {}, { onMissing: 'empty' }), 'F', `${f.name}: empty, a missing value is null and false`);
+        assert.deepStrictEqual((await f.check(missing, {})).problems.map(x => [x.code, x.field]), [['TEMPLATE_FIELD_MISSING', 'nope']], `${f.name}: check lists the missing value`);
+        assert.strictEqual(await out('{{ if (v | lower) == null }}T{{ else }}F{{ endif }}', { v: null }), 'T', `${f.name}: null through lower stays null`);
+
+        // tags(): the filters an if's condition uses, each once, in the order first written.
+        const listed = await f.tags('{{ if (a | lower) == (b | lower) and c | upper }}x{{ else if d }}y{{ endif }}');
+        assert.deepStrictEqual(listed.map(t => [t.kind, t.fields, t.filters]), [['if', ['a', 'b', 'c'], ['lower', 'upper']], ['elseif', ['d'], undefined]], `${f.name}: tags() lists an if's filters`);
+        assert.ok(!('filters' in listed[1]), `${f.name}: an if without filters has no filters`);
+
+        // check(): a value a filter cannot take is noted, and the branch is not entered.
+        const listTag = '{{ if (items | upper) == "X" }}';
+        const checked = await f.check(`${listTag}{{ inside }}{{ endif }}`, { items: [1, 2] });
+        assert.deepStrictEqual(checked.problems.map(x => [x.code, x.details?.reason, x.details?.filter, x.details?.takes, x.details?.tag, x.details?.kind]),
+            [['TEMPLATE_DATA_INVALID', 'unformattable', 'upper', 'text', listTag, 'list']], `${f.name}: check notes a filter's refusal in a condition, not entering the branch`);
+        const refused = await f.rejection(`${listTag}{{ inside }}{{ endif }}`, { items: [1, 2], inside: 'x' });
+        assert.deepStrictEqual([refused.officeIssue.code, refused.officeIssue.details.reason, refused.officeIssue.details.filter, refused.officeIssue.details.tag], ['TEMPLATE_DATA_INVALID', 'unformattable', 'upper', listTag], `${f.name}: a render rejects with the same details`);
+        const thrown = new Error('my formatter failed');
+        await assert.rejects(f.render('{{ if (a | boom) == "x" }}T{{ endif }}', { a: 'x' }, { formatters: { boom: () => { throw thrown; } } }), (e: any) => e === thrown, `${f.name}: a formatter's own error rejects a render`);
+        await assert.rejects(f.check('{{ if (a | boom) == "x" }}T{{ endif }}', { a: 'x' }, { formatters: { boom: () => { throw thrown; } } }), (e: any) => e === thrown, `${f.name}: and a check`);
+
+        // A word after | that is no filter leaves the tag as text, warned once, listed as text.
+        for (const word of ['lowr', 'constructor', '__proto__', 'toString']) {
+            const tag = `{{ if (answer | ${word}) == "yes" }}`;
+            const alone = await f.render(tag, { answer: 'yes' });
+            assert.strictEqual(alone.text, tag, `${f.name}: ${tag} alone renders as typed`);
+            assert.deepStrictEqual(alone.warnings.map(w => [w.code, w.details.texts.map((t: any) => t.reason)]), [['TEMPLATE_NOT_A_TAG', ['unknown-filter']]], `${f.name}: ${tag} is warned once, as text that looks like a tag`);
+            assert.deepStrictEqual((await f.tags(tag)).map(t => [t.kind, t.reason]), [['text', 'unknown-filter']], `${f.name}: tags() lists ${tag} as text`);
+            const paired = await f.rejection(`${tag}T{{ endif }}`, { answer: 'yes' });
+            assert.strictEqual(paired.officeIssue.code, 'TEMPLATE_SYNTAX', `${f.name}: ${tag} with an endif after it is a syntax error`);
+            assert.ok(paired.message.includes(`uses ${word} after |`) && paired.message.includes('not a filter'), `${f.name}: the error names ${word} and why; got ${paired.message}`);
+        }
+        const prose = await f.render('{{ if a | b }}', { a: 1 });
+        assert.deepStrictEqual([prose.text, prose.warnings.map(w => w.code)], ['{{ if a | b }}', ['TEMPLATE_NOT_A_TAG']], `${f.name}: prose between delimiters stays prose, now warned`);
+
+        // Syntax: a built-in filter given what it does not take is refused at once; a filter needs a name, and a value.
+        for (const tag of ['{{ if a | upper "x" == "X" }}', '{{ if (a | format "[Red]0.00") == "1" }}', '{{ if (a | format 5) == "1" }}']) {
+            const error = await f.rejection(tag, { a: '1' });
+            assert.deepStrictEqual([error.officeIssue.code, error.officeIssue.details.reason, error.officeIssue.details.tag], ['TEMPLATE_SYNTAX', 'unreadable', tag], `${f.name}: ${tag} is refused at once`);
+        }
+        for (const [tag, says] of [
+            ['{{ if (a == b) | lower }}', 'puts a filter after parentheses'], ['{{ if (answer) | lower }}', 'puts a filter after parentheses'],
+            ['{{ if a | }}', 'has | with no filter\'s name after it'], ['{{ if a | "x" }}', 'has | with no filter\'s name after it'],
+            ['{{ if a | 5 }}', 'has | with no filter\'s name after it'], ['{{ if a | and b }}', 'has | with no filter\'s name after it'],
+            ['{{ if | lower }}', 'has | with nothing before it'], ['{{ if a || b }}', 'uses ||; write or to join conditions'],
+        ]) {
+            const error = await f.rejection(`${tag}T{{ endif }}`, { a: 1, b: 1, answer: 'x' });
+            assert.strictEqual(error.officeIssue.details?.reason, 'unreadable', `${f.name}: ${tag} cannot be read`);
+            assert.ok(String(error.officeIssue.details.detail).startsWith(says), `${f.name}: ${tag} says ${says}; got ${error.officeIssue.details.detail}`);
+        }
+        assert.strictEqual(await out('{{ if answer == "x|y" }}T{{ else }}F{{ endif }}', { answer: 'x|y' }), 'T', `${f.name}: a bar inside a string is the string's`);
+
+        // <> is !=.
+        for (const [a, expected] of [[1, 'EQ'], [2, 'NE']] as const) assert.strictEqual(await out('{{ if a <> 1 }}NE{{ else }}EQ{{ endif }}', { a }), expected, `${f.name}: <> with ${a}`);
+        assert.deepStrictEqual((await f.tags('{{ if a <> b }}x{{ endif }}')).map(t => [t.kind, t.fields]), [['if', ['a', 'b']]], `${f.name}: tags() lists a condition with <>`);
+    }
+
+    // A tag split across ODT spans, its filter and its <> in pieces; and across DOCX runs.
+    const [docx, odt] = templateFormats();
+    const od = odtHelpers();
+    const odtSplit = `{{ if (answer ${od.span('| lo')}wer) &lt;${od.span('&gt; "no" }}')}Y{{ else }}N{{ endif }}`;
+    assert.strictEqual((await odt.render(odtSplit, { answer: 'YES' }, {}, true)).text, 'Y', 'ODT: a filter and <> split across spans');
+    assert.strictEqual((await odt.render(odtSplit, { answer: 'No' }, {}, true)).text, 'N', 'ODT: split, the other branch');
+    const run = (t: string) => `<w:r><w:t xml:space="preserve">${t}</w:t></w:r>`;
+    const docxSplit = `${run('{{ if (answer | lo')}${run('wer) &lt;')}${run('&gt; "no" }}Y{{ else }}N{{ endif }}')}`;
+    assert.strictEqual((await docx.render(docxSplit, { answer: 'YES' }, {}, true)).text, 'Y', 'DOCX: a filter and <> split across runs');
+
+    // Property: each answer equals the comparison worked out here, with JavaScript's case mapping.
+    const values = ['', 'a', 'A', 'ß', 'SS', 'ss', 'İ', 'i', 'ı', 'I', 'Yes', 'yes'];
+    const filters = ['', 'lower', 'upper'];
+    const operators = ['==', '!=', '<', '<=', '>', '>='] as const;
+    const through = (v: string, filter: string) => filter === 'lower' ? v.toLowerCase() : filter === 'upper' ? v.toUpperCase() : v;
+    const answer = (op: typeof operators[number], a: string, b: string) => op === '==' ? a === b : op === '!=' ? a !== b : op === '<' ? a < b : op === '<=' ? a <= b : op === '>' ? a > b : a >= b;
+    let state = 20260;
+    const next = () => (state = (Math.imul(state, 1664525) + 1013904223) >>> 0) >>> 8;
+    const data: Record<string, string> = Object.fromEntries(values.map((v, i) => [`v${i}`, v]));
+    const side = () => {
+        const i = next() % values.length, filter = filters[next() % filters.length];
+        const value = next() % 2 ? `v${i}` : JSON.stringify(values[i]);
+        return { text: filter ? `(${value} | ${filter})` : value, value: through(values[i], filter) };
+    };
+    const conditions: string[] = [];
+    let expected = '';
+    for (let i = 0; i < 5000; i++) {
+        const left = side(), right = side(), op = operators[next() % operators.length];
+        conditions.push(`${left.text} ${op} ${right.text}`);
+        expected += answer(op, left.value, right.value) ? 'T' : 'F';
+    }
+    const template = conditions.map(c => `{{ if ${c} }}T{{ else }}F{{ endif }}`).join('');
+    for (const f of templateFormats()) assert.strictEqual((await f.render(template, data)).text, expected, `${f.name}: 5,000 filtered comparisons agree with JavaScript's`);
+    console.log(`  Template condition filters: ${new Set(conditions).size} distinct conditions agreed in DOCX and ODT`);
+
+    // Linear time: a long chain of filters; a long value through lower is charged.
+    await templateLinear('a condition of n filters', 40_000, n => docx.render(`{{ if a${' | lower'.repeat(n)} == "x" }}T{{ else }}F{{ endif }}`, { a: 'X' }));
+    const long = 'Q'.repeat(4_000_000);
+    assert.strictEqual((await docx.render('{{ if (a | lower) == "x" }}T{{ else }}F{{ endif }}', { a: long })).text, 'F', 'a 4M-character value through lower renders within the default budget');
+    await assert.rejects(docx.render('{{ if (a | lower) == "x" }}T{{ else }}F{{ endif }}', { a: long }, { decompressionLimits: { maxRepeatedContent: 1_000_000 } }), (e: any) => e.officeIssue?.code === 'OUTPUT_TOO_LARGE', 'lowering it is charged to maxRepeatedContent');
+    console.log('  Template condition filters: All assertions passed ✓');
+}
+
+/**
+ * How a number's text was read one way (the former `readNumberText` and `numberOf`, copied as they were), the
+ * reference the reader of several ways is held to.
+ */
+function numberTextAsIn871(text: string, separators: { decimal: string; group: string } | null): number | null {
+    const isSpace = (c: string) => /\s/.test(c);
+    const spaces = ' ' + String.fromCharCode(0xA0, 0x202F);
+    const read = (sep: { decimal: string; group: string }): number => {
+        const digit = (c: string | undefined): boolean => c !== undefined && c >= '0' && c <= '9';
+        const isGroup = (c: string | undefined): boolean => c !== undefined && sep.group !== '' && (c === sep.group || (spaces.includes(sep.group) && spaces.includes(c)));
+        let at = 0;
+        let end = text.length;
+        while (end > at && isSpace(text[end - 1])) end--;
+        while (at < end && isSpace(text[at])) at++;
+        let normal = '';
+        if (text[at] === '+' || text[at] === '-') normal += text[at++];
+        const digitsFrom = (from: number): number => { let to = from; while (to < end && digit(text[to])) to++; return to; };
+        let next = digitsFrom(at);
+        let integer = text.slice(at, next);
+        at = next;
+        if (at < end && isGroup(text[at])) {
+            if (integer.length < 1 || integer.length > 3 || integer[0] === '0') return NaN;
+            while (at < end && isGroup(text[at])) {
+                next = digitsFrom(at + 1);
+                if (next - at - 1 !== 3) return NaN;
+                integer += text.slice(at + 1, next);
+                at = next;
+            }
+        }
+        let fraction = '';
+        if (at < end && text[at] === sep.decimal) { next = digitsFrom(at + 1); fraction = text.slice(at + 1, next); at = next; }
+        if (!integer && !fraction) return NaN;
+        normal += `${integer || '0'}.${fraction || '0'}`;
+        if (at < end && (text[at] === 'e' || text[at] === 'E')) {
+            let expAt = at + 1;
+            const sign = text[expAt] === '+' || text[expAt] === '-' ? text[expAt++] : '';
+            next = digitsFrom(expAt);
+            if (next === expAt) return NaN;
+            normal += `e${sign}${text.slice(expAt, next)}`;
+            at = next;
+        }
+        return at === end ? Number(normal) : NaN;
+    };
+    const n = separators ? read(separators) : /^\s*[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?\s*$/.test(text) ? Number(text) : NaN;
+    return Number.isFinite(n) ? n : null;
+}
+
+/**
+ * `dataNumberSeparators` as a list of ways, each tried: text they read as one number is that number, text
+ * no way reads is none, and text two ways read as different numbers is refused (`ambiguous-number`, each
+ * reading in `details.readings`) wherever a number is read from text. One object, or a list of one, reads
+ * as that one way did. In DOCX and ODT.
+ */
+async function testTemplateDataNumberSeparatorLists(): Promise<void> {
+    const both = [{ decimal: ',', group: '.' }, { decimal: '.' }];
+    const formatted = '{{ total | format "#,##0.00" }}';
+    const readings = (text: string) => text === '1.250' ? [1250, 1.25] : text === '1.000' ? [1000, 1] : [1234, 1.234];
+    for (const f of templateFormats()) {
+        for (const [total, expected] of [['12,50', '12.50'], ['12.50', '12.50'], ['1.234,50', '1,234.50'], ['1250', '1,250.00'], ['1.234.567', '1,234,567.00'], ['0.5', '0.50'], ['1,5', '1.50'], [' 7 ', '7.00']]) {
+            assert.strictEqual((await f.render(formatted, { total }, { dataNumberSeparators: both })).text, expected, `${f.name}: ${total} through the list writes ${expected}`);
+        }
+        for (const total of ['1.250', '1.000', '1.234']) {
+            const error = await f.rejection(formatted, { total }, { dataNumberSeparators: both });
+            const [german, point] = readings(total);
+            assert.deepStrictEqual([error.officeIssue.code, error.officeIssue.details.reason, error.officeIssue.details.kind, error.officeIssue.details.readings],
+                ['TEMPLATE_DATA_INVALID', 'ambiguous-number', 'text', [{ separators: 0, decimal: ',', group: '.', value: german }, { separators: 1, decimal: '.', group: '', value: point }]], `${f.name}: ${total} is refused, with both readings`);
+            assert.ok(error.message.includes(`as ${german} (decimal ',', group '.') and as ${point} (decimal '.')`) && error.message.includes('two ways with dataNumberSeparators'), `${f.name}: the message names both readings; got ${error.message}`);
+            // A comparison with a number reads it alike: ambiguous, not incomparable.
+            const compared = await f.rejection('{{ if total > 100 }}big{{ endif }}', { total }, { dataNumberSeparators: both });
+            assert.strictEqual(compared.officeIssue.details.reason, 'ambiguous-number', `${f.name}: ${total} > 100 is ambiguous`);
+        }
+        const none = await f.check(formatted, { total: '1,234.50' }, { dataNumberSeparators: both });
+        assert.deepStrictEqual(none.problems.map(x => x.details?.reason), ['unformattable'], `${f.name}: text no way reads is unformattable`);
+        assert.strictEqual((await f.render('{{ if total > 100 }}big{{ else }}small{{ endif }}', { total: '12.50' }, { dataNumberSeparators: both })).text, 'small', `${f.name}: 12.50 > 100 through the list`);
+        assert.strictEqual((await f.render('{{ if total > 100 }}big{{ else }}small{{ endif }}', { total: '1.234,50' }, { dataNumberSeparators: both })).text, 'big', `${f.name}: 1.234,50 > 100 through the list`);
+
+        // check(): each ambiguous entry of a batch, with its readings, once per place.
+        const batch = await f.check(`${formatted}${formatted}`, [{ total: '1.250' }, { total: '12,50' }, { total: '1.000' }], { dataNumberSeparators: both });
+        assert.deepStrictEqual(batch.problems.map((entry: any[]) => entry.map(x => [x.details.reason, x.details.readings.map((r: any) => r.value)])),
+            [[['ambiguous-number', [1250, 1.25]]], [], [['ambiguous-number', [1000, 1]]]], `${f.name}: check lists each ambiguous entry once, with its readings`);
+        const passes = await f.check('{{ for l in lines }}{{ l.v | format "0.00" }}{{ endfor }}', { lines: [{ v: '1.250' }, { v: '1.000' }, { v: '1.250' }] }, { dataNumberSeparators: both });
+        assert.deepStrictEqual(passes.problems.map(x => [x.details.readings.map((r: any) => r.value), x.loops.map((l: any) => l.index)]), [[[1250, 1.25], [0]], [[1000, 1], [1]], [[1250, 1.25], [2]]], `${f.name}: each pass's ambiguous text is its own problem`);
+
+        // Three ways, two agreeing: refused, every reading listed.
+        const three = [{ decimal: ',', group: '.' }, { decimal: '.', group: ',' }, { decimal: '.' }];
+        const threeWays = await f.rejection(formatted, { total: '1.250' }, { dataNumberSeparators: three });
+        assert.deepStrictEqual(threeWays.officeIssue.details.readings.map((r: any) => [r.separators, r.value]), [[0, 1250], [1, 1.25], [2, 1.25]], `${f.name}: three readings, two agreeing, are all listed`);
+        assert.ok(threeWays.message.includes('three ways'), `${f.name}: the message counts three ways; got ${threeWays.message}`);
+        // A list of one is the object.
+        assert.strictEqual((await f.render(formatted, { total: '1.250' }, { dataNumberSeparators: [{ decimal: ',', group: '.' }] })).text, '1,250.00', `${f.name}: a list of one reads as the object`);
+        // Two texts under numericTextComparison 'number': one two ways read differently is refused when the
+        // other reads as a number too; beside text that is no number, they compare as text. Not given, the
+        // comparison is warned, with no answer as numbers to set beside the text's.
+        const pair = '{{ if a > b }}T{{ else }}F{{ endif }}';
+        const ambiguousPair = await f.rejection(pair, { a: '1.250', b: '5' }, { dataNumberSeparators: both, numericTextComparison: 'number' });
+        assert.deepStrictEqual([ambiguousPair.officeIssue.details.reason, ambiguousPair.officeIssue.details.readings.map((r: any) => r.value)], ['ambiguous-number', [1250, 1.25]], `${f.name}: an ambiguous text beside a number text is refused under 'number'`);
+        assert.strictEqual((await f.render(pair, { a: '1.250', b: 'abc' }, { dataNumberSeparators: both, numericTextComparison: 'number' })).text, '1.250' > 'abc' ? 'T' : 'F', `${f.name}: beside text that is no number, as text`);
+        assert.strictEqual((await f.render(pair, { a: '12,50', b: '9.5' }, { dataNumberSeparators: both, numericTextComparison: 'number' })).text, 'T', `${f.name}: two ways, one number each, compared as numbers`);
+        const warnedPair = await f.render(pair, { a: '1.250', b: '5' }, { dataNumberSeparators: both });
+        assert.deepStrictEqual(warnedPair.warnings.map(w => [w.code, 'differs' in w.details]), [['TEMPLATE_NUMBERS_COMPARED_AS_TEXT', false]], `${f.name}: not given, warned without differs`);
+    }
+
+    // Validation: the shape, each entry named by its place, and an unknown key in an entry reported.
+    const [docx] = templateFormats();
+    for (const [bad, says] of [
+        [[], 'a list of one to 8'], [Array.from({ length: 9 }, () => ({ decimal: '.' })), 'a list of one to 8'], [3, 'a list of one to 8'], ['x', 'a list of one to 8'],
+        [[3], 'dataNumberSeparators[0] is an object'], [[{ decimal: 'ab' }], 'dataNumberSeparators[0].decimal is one character'],
+        [[{ decimal: '.' }, { decimal: ',', group: ',' }], 'dataNumberSeparators[1].group is one character'],
+    ] as const) {
+        await assert.rejects(docx.render(formatted, { total: '1' }, { dataNumberSeparators: bad }), (e: any) => e.officeIssue?.code === 'IMPROPER_ARGUMENTS' && e.message.includes(says), `dataNumberSeparators ${JSON.stringify(bad)} is refused, saying ${says}`);
+    }
+    // A hole in the list, or an entry that is no object, is refused by its place, by render, check and tags alike.
+    const holes: [unknown[], number][] = [[[, { decimal: ',' }], 0], [new Array(2), 0], [[{ decimal: ',' }, ,], 1], [[undefined], 0], [[null], 0]];
+    for (const f of templateFormats()) {
+        for (const [list, place] of holes) {
+            const says = `dataNumberSeparators[${place}] is an object: decimal and group`;
+            const refused = (e: any) => e.officeIssue?.code === 'IMPROPER_ARGUMENTS' && e.message.includes(says);
+            const shown = `${f.name}: a list of ${list.length} with ${Array.from(list, entry => entry === undefined ? 'a hole' : JSON.stringify(entry)).join(', ')}`;
+            await assert.rejects(f.render(formatted, { total: '1' }, { dataNumberSeparators: list }), refused, `${shown} is refused by render, saying ${says}`);
+            await assert.rejects(f.check(formatted, { total: '1' }, { dataNumberSeparators: list }), refused, `${shown} is refused by check`);
+            await assert.rejects(f.tags(formatted, { dataNumberSeparators: list }), refused, `${shown} is refused by tags`);
+        }
+    }
+    await assert.rejects(docx.render(formatted, { total: '1' }, { dataNumberSeparators: { decimal: 'ab' } }), (e: any) => e.message.includes('Improper arguments: dataNumberSeparators.decimal is one character, not white space, a digit, a sign or e'), 'the object form keeps its message');
+    const unknown = await docx.render(formatted, { total: '1' }, { dataNumberSeparators: [{ decimal: '.' }, { decimal: ',', grouping: '.' }] });
+    assert.deepStrictEqual(unknown.warnings.map(w => [w.code, w.details?.keys]), [['UNRECOGNIZED_CONFIG_OPTION', ['dataNumberSeparators[1].grouping']]], 'an unknown key in an entry is reported by its place');
+    assert.strictEqual((await docx.render(formatted, { total: '1,5' }, { dataNumberSeparators: [{ decimal: ',' }, { decimal: ',' }] })).text, '1.50', 'two equal ways always agree');
+
+    // Property: the list's reading is each way's reading by the single-way reference, agreeing or not; one way, and none, as that reference.
+    const ways = { german: { decimal: ',', group: '.' }, french: { decimal: ',', group: ' ' }, point: { decimal: '.', group: '' }, english: { decimal: '.', group: ',' } };
+    const wayList = Object.values(ways);
+    const alphabet = ['0', '1', '9', '.', ',', ' ', String.fromCharCode(0xA0), 'e', '-', 'x'];
+    let state = 880;
+    const next = () => (state = (Math.imul(state, 1664525) + 1013904223) >>> 0) >>> 8;
+    const distinct = new Set<string>();
+    for (let i = 0; i < 20_000; i++) {
+        const text = Array.from({ length: next() % 13 }, () => alphabet[next() % alphabet.length]).join('');
+        const list = Array.from({ length: 1 + next() % 3 }, () => wayList[next() % wayList.length]);
+        distinct.add(`${text}|${JSON.stringify(list)}`);
+        const found = list.map((way, place) => ({ place, way, value: numberTextAsIn871(text, way) })).filter(r => r.value !== null);
+        const expected = !found.length ? null
+            : found.every(r => r.value === found[0].value) ? { value: found[0].value }
+                : { readings: found.map(r => ({ separators: r.place, decimal: r.way.decimal, group: r.way.group, value: r.value })) };
+        const got = readNumberTexts(text, list);
+        const shown = got === null ? null : 'exact' in got ? { value: got.exact.value } : { readings: got.readings };
+        assert.deepStrictEqual(shown, expected, `${JSON.stringify(text)} through ${JSON.stringify(list)}`);
+        if (expected && 'value' in expected) assert.ok(Object.is((shown as any).value, expected.value), `${JSON.stringify(text)}: the same number, sign and all`);
+        // One way, and none given, read exactly as the single-way reference.
+        assert.ok(Object.is(numberOf(text, [list[0]]), numberTextAsIn871(text, list[0])), `${JSON.stringify(text)} one way as 8.7.1 (${JSON.stringify(list[0])})`);
+        assert.ok(Object.is(numberOf(text, null), numberTextAsIn871(text, null)), `${JSON.stringify(text)} with no separators as 8.7.1`);
+    }
+    // Every text of up to 4 characters over the characters a number's text is made of reads, with no
+    // separators given, exactly as the single-way reference's pattern reads it.
+    const plain = ['0', '1', '9', '.', ',', 'e', 'E', '+', '-', ' ', String.fromCharCode(0xA0), '\t', 'x'];
+    let texts = [''];
+    let plainCases = 0;
+    for (let length = 0; length <= 4; length++) {
+        for (const text of texts) {
+            plainCases++;
+            assert.ok(Object.is(numberOf(text, null), numberTextAsIn871(text, null)), `${JSON.stringify(text)} with no separators as 8.7.1`);
+        }
+        texts = texts.flatMap(text => plain.map(c => text + c));
+    }
+    console.log(`  Template data number separator lists: ${distinct.size} distinct (text, list) cases, and ${plainCases} texts with no separators, agreed with 8.7.1's reading`);
+
+    // Linear time: 8 ways reading a long grouped number.
+    const eight = [ways.german, ways.point, ways.french, ways.english, ways.german, ways.point, ways.french, ways.english];
+    await templateLinear('a list of 8 ways reading 1.000.000...', 1_000_000, n => readNumberTexts('1' + '.000'.repeat(n), eight));
+    let charged = 0;
+    readNumberTexts('word'.repeat(250_000), eight, chars => { charged += chars; });
+    assert.ok(charged <= 16, `a word costs a character or two for each way, not its length; charged ${charged}`);
+
+    // Property: a reading that fails charged c characters, fewer than the text's, decided from those c alone,
+    // so any text starting with them fails too, charged the same (a reading never looks past what it is
+    // charged); and one way reads each text as the single-way reference does. White-space group separators most of all, whose
+    // look-ahead once scanned a whole run of white space and charged a character or two.
+    const nbsp = String.fromCharCode(0xA0), narrow = String.fromCharCode(0x202F);
+    const prefixWays = [{ decimal: ',', group: ' ' }, { decimal: ',', group: nbsp }, { decimal: ',', group: narrow }, { decimal: '.', group: '\t' }, ways.german, ways.point, ways.english];
+    const pieces = ['1', '12', '123', '0', '-', '+', '.', ',', 'e', 'x', ' ', nbsp, narrow, '\t'];
+    const suffixes = ['', '0', '5', ' ', ' 234', 'x', ',5', 'e3', '   7'];
+    const chargeOf = (text: string, way: { decimal: string; group: string }) => {
+        let charge = 0;
+        const reading = readNumberTexts(text, [way], chars => { charge += chars; });
+        return { reading, charge };
+    };
+    state = 4242;
+    const prefixCases = new Set<string>();
+    let prefixChecked = 0;
+    for (let i = 0; i < 30_000; i++) {
+        let text = '';
+        for (let parts = 1 + next() % 6; parts > 0; parts--) {
+            const piece = pieces[next() % pieces.length];
+            text += piece.trim() === '' && next() % 2 ? piece.repeat(1 + next() % 40) : piece;
+        }
+        const way = prefixWays[next() % prefixWays.length];
+        prefixCases.add(`${text}|${JSON.stringify(way)}`);
+        assert.ok(Object.is(numberOf(text, [way]), numberTextAsIn871(text, way)), `${JSON.stringify(text)} reads as 8.7.1 read it (${JSON.stringify(way)})`);
+        const { reading, charge } = chargeOf(text, way);
+        if (reading !== null || charge >= text.length) continue;
+        for (const suffix of suffixes) {
+            prefixChecked++;
+            const longer = text.slice(0, charge) + suffix;
+            const again = chargeOf(longer, way);
+            assert.deepStrictEqual([again.reading, again.charge], [null, charge], `${JSON.stringify(text)} (${JSON.stringify(way)}) failed charged ${charge}, so ${JSON.stringify(longer)} fails charged ${charge} too`);
+        }
+    }
+    console.log(`  Template data number separator lists: ${prefixCases.size} distinct (text, way) cases; ${prefixChecked} texts sharing a failed reading's charged characters fail alike`);
+    // A failed reading after a white-space group separator looks at one character past it, not along the run;
+    // a reading that crosses the run is charged for it.
+    for (const space of [' ', nbsp, narrow]) {
+        const short = chargeOf('-' + space.repeat(1_000_000) + 'x', ways.french);
+        assert.ok(short.reading === null && short.charge <= 3, `a sign, a million of U+${space.charCodeAt(0).toString(16)} and a word are charged a character or three; charged ${short.charge}`);
+        const crossed = chargeOf('1' + space.repeat(1_000_000) + 'x', ways.french);
+        assert.deepStrictEqual([crossed.reading, crossed.charge], [null, 1_000_002], `a number, a million of U+${space.charCodeAt(0).toString(16)} and a word are charged up to the word`);
+    }
+    console.log('  Template data number separator lists: All assertions passed ✓');
+}
+
+/**
+ * Two texts that both read as numbers (`'250'`, `'1000'`) compare as text, as before; an order comparison
+ * of two such texts warns once per tag per call (`TEMPLATE_NUMBERS_COMPARED_AS_TEXT`), `'text'` keeps the
+ * text comparison without it, and `numericTextComparison: 'number'` compares them as numbers, exactly. In
+ * DOCX and ODT.
+ */
+async function testTemplateNumericTexts(): Promise<void> {
+    const numbersAsText = (warnings: any[]) => warnings.filter(w => w.code === 'TEMPLATE_NUMBERS_COMPARED_AS_TEXT').map(w => w.details);
+    for (const f of templateFormats()) {
+        const out = async (text: string, data: any, cfg: any = {}) => (await f.render(text, data, cfg)).text;
+        // Not given: as text, and an order comparison of two number texts warned.
+        const ordered = '{{ if a > b }}GT{{ else }}LE{{ endif }}';
+        const first = await f.render(ordered, { a: '250', b: '1000' });
+        assert.strictEqual(first.text, 'GT', `${f.name}: '250' > '1000' as text, as before`);
+        assert.deepStrictEqual(numbersAsText(first.warnings), [{ tag: '{{ if a > b }}', part: f.name === 'DOCX' ? 'word/document.xml' : 'content.xml', operator: '>', left: '250', right: '1000', differs: true }], `${f.name}: the comparison is warned, naming the texts`);
+        assert.ok(first.warnings[0].message.includes("'250' > '1000', as text, character by character, which here answers otherwise than comparing them as numbers") && first.warnings[0].message.includes("numericTextComparison to 'number'"), `${f.name}: the warning reads whole; got ${first.warnings[0].message}`);
+        const literal = await f.render('{{ if total > "100" }}GT{{ else }}LE{{ endif }}', { total: '50' });
+        assert.deepStrictEqual([literal.text, numbersAsText(literal.warnings).map(d => [d.left, d.right, d.differs])], ['GT', [['50', '100', true]]], `${f.name}: a quoted number is text too`);
+        const same = await f.render('{{ if a < b }}LT{{ else }}GE{{ endif }}', { a: '50', b: '60' });
+        assert.deepStrictEqual([same.text, numbersAsText(same.warnings).map(d => d.differs)], ['LT', [false]], `${f.name}: warned where both ways agree, with differs false`);
+        assert.ok(same.warnings[0].message.includes('here the same as comparing them as numbers'), `${f.name}: the warning says the answers agree here`);
+        for (const [tag, expected] of [['{{ if a == b }}EQ{{ else }}NE{{ endif }}', 'NE'], ['{{ if a != b }}NE{{ else }}EQ{{ endif }}', 'NE']]) {
+            const equality = await f.render(tag, { a: '007', b: '7' });
+            assert.deepStrictEqual([equality.text, equality.warnings.length], [expected, 0], `${f.name}: ${tag} of '007' and '7' compares as text, with no warning`);
+        }
+        const word = await f.render('{{ if a < b }}LT{{ else }}GE{{ endif }}', { a: 'abc', b: '1' });
+        assert.deepStrictEqual([word.text, word.warnings.length], ['GE', 0], `${f.name}: text that is no number is not warned`);
+        const typed = await f.render('{{ if total > 100 }}GT{{ else }}NOT{{ endif }}', { total: '50' });
+        assert.deepStrictEqual([typed.text, typed.warnings.length], ['NOT', 0], `${f.name}: text beside a typed number is read as a number, as before`);
+
+        // Once per tag per call: a loop, two tags, a batch, a check.
+        const loop = await f.render('{{ for x in xs }}{{ if x.a > x.b }}G{{ else }}L{{ endif }}{{ endfor }}', { xs: Array.from({ length: 50 }, (_, i) => ({ a: String(i), b: '1000' })) });
+        assert.strictEqual(numbersAsText(loop.warnings).length, 1, `${f.name}: a loop of 50 passes warns once`);
+        const two = await f.render('{{ if a > b }}G{{ endif }}{{ if b < a }}L{{ endif }}', { a: '250', b: '1000' });
+        assert.deepStrictEqual(numbersAsText(two.warnings).map(d => d.tag), ['{{ if a > b }}', '{{ if b < a }}'], `${f.name}: two tags warn twice`);
+        const batchData = [{ a: 'x', b: 'y' }, { a: '250', b: '1000' }, { a: '250', b: '1000' }];
+        const batch = await f.render(ordered, batchData);
+        assert.deepStrictEqual(numbersAsText(batch.warnings).map(d => d.entry), [1], `${f.name}: a batch warns once, naming the entry`);
+        assert.ok(batch.warnings[0].message.includes('(data entry 1)'), `${f.name}: the message names the entry`);
+        const checked = await f.check(ordered, batchData);
+        assert.deepStrictEqual([checked.problems, numbersAsText(checked.warnings).map(d => d.entry)], [[[], [], []], [1]], `${f.name}: check warns the same, and lists no problem for it`);
+        const one = await f.check(ordered, { a: '250', b: '1000' });
+        assert.deepStrictEqual([one.problems, numbersAsText(one.warnings).map(d => [d.left, 'entry' in d])], [[], [['250', false]]], `${f.name}: a check of one entry names none`);
+        const long = await f.render(ordered, { a: '9'.repeat(200), b: '1' });
+        assert.strictEqual(numbersAsText(long.warnings)[0].left, `${'9'.repeat(77)}...`, `${f.name}: a long text is shown to 80 characters`);
+        const tagWarnings: any[] = [];
+        assert.deepStrictEqual([(await f.tags(ordered, { onWarning: (w: any) => tagWarnings.push(w) })).map(t => t.kind), tagWarnings], [['if', 'else'], []], `${f.name}: tags() evaluates nothing, and warns nothing`);
+
+        // Once per tag, each by its place: two tags typed alike are two tags, and a loop's tag one.
+        const alike = '{{ if a > b }}G{{ endif }}';
+        const places = f.name === 'DOCX' ? ooxmlHelpers().docx([alike, alike, '{{ for x in xs }}{{ if x > b }}L{{ endif }}{{ endfor }}'].map(ooxmlHelpers().p).join(''))
+            : odtHelpers().odt([alike, alike, '{{ for x in xs }}{{ if x > b }}L{{ endif }}{{ endfor }}'].map(odtHelpers().p).join(''));
+        const placeData = { a: '250', b: '1000', xs: ['3', '4', '5'] };
+        for (const run of ['render', 'check'] as const) {
+            const warned: any[] = [];
+            await OfficeTemplate[run](places, { data: placeData, onWarning: (w: any) => warned.push(w) });
+            assert.deepStrictEqual(numbersAsText(warned).map(d => d.tag), ['{{ if a > b }}', '{{ if a > b }}', '{{ if x > b }}'], `${f.name}: ${run} warns once for each of three tags, two typed alike`);
+        }
+
+        // 'text': the same answers, no warning.
+        const quiet = await f.render(ordered, { a: '250', b: '1000' }, { numericTextComparison: 'text' });
+        assert.deepStrictEqual([quiet.text, quiet.warnings.length], ['GT', 0], `${f.name}: 'text' compares as text, quietly`);
+
+        // 'number': as numbers, exactly.
+        const asNumbers = { numericTextComparison: 'number' };
+        for (const [a, op, b, expected] of [
+            ['250', '>', '1000', false], ['250', '<', '1000', true], ['007', '==', '7', true], ['007', '!=', '7', false], ['1.0', '==', '1', true],
+            ['12345678901234567890', '==', '12345678901234567891', false], ['12345678901234567890', '<', '12345678901234567891', true],
+            ['1e3', '>', '999', true], [' 5 ', '==', '5', true], ['-0', '==', '0', true], ['0.' + '0'.repeat(30) + '1', '>', '0', true],
+            ['-2', '<', '-1', true], ['1.5e-3', '<=', '0.0015', true], ['10', '>=', '9.99', true],
+        ] as const) {
+            const result = await f.render(`{{ if a ${op} b }}T{{ else }}F{{ endif }}`, { a, b }, asNumbers);
+            assert.deepStrictEqual([result.text, result.warnings.length], [expected ? 'T' : 'F', 0], `${f.name}: '${a}' ${op} '${b}' as numbers is ${expected}`);
+        }
+        assert.strictEqual(await out('{{ if a > b }}T{{ else }}F{{ endif }}', { a: '250', b: 'abc' }, asNumbers), '250' > 'abc' ? 'T' : 'F', `${f.name}: beside text that is no number, as text`);
+        assert.strictEqual(await out('{{ if a > b }}T{{ else }}F{{ endif }}', { a: '1.250', b: '999,5' }, { ...asNumbers, dataNumberSeparators: { decimal: ',', group: '.' } }), 'T', `${f.name}: read with dataNumberSeparators`);
+        assert.strictEqual(await out('{{ if (a | lower) > b }}T{{ else }}F{{ endif }}', { a: '1E3', b: '999' }, asNumbers), 'T', `${f.name}: the texts as the condition has them, after their filters`);
+
+        // Another value is reported and the default used; a misspelt key is reported.
+        const invalid = await f.render(ordered, { a: '250', b: '1000' }, { numericTextComparison: 'numbers' });
+        assert.deepStrictEqual(invalid.warnings.map(w => [w.code, w.details?.option]), [['INVALID_CONFIG_VALUE', 'numericTextComparison'], ['TEMPLATE_NUMBERS_COMPARED_AS_TEXT', undefined]], `${f.name}: another value is reported, and the default used`);
+        const misspelt = await f.render(ordered, { a: '250', b: '1000' }, { numericTextComparision: 'number' });
+        assert.deepStrictEqual(misspelt.warnings.map(w => [w.code, w.details?.keys]), [['UNRECOGNIZED_CONFIG_OPTION', ['numericTextComparision']], ['TEMPLATE_NUMBERS_COMPARED_AS_TEXT', undefined]], `${f.name}: a misspelt key is reported`);
+    }
+
+    // Property: under 'number', each answer is the exact one, worked out here with BigInt.
+    const exact = (text: string): { n: bigint; scale: number } => {
+        const m = /^\s*([+-]?)(\d*)(?:\.(\d*))?(?:[eE]([+-]?\d+))?\s*$/.exec(text)!;
+        return { n: BigInt((m[1] === '-' ? '-' : '') + (((m[2] || '') + (m[3] || '')) || '0')), scale: (m[3] || '').length - Number(m[4] || 0) };
+    };
+    const order = (a: string, b: string): number => {
+        const x = exact(a), y = exact(b);
+        const scale = Math.max(x.scale, y.scale);
+        const p = x.n * 10n ** BigInt(scale - x.scale), q = y.n * 10n ** BigInt(scale - y.scale);
+        return p === q ? 0 : p < q ? -1 : 1;
+    };
+    let state = 2026;
+    const next = () => (state = (Math.imul(state, 1664525) + 1013904223) >>> 0) >>> 8;
+    const pick = <T,>(xs: readonly T[]): T => xs[next() % xs.length];
+    const numeric = (): string => {
+        const digits = (n: number) => Array.from({ length: n }, () => String(next() % 10)).join('');
+        const integer = '0'.repeat(next() % 3) + digits(next() % 23);
+        const fraction = next() % 2 ? '.' + digits(next() % 6) + '0'.repeat(next() % 3) : '';
+        const body = integer || fraction.length > 1 ? integer + fraction : '0' + fraction;
+        const exponent = next() % 5 === 0 ? 'e' + pick(['', '-', '+']) + String(next() % 30) : '';
+        const pad = pick(['', ' ', '\t']);
+        return pad + pick(['', '', '-', '+']) + body + exponent + pad;
+    };
+    const operators = ['==', '!=', '<', '<=', '>', '>='] as const;
+    const holds = (op: typeof operators[number], o: number) => op === '==' ? o === 0 : op === '!=' ? o !== 0 : op === '<' ? o < 0 : op === '<=' ? o <= 0 : op === '>' ? o > 0 : o >= 0;
+    const data: Record<string, string> = {};
+    const pairs = new Set<string>();
+    let template = '', expected = '';
+    for (let i = 0; i < 20_000; i++) {
+        const a = numeric(), b = next() % 4 === 0 ? a.trim() + '0' : numeric(), op = operators[next() % operators.length];
+        data[`a${i}`] = a;
+        data[`b${i}`] = b;
+        pairs.add(`${a}|${op}|${b}`);
+        template += `{{ if a${i} ${op} b${i} }}T{{ else }}F{{ endif }}`;
+        expected += holds(op, order(a, b)) ? 'T' : 'F';
+    }
+    for (const f of templateFormats()) assert.strictEqual((await f.render(template, data, { numericTextComparison: 'number' })).text, expected, `${f.name}: 20,000 comparisons of number texts are exact`);
+    console.log(`  Template numeric texts: ${pairs.size} distinct pairs compared exactly in DOCX and ODT`);
+
+    // Property: under the default, a tag that reports answers as text, character by character, as before
+    // (the text comparison the report makes is the answer): 2,000 tags, each its own report.
+    const wordsToo = ['abc', 'n/a', '15 EUR', '', 'Z', '1,5', '-'];
+    const textPairs = new Set<string>();
+    const textData: Record<string, string> = {};
+    let textTemplate = '', textExpected = '', bothNumbers = 0;
+    for (let i = 0; i < 2_000; i++) {
+        const a = next() % 4 === 0 ? pick(wordsToo) : numeric(), b = next() % 4 === 0 ? pick(wordsToo) : numeric();
+        const op = pick(['<', '<=', '>', '>='] as const);
+        textPairs.add(`${a}|${op}|${b}`);
+        textData[`a${i}`] = a;
+        textData[`b${i}`] = b;
+        textTemplate += `{{ if a${i} ${op} b${i} }}T{{ else }}F{{ endif }}`;
+        textExpected += holds(op, a < b ? -1 : a > b ? 1 : 0) ? 'T' : 'F';
+        if (numberTextAsIn871(a, null) !== null && numberTextAsIn871(b, null) !== null) bothNumbers++;
+    }
+    for (const f of templateFormats()) {
+        const asText = await f.render(textTemplate, textData);
+        assert.strictEqual(asText.text, textExpected, `${f.name}: 2,000 order comparisons under the default answer as text`);
+        assert.strictEqual(numbersAsText(asText.warnings).length, bothNumbers, `${f.name}: each tag whose texts both read as numbers warns once`);
+    }
+    console.log(`  Template numeric texts: ${textPairs.size} distinct pairs answered as text in DOCX and ODT, ${bothNumbers} of them warned`);
+
+    // Exponents of any length: two numbers whose exponents a double cannot tell apart (past 2^53, or of 400
+    // digits) compare exactly, as do numbers too small for a double (their value is 0).
+    const out6 = async (f: ReturnType<typeof templateFormats>[number], a: string, b: string) =>
+        (await f.render(operators.map(op => `{{ if a ${op} b }}T{{ else }}F{{ endif }}`).join(''), { a, b }, { numericTextComparison: 'number' })).text;
+    const nines = '9'.repeat(400);
+    for (const f of templateFormats()) {
+        for (const [a, b] of [['1e-9007199254740993', '1e-9007199254740992'], [`2e-${nines}`, `1e-${nines.slice(1)}8`]]) {
+            const answers = await out6(f, a, b);
+            assert.strictEqual(answers, 'FTTTFF', `${f.name}: ${a.slice(0, 30)} against ${b.slice(0, 30)} under 'number' (== != < <= > >=)`);
+        }
+    }
+    // Property: under 'number', each answer is the one worked out here with BigInt points, and, where both
+    // exponents have at most 3 digits, with BigInt scaling too; exponents up to 25 digits, and the edges where a
+    // point stops being a safe number (15 digits, 2^53), shifted by -3 to 3.
+    const wide = (text: string) => {
+        const m = /^\s*([+-]?)(\d*)(?:\.(\d*))?(?:[eE]([+-]?\d+))?\s*$/.exec(text)!;
+        const integer = m[2] || '', all = integer + (m[3] || '');
+        let lead = 0;
+        while (lead < all.length && all[lead] === '0') lead++;
+        let trail = all.length;
+        while (trail > lead && all[trail - 1] === '0') trail--;
+        const digits = all.slice(lead, trail);
+        return { sign: digits === '' ? 0 : m[1] === '-' ? -1 : 1, digits, point: BigInt(integer.length - lead) + BigInt(m[4] || '0'), exponent: (m[4] || '').replace(/^[+-]?0*/, '') };
+    };
+    const wideOrder = (a: string, b: string): number => {
+        const x = wide(a), y = wide(b);
+        if (x.sign !== y.sign) return x.sign < y.sign ? -1 : 1;
+        if (x.sign === 0) return 0;
+        const size = x.point !== y.point ? (x.point < y.point ? -1 : 1) : x.digits === y.digits ? 0 : x.digits < y.digits ? -1 : 1;
+        return x.sign * size;
+    };
+    const edges = ['999999999999999', '1000000000000000', '999999999999999999', '1000000000000000000', '9007199254740992', '9007199254740993', '1000000000000000000000001'];
+    const someDigits = (n: number) => Array.from({ length: n }, () => String(next() % 10)).join('');
+    const mantissa = () => {
+        let integer = '0'.repeat(next() % 3) + someDigits(next() % 6);
+        const fraction = next() % 2 ? '.' + '0'.repeat(next() % 3) + someDigits(next() % 4) + '0'.repeat(next() % 3) : '';
+        if (!/\d/.test(integer + fraction)) integer += String(1 + next() % 9);
+        return pick(['', '-', '+']) + integer + fraction;
+    };
+    const exponentOf = () => {
+        const kind = next() % 4;
+        if (kind === 0) return '';
+        if (kind === 1) return pick(['', '-', '+']) + someDigits(1 + next() % 3);
+        if (kind === 2) return pick(['-', '-', '+']) + String(1 + next() % 9) + someDigits(13 + next() % 12);
+        return '-' + (BigInt(pick(edges)) + BigInt(next() % 7 - 3)).toString();
+    };
+    const widePairs = new Set<string>();
+    let pastFifteen = 0;
+    const wideData: Record<string, string> = {};
+    let wideTemplate = '', wideExpected = '';
+    for (let i = 0; widePairs.size < 5_000; i++) {
+        const exponent = exponentOf();
+        const a = mantissa() + (exponent ? 'e' + exponent : '');
+        const exponentB = exponentOf();
+        let b = mantissa() + (exponentB ? 'e' + exponentB : '');
+        if (exponent && next() % 5 === 0) {
+            // The same exponent with its last digit changed, on a's digits or others.
+            const changed = exponent.slice(0, -1) + String((Number(exponent.slice(-1)) + 1 + next() % 9) % 10);
+            b = (next() % 2 ? a.slice(0, a.indexOf('e')) : mantissa()) + 'e' + changed;
+        }
+        // Text past a double's range is no number (it compares as text): left out here.
+        if (!Number.isFinite(Number(a)) || !Number.isFinite(Number(b)) || widePairs.has(`${a}|${b}`)) continue;
+        const op = operators[next() % operators.length];
+        widePairs.add(`${a}|${b}`);
+        if (wide(a).exponent.length > 15 || wide(b).exponent.length > 15) pastFifteen++;
+        const answer = holds(op, wideOrder(a, b));
+        if (wide(a).exponent.length <= 3 && wide(b).exponent.length <= 3) assert.strictEqual(holds(op, order(a, b)), answer, `the reference agrees with BigInt scaling: ${a} ${op} ${b}`);
+        wideData[`a${i}`] = a;
+        wideData[`b${i}`] = b;
+        wideTemplate += `{{ if a${i} ${op} b${i} }}T{{ else }}F{{ endif }}`;
+        wideExpected += answer ? 'T' : 'F';
+    }
+    for (const f of templateFormats()) assert.strictEqual((await f.render(wideTemplate, wideData, { numericTextComparison: 'number' })).text, wideExpected, `${f.name}: 5,000 comparisons with exponents of any length are exact`);
+    console.log(`  Template numeric texts: ${widePairs.size} distinct pairs with exponents of any length (${pastFifteen} past 15 digits) compared exactly in DOCX and ODT`);
+    // Text past a double's range is no number, as for a number picture: it compares as text, quietly.
+    const huge = '1' + '0'.repeat(309);
+    for (const f of templateFormats()) {
+        assert.strictEqual(await out6(f, huge, '9'), 'FTTTFF', `${f.name}: a 310-digit number against '9' under 'number' compares as text`);
+        const quietly = await f.render('{{ if a > b }}T{{ else }}F{{ endif }}', { a: huge, b: '9' });
+        assert.deepStrictEqual([quietly.text, quietly.warnings.length], ['F', 0], `${f.name}: a 310-digit number against '9' is no number, so not warned`);
+        const unformattable = await f.check('{{ x | format "0" }}', { x: huge });
+        assert.deepStrictEqual(unformattable.problems.map(x => x.details?.reason), ['unformattable'], `${f.name}: a 310-digit number is unformattable, as before`);
+    }
+    // Linear time: exponents of millions of digits, whose points carry through every 9 (0.001e-999...) or
+    // borrow through every 0 (1e-1000...), under 'number' and under the default.
+    const [docxFormat] = templateFormats();
+    const carry = (n: number) => ({ a: '0.001e-' + '9'.repeat(n), b: '1e-' + '9'.repeat(n) });
+    const borrow = (n: number) => ({ a: '0.001e-1' + '0'.repeat(n), b: '1e-1' + '0'.repeat(n) });
+    const lessThan = '{{ if a < b }}T{{ else }}F{{ endif }}';
+    await templateLinear('exponents of n digits carrying, as numbers', 4_000_000, n => docxFormat.render(lessThan, carry(n), { numericTextComparison: 'number' }));
+    await templateLinear('exponents of n digits borrowing, warned', 4_000_000, n => docxFormat.render(lessThan, borrow(n)));
+    assert.strictEqual((await docxFormat.render(lessThan, carry(4_000_000), { numericTextComparison: 'number' })).text, 'T', 'exponents of 4M digits carrying compare exactly');
+    assert.strictEqual((await docxFormat.render(lessThan, borrow(4_000_000))).text, 'T', 'exponents of 4M digits borrowing render within the default budget');
+
+    // Budget: ordering two words reads a character of each, not their length. The `!=` template is charged
+    // as the single-way reference charges either (an equality reads no number; both are true, so both write the branch), so the
+    // order comparison may cost a reading of a character or two a pass more, and no more.
+    const [docx] = templateFormats();
+    const words = { xs: Array.from({ length: 10_000 }, () => ({ a: 'a'.repeat(1000), b: 'b'.repeat(1000) })) };
+    const need = async (op: string) => {
+        let low = 0, high = 64 * 1024 * 1024;
+        while (low < high) {
+            const mid = Math.floor((low + high) / 2);
+            const fits = await docx.render(`{{ for x in xs }}{{ if x.a ${op} x.b }}T{{ endif }}{{ endfor }}`, words, { decompressionLimits: { maxRepeatedContent: mid } }).then(() => true, (e: any) => { if (e.officeIssue?.code !== 'OUTPUT_TOO_LARGE') throw e; return false; });
+            if (fits) high = mid; else low = mid + 1;
+        }
+        return low;
+    };
+    const [unequal, less] = [await need('!='), await need('<')];
+    assert.ok(less - unequal <= 2 * 10_000, `ordering two words costs a reading of a character or two a pass: ${less} against ${unequal}`);
+    // Under the default the texts are read only for the report: once their tag was reported, a pass reads
+    // nothing, and the shorter text is read first, so a word or an empty cell stops the reading at once.
+    const smallest = async (template: string, data: any, cfg: any) => {
+        let low = 0, high = 64 * 1024 * 1024;
+        while (low < high) {
+            const mid = Math.floor((low + high) / 2);
+            const fits = await docx.render(template, data, { ...cfg, decompressionLimits: { maxRepeatedContent: mid } }).then(() => true, (e: any) => { if (e.officeIssue?.code !== 'OUTPUT_TOO_LARGE') throw e; return false; });
+            if (fits) high = mid; else low = mid + 1;
+        }
+        return low;
+    };
+    const rowsLoop = '{{ for r in rows }}{{ if r.amount > r.limit }}!{{ endif }}{{ endfor }}done';
+    const rowsOf = (count: number, limit: string) => ({ rows: Array.from({ length: count }, (_, i) => ({ amount: String(1e9 + i), limit })) });
+    for (const [limit, over, modes] of [['1500000000', 64, [{}]], ['n/a', 10_000, [{}, { numericTextComparison: 'number' }]], ['15 EUR', 40_000, [{}, { numericTextComparison: 'number' }]]] as [string, number, object[]][]) {
+        const data = rowsOf(10_000, limit);
+        const asText = await smallest(rowsLoop, data, { numericTextComparison: 'text' });
+        for (const mode of modes) {
+            const charged = await smallest(rowsLoop, data, mode);
+            assert.ok(charged <= asText + over, `10,000 rows against ${limit} (${JSON.stringify(mode)}) are charged at most ${over} more than as text: ${charged} against ${asText}`);
+        }
+    }
+    const fullCase = await docx.render(rowsLoop, rowsOf(400_000, '1500000000'));
+    assert.deepStrictEqual([fullCase.text, numbersAsText(fullCase.warnings).length], ['done', 1], '400,000 rows of two number texts render within the default limits, warned once');
+    // Notes: a tag in a note only a loop refers to (compiled on its own) and one in the rest of its notes
+    // part are two tags, each warned.
+    {
+        const W = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"';
+        const noteBytes = Buffer.from(zipSync({
+            '[Content_Types].xml': strToU8('<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/footnotes.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footnotes+xml"/></Types>'),
+            'word/_rels/document.xml.rels': strToU8('<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId5" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footnotes" Target="footnotes.xml"/></Relationships>'),
+            'word/document.xml': strToU8(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document ${W}><w:body><w:p><w:r><w:t>{{ for i in items }}x</w:t></w:r><w:r><w:footnoteReference w:id="1"/></w:r><w:r><w:t>{{ endfor }}</w:t></w:r></w:p><w:p><w:r><w:t>y</w:t></w:r><w:r><w:footnoteReference w:id="2"/></w:r></w:p></w:body></w:document>`),
+            'word/footnotes.xml': strToU8(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:footnotes ${W}><w:footnote w:id="1"><w:p><w:r><w:t xml:space="preserve">{{ if a > b }}A{{ endif }}</w:t></w:r></w:p></w:footnote><w:footnote w:id="2"><w:p><w:r><w:t xml:space="preserve">{{ if c > d }}C{{ endif }}</w:t></w:r></w:p></w:footnote></w:footnotes>`),
+        }));
+        for (const run of ['render', 'check'] as const) {
+            const warned: any[] = [];
+            await OfficeTemplate[run](noteBytes, { data: { items: [1, 2], a: '250', b: '1000', c: '30', d: '200' }, onWarning: (w: any) => warned.push(w) });
+            assert.deepStrictEqual(numbersAsText(warned).map(d => d.tag).sort(), ['{{ if a > b }}', '{{ if c > d }}'], `DOCX: ${run} warns for a tag in a note only a loop refers to and for one in another note`);
+        }
+    }
+
+    // Linear time: two long fractions, as numbers and as text; a long word, and long white space, against a number.
+    const fractions = (n: number) => ({ a: '0.' + '0'.repeat(n) + '1', b: '0.' + '0'.repeat(n) + '2' });
+    await templateLinear('two long fractions as numbers', 4_000_000, n => docx.render('{{ if a < b }}T{{ else }}F{{ endif }}', fractions(n), { numericTextComparison: 'number' }));
+    await templateLinear('two long fractions as text', 4_000_000, n => docx.render('{{ if a < b }}T{{ else }}F{{ endif }}', fractions(n)));
+    assert.strictEqual((await docx.render('{{ if a < b }}T{{ else }}F{{ endif }}', fractions(1000), { numericTextComparison: 'number' })).text, 'T', 'a long fraction compares exactly');
+    await templateLinear('a long word against a number text', 4_000_000, n => docx.render('{{ if a < b }}T{{ else }}F{{ endif }}', { a: 'w'.repeat(n) + ' '.repeat(16), b: '5' }, { numericTextComparison: 'number' }));
+    await templateLinear('long white space before a word against a number text', 4_000_000, n => docx.render('{{ if a < b }}T{{ else }}F{{ endif }}', { a: ' '.repeat(n) + 'w', b: '5' }, { numericTextComparison: 'number' }));
+
+    // Budget: a number's text read with a white-space group separator is charged every character the reading
+    // looks at. A reading that crosses a long run of white space is charged for it in every pass, so a loop of
+    // them is refused, as a text against a typed number and a number picture are by the reference.
+    const french = { dataNumberSeparators: { decimal: ',', group: ' ' } };
+    const loops = {
+        texts: '{{ for i in items }}{{ if v > w }}Y{{ endif }}{{ endfor }}',
+        typed: '{{ for i in items }}{{ if v > 0 }}Y{{ endif }}{{ endfor }}',
+        picture: '{{ for i in items }}{{ v | format "0" }}{{ endfor }}',
+    };
+    const items = (passes: number) => Array.from({ length: passes }, (_, i) => i);
+    const crossing = { v: '1' + ' '.repeat(100_000) + 'x', w: '5', items: items(400) };
+    const small = { ...french, decompressionLimits: { maxRepeatedContent: 1_000_000 } };
+    const tooLarge = (e: any) => e.officeIssue?.code === 'OUTPUT_TOO_LARGE';
+    for (const mode of [{}, { numericTextComparison: 'number' }]) {
+        await assert.rejects(docx.render(loops.texts, crossing, { ...small, ...mode }), tooLarge, `two texts, one crossing 100,000 spaces, 400 times, are charged for the spaces (${JSON.stringify(mode)})`);
+    }
+    for (const loop of [loops.typed, loops.picture]) await assert.rejects(docx.check(loop, crossing, small), tooLarge, `check() of ${loop} is charged for the spaces`);
+    // Work bounded by the charge: a reading stopped right after the separator does no more than its charge
+    // says, so 400 passes take about what 100 times 4 passes take. (Linear in the passes and in the run, which
+    // a check of n against n / 4 cannot tell apart from a reading that scans the run; many passes against
+    // few can.)
+    const passesBounded = async (name: string, run: (passes: number) => Promise<unknown>) => {
+        const timed = async (passes: number) => { const started = performance.now(); await run(passes); return performance.now() - started; };
+        let few = await timed(4), many = await timed(400);
+        if (many > 8 * few + 250) {
+            few = Math.max(few, await timed(4));
+            many = Math.min(many, await timed(400));
+        }
+        assert.ok(many <= 8 * few + 250, `${name}: 400 passes in ${many.toFixed(0)} ms, 4 in ${few.toFixed(0)} ms`);
+    };
+    const stopped = '-' + ' '.repeat(1_000_000) + 'x';
+    for (const mode of [{}, { numericTextComparison: 'number' }]) {
+        await passesBounded(`a sign, a million spaces and a word against '5' (${JSON.stringify(mode)})`, passes => docx.render(loops.texts, { v: stopped, w: '5', items: items(passes) }, { ...french, ...mode }));
+    }
+    for (const loop of [loops.typed, loops.picture]) await passesBounded(`check() of ${loop} over a sign, a million spaces and a word`, passes => docx.check(loop, { v: stopped, items: items(passes) }, french));
+    console.log('  Template numeric texts: All assertions passed ✓');
 }
 
 /** OpenDocument text packages for the template tests: a body, the master page's header and footer, other parts. */
@@ -12218,6 +12968,47 @@ async function testConfigConsistency(): Promise<void> {
             assert.ok(code === 'OUTPUT_TOO_LARGE' && warned.some(w => w.code === 'INVALID_CONFIG_VALUE'), `Config: a template with maxRepeatedContent ${String(bad)} reports it and keeps the default bound (${code})`);
         }
     }
+    // A value JSON cannot write (a bigint, an object that refers to itself, a toJSON that throws) is
+    // reported like any other, never thrown while its message is written; every other value shows as before.
+    {
+        const message = (value: unknown) => getWarningMessage(OfficeWarningType.INVALID_CONFIG_VALUE, { option: 'o', value, expected: 'e', fallback: '' });
+        const circular: any = { a: 1 };
+        circular.self = circular;
+        const fn = function named(x: number) { return x + 1; };
+        const cannot = 'Invalid o: an object that cannot be written out. Expected e; the default is used instead.';
+        for (const [value, expected] of [
+            [10n, 'Invalid o: 10n. Expected e; the default is used instead.'],
+            [circular, cannot], [{ a: 1n }, cannot], [{ toJSON() { throw new Error('x'); } }, cannot],
+            ['x', 'Invalid o: "x". Expected e; the default is used instead.'],
+            [NaN, 'Invalid o: NaN. Expected e; the default is used instead.'],
+            [-Infinity, 'Invalid o: -Infinity. Expected e; the default is used instead.'],
+            [undefined, 'Invalid o: undefined. Expected e; the default is used instead.'],
+            [null, 'Invalid o: null. Expected e; the default is used instead.'],
+            [Symbol('s'), 'Invalid o: Symbol(s). Expected e; the default is used instead.'],
+            [[1, 2], 'Invalid o: [1,2]. Expected e; the default is used instead.'],
+            [{ a: 1 }, 'Invalid o: {"a":1}. Expected e; the default is used instead.'],
+            [fn, `Invalid o: ${shownTo80(String(fn))}. Expected e; the default is used instead.`],
+        ] as [unknown, string][]) {
+            assert.strictEqual(message(value), expected, `Config: the message of ${typeof value === 'symbol' ? 'a symbol' : typeof value === 'bigint' ? `${value}n` : typeof value} value`);
+        }
+        const loopedOption: any = {};
+        loopedOption.self = loopedOption;
+        const reported = async (label: string, run: (onWarning: (w: any) => void) => Promise<unknown>) => {
+            const warned: any[] = [];
+            await run((w: any) => warned.push(w));
+            assert.strictEqual(warned.filter(w => w.code === 'INVALID_CONFIG_VALUE').length, 1, `Config: ${label} is reported once, not thrown; got ${JSON.stringify(warned.map(w => w.code))}`);
+        };
+        const [docxFormat] = templateFormats();
+        for (const [label, cfg] of [
+            ['onMissing: 10n', { onMissing: 10n }], ['numericTextComparison: 10n', { numericTextComparison: 10n }],
+            ['numericTextComparison: an object that refers to itself', { numericTextComparison: loopedOption }],
+            ['maxPasswordAttempts: 10n', { maxPasswordAttempts: 10n }], ['decompressionLimits: { maxRepeatedContent: 10n }', { decompressionLimits: { maxRepeatedContent: 10n } }],
+        ] as [string, any][]) {
+            await reported(`a template with ${label}`, async onWarning => assert.strictEqual((await docxFormat.render('{{ a }}', { a: 'A' }, { ...cfg, onWarning })).text, 'A', `Config: a template with ${label} renders with the default`));
+        }
+        await reported('a parse with pdfParserConfig: { headingDetection: 10n }', onWarning => OfficeParser.parseOffice(path.join(__dirname, 'files', 'test.docx'), { pdfParserConfig: { headingDetection: 10n }, onWarning } as any));
+        await reported("md.to('tex') with texConfig: { documentClass: 10n }", onWarning => md.to('tex', { texConfig: { documentClass: 10n }, onWarning } as any));
+    }
     console.log('  Config consistency: All assertions passed ✓');
 }
 
@@ -12453,7 +13244,7 @@ async function testPdfHyphenOnlyWhereTakenOff(): Promise<void> {
     const afterSuperscript = await written(await read(['BT /F1 12 Tf 72 700 Td (The committee reached an agree) Tj /F1 8 Tf 4.2 Ts (n) Tj /F1 12 Tf 0 Ts (-) Tj ET BT /F1 12 Tf 72 686 Td (ment after a long debate.) Tj ET']));
     assert.strictEqual(afterSuperscript.layout, 'The committee reached an agreen-\nment after a long debate.', 'a hyphen after a superscript is on the main line');
 
-    // A page turned upside down: its line keeps the hyphen (8.7.1's first try took it for no break).
+    // A page turned upside down: its line keeps the hyphen (a first attempt took it for no break).
     const upsideDown = String((await (await read([issuePage], {}, 180)).to('text')).value);
     assert.ok(upsideDown.split('\n').map(l => l.trim()).includes('The committee reached an agree-'), `/Rotate 180: the line keeps its hyphen; got ${JSON.stringify(upsideDown)}`);
 
@@ -12503,7 +13294,7 @@ async function testTemplateMistypedOperators(): Promise<void> {
     };
     for (const [tag, typed, write] of [
         ['{{ if a && b }}', '&&', 'and'], ['{{ if a || b }}', '||', 'or'], ['{{ if a & b }}', '&', 'and'],
-        ['{{ if a === b }}', '===', '=='], ['{{ if a !== b }}', '!==', '!='], ['{{ if a <> 1 }}', '<>', '!='],
+        ['{{ if a === b }}', '===', '=='], ['{{ if a !== b }}', '!==', '!='],
         ['{{ if a => 1 }}', '=>', '>='], ['{{ if a =< 1 }}', '=<', '<='], ['{{ if a =! 1 }}', '=!', '!='],
     ]) {
         const { detail } = await refusal(tag);
@@ -12514,23 +13305,22 @@ async function testTemplateMistypedOperators(): Promise<void> {
     // && names and alone, || or alone.
     assert.ok(!(await refusal('{{ if a && b }}')).detail.includes(' or '), '&& does not name or');
     assert.ok(!(await refusal('{{ if a || b }}')).detail.includes(' and '), '|| does not name and');
-    // A single bar: a filter where a condition takes none.
-    for (const tag of ['{{ if (answer | lower) == "yes" }}', '{{ if a | b }}']) {
-        const { detail, message } = await refusal(tag);
-        assert.ok(detail.startsWith('uses |,') && detail.includes('filter') && !detail.includes('||'), `${tag}: the single bar is named, as a filter; got ${detail}`);
-        assert.ok(message.includes('cannot be read: it uses |,'), `${tag}: the message reads whole; got ${message}`);
-    }
-    // An else if's condition is read alike (inside blocks that pair, it stays text as typed).
-    const elseIf = readTag('else if a | b');
-    assert.ok(elseIf?.ok === false && elseIf.reason.startsWith('uses |,') && !elseIf.reason.includes('||'), `an else if with a single bar names it; got ${JSON.stringify(elseIf)}`);
-    // What a condition does take is unchanged: a filter on a field, a bar inside a string.
     const rendered = async (text: string) => {
         const xml = strFromU8(unzipSync(new Uint8Array(await OfficeTemplate.render(docx(text), { data }) as Uint8Array))['word/document.xml']);
         return xml.slice(xml.indexOf('<w:body>')).replace(/<[^>]+>/g, '');
     };
+    // A single bar: a filter, as on a field; a word after it that is no filter is named when its block fails to pair.
+    assert.strictEqual(await rendered('{{ if (answer | lower) == "yes" }}T{{ endif }}'), 'T', 'a filter in a condition');
+    const { detail: notAFilter, message: notAFilterMessage } = await refusal('{{ if a | b }}');
+    assert.ok(notAFilter.startsWith('uses b after |') && notAFilter.includes('not a filter'), `a word after | that is no filter is named; got ${notAFilter}`);
+    assert.ok(notAFilterMessage.includes('cannot be read: it uses b after |'), `the message reads whole; got ${notAFilterMessage}`);
+    // An else if's condition is read alike.
+    const elseIf = readTag('else if a | b');
+    assert.ok(elseIf?.ok === true && elseIf.tag.kind === 'elseif' && elseIf.tag.condition.kind === 'filtered' && elseIf.tag.condition.filters[0].name === 'b', `an else if with a filter reads; got ${JSON.stringify(elseIf)}`);
+    // What a condition does take is unchanged: a filter on a field, a bar inside a string.
     assert.strictEqual(await rendered('{{ answer | lower }}'), 'yes', 'a filter on a field still fills');
     assert.strictEqual(await rendered('{{ if answer == "x|y" }}T{{ else }}F{{ endif }}'), 'F', 'a bar inside a string is text');
-    assert.strictEqual(await rendered('{{ if a <= 1 and b >= 2 and a != b }}T{{ else }}F{{ endif }}'), 'T', 'the operators a condition takes still read');
+    assert.strictEqual(await rendered('{{ if a <= 1 and b >= 2 and a != b and a <> b }}T{{ else }}F{{ endif }}'), 'T', 'the operators a condition takes still read, <> among them');
     console.log('✓ Template mistyped operators');
 }
 
@@ -14451,6 +15241,9 @@ async function runTests(): Promise<void> {
         ['Template tags and check', testTemplateTagsAndCheck],
         ['Template suggestions', testTemplateSuggestions],
         ['Template numbers as text', testTemplateNumbersAsText],
+        ['Template condition filters', testTemplateConditionFilters],
+        ['Template data number separator lists', testTemplateDataNumberSeparatorLists],
+        ['Template numeric texts', testTemplateNumericTexts],
         ['Template numbers, a first group starting with 0', testTemplateNumbersZeroFirstGroup],
         ['ODT template', testOdtTemplate],
         ['ODT template blocks', testOdtTemplateBlocks],

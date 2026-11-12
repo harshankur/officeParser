@@ -4,8 +4,9 @@
  * conditions an `if` takes, and how a condition is worked out against the data.
  *
  * A condition is read by a small hand-written parser (no `eval`, no `Function`): comparisons
- * (`== != < <= > >=`), `and`, `or`, `not`, parentheses, data paths, numbers, quoted strings,
- * `true`, `false` and `null`. Keywords are case-insensitive, so a tag Word's AutoCorrect gave a
+ * (`== != < <= > >=`, and `<>` for `!=`, as spreadsheets write it), `and`, `or`, `not`, parentheses,
+ * data paths, numbers, quoted strings, `true`, `false` and `null`. A value may go through filters before
+ * it is compared, as a field's does (`answer | lower == "yes"`). Keywords are case-insensitive, so a tag Word's AutoCorrect gave a
  * capital (`{{ If paid }}`) still reads, and a string may be quoted with straight or curly quotes,
  * since AutoCorrect curls quotes typed in Word.
  *
@@ -27,7 +28,13 @@ export type TemplateExpression =
     | { kind: 'not'; operand: TemplateExpression }
     /** `a and b and c` holds its operands side by side, so a long chain is worked out in a loop, not by recursion. */
     | { kind: 'and' | 'or'; operands: TemplateExpression[] }
-    | { kind: 'compare'; operator: CompareOperator; left: TemplateExpression; right: TemplateExpression };
+    | { kind: 'compare'; operator: CompareOperator; left: TemplateExpression; right: TemplateExpression }
+    /**
+     * A value through filters, `answer | lower`: the value (a path or a literal), its filters as written, and
+     * the chain's place among the tag's filtered values in the order written, from 0, by which the engine
+     * finds the chain it compiled once.
+     */
+    | { kind: 'filtered'; operand: Extract<TemplateExpression, { kind: 'path' | 'literal' }>; filters: TemplateFilter[]; chain: number };
 
 /** What a tag's text means. */
 export type TemplateTag =
@@ -39,7 +46,7 @@ export type TemplateTag =
     | { kind: 'for'; name: string; list: TemplatePath; listText: string }
     | { kind: 'endfor' };
 
-/** A filter a field's value goes through, written after `|`: its name, and the values written after it. */
+/** A filter a field's value, or a value in a condition, goes through, written after `|`: its name, and the values written after it. */
 export interface TemplateFilter { name: string; args: (string | number)[] }
 
 /** The block tags, as a tag's kind. */
@@ -109,18 +116,19 @@ function trimGuillemetSpaces(value: string): string {
     return value.slice(start, end);
 }
 
-/** Comparison operators as typed, longest first, with the symbols Word's math AutoCorrect can write. */
+/** Comparison operators as typed, longest first, with the symbols Word's math AutoCorrect can write; `<>` is `!=`, as spreadsheets write it. */
 const OPERATORS: [string, CompareOperator][] = [
-    ['==', '=='], ['!=', '!='], ['<=', '<='], ['>=', '>='], ['<', '<'], ['>', '>'],
+    ['==', '=='], ['!=', '!='], ['<=', '<='], ['>=', '>='], ['<>', '!='], ['<', '<'], ['>', '>'],
     ['\u2264', '<='], ['\u2265', '>='], ['\u2260', '!='],
 ];
 
 /**
  * Operators of other languages a condition does not take, as typed, each with what to write instead: checked
- * before {@link OPERATORS}, which would read their start (`==` of `===`, `<` of `<>`) and blame what follows.
+ * before {@link OPERATORS}, which would read their start (`==` of `===`) and blame what follows. `||` is
+ * among them, so it is named before a single `|` is read as a filter's.
  */
 const MISTYPED: [string, string][] = [
-    ['===', 'use == to compare'], ['!==', 'use != to compare'], ['<>', 'use != to compare'],
+    ['===', 'use == to compare'], ['!==', 'use != to compare'],
     ['=>', 'use >= to compare'], ['=<', 'use <= to compare'], ['=!', 'use != to compare'],
     ['&&', 'write and to join conditions'], ['||', 'write or to join conditions'],
 ];
@@ -130,7 +138,7 @@ type Token =
     | { t: 'number'; value: number }
     | { t: 'string'; value: string }
     | { t: 'op'; op: CompareOperator }
-    | { t: '(' } | { t: ')' };
+    | { t: '(' } | { t: ')' } | { t: '|' };
 
 type Tokens = { ok: true; tokens: Token[] } | { ok: false; reason: string };
 
@@ -148,7 +156,7 @@ function tokenize(text: string): Tokens {
         if (ch === '=') return { ok: false, reason: 'compares with a single =; use == to compare' };
         if (ch === '!') return { ok: false, reason: 'uses !; write not before a condition, or != to compare' };
         if (ch === '&') return { ok: false, reason: 'uses &; write and to join conditions' };
-        if (ch === '|') return { ok: false, reason: 'uses |, which a condition does not take (a filter goes on a field, and conditions are joined with or)' };
+        if (ch === '|') { tokens.push({ t: '|' }); at++; continue; }
         const family = DOUBLE_QUOTES.includes(ch) ? DOUBLE_QUOTES : SINGLE_QUOTES.includes(ch) ? SINGLE_QUOTES : null;
         if (family) {
             let close = at + 1;
@@ -187,6 +195,8 @@ function readPath(text: string): TemplatePath | null {
 /** Parses a condition's tokens (recursive descent, nesting bounded by {@link MAX_CONDITION_DEPTH}). */
 function parseCondition(tokens: Token[]): { ok: true; expression: TemplateExpression } | { ok: false; reason: string } {
     let at = 0;
+    // How many filtered values have been read: each one's place, by which the engine finds its compiled chain.
+    let chains = 0;
     let failure: string | null = null;
     const fail = (reason: string): null => { failure ??= reason; return null; };
     const keyword = (token: Token | undefined, word: string): boolean => token?.t === 'name' && token.text.toLowerCase() === word;
@@ -217,15 +227,38 @@ function parseCondition(tokens: Token[]): { ok: true; expression: TemplateExpres
             return { kind: 'path', path, text: token.text };
         }
         if (token.t === ')') return fail('has a ) with no opening (');
+        if (token.t === '|') return fail('has | with nothing before it to filter');
         return fail('has a comparison with nothing before it');
     };
+    /**
+     * A value and the filters written after it (`answer | lower`, `due | format "yyyy"`): each filter a name
+     * and the strings or numbers after it. Filters follow a path or a literal, never parentheses. Each token
+     * is looked at once; filters do not nest.
+     */
+    const filtered = (depth: number): TemplateExpression | null => {
+        const opening = tokens[at];
+        const value = primary(depth);
+        if (!value || tokens[at]?.t !== '|') return value;
+        if (opening?.t === '(' || (value.kind !== 'path' && value.kind !== 'literal')) return fail('puts a filter after parentheses; write it after the value inside them, as (answer | lower)');
+        const filters: TemplateFilter[] = [];
+        while (tokens[at]?.t === '|') {
+            at++;
+            const name = tokens[at];
+            if (name?.t !== 'name' || !STEP_TEXT.test(name.text) || RESERVED.has(name.text.toLowerCase())) return fail('has | with no filter\'s name after it');
+            at++;
+            const args: (string | number)[] = [];
+            for (let token = tokens[at]; token?.t === 'string' || token?.t === 'number'; token = tokens[++at]) args.push(token.value);
+            filters.push({ name: name.text, args });
+        }
+        return { kind: 'filtered', operand: value, filters, chain: chains++ };
+    };
     const compare = (depth: number): TemplateExpression | null => {
-        const left = primary(depth);
+        const left = filtered(depth);
         if (!left) return null;
         const token = tokens[at];
         if (token?.t !== 'op') return left;
         at++;
-        const right = primary(depth);
+        const right = filtered(depth);
         if (!right) return null;
         if (tokens[at]?.t === 'op') return fail('chains comparisons; join them with and');
         return { kind: 'compare', operator: token.op, left, right };
@@ -418,13 +451,30 @@ function same(a: unknown, b: unknown): boolean {
     return a === b;
 }
 
+/** What working out a condition needs from the data and the engine. */
+export interface ConditionReader {
+    /** A path's value: the data's, or {@link MISSING} (or what the caller's `onMissing` gives it). */
+    lookup(path: TemplatePath, text: string): ConditionValue;
+    /** Raises the caller's typed error for two values that cannot be compared. */
+    incomparable(why: Incomparable): never;
+    /** Told how much of two strings a comparison reads, so it can be counted. */
+    compared?(length: number): void;
+    /** Text compared with a number, read as one; null when it is none. */
+    readNumber?(text: string): number | null;
+    /** A value through the tag's filter chain `chain` (see the `filtered` expression). */
+    filter(chain: number, value: TemplateValue): TemplateValue;
+    /** Two texts compared: the answer when the reader worked it out (as numbers, or as text, once, when it read them to report them), undefined to compare them as text. */
+    compareTexts?(operator: CompareOperator, left: string, right: string): boolean | undefined;
+}
+
 /**
  * Compares two values. Null (or undefined) equals only null and is never ordered. Otherwise both
  * must be the same kind (text, number, true/false, date), save that text compared with a number is
  * read as a number (`readNumber`), when it is one; anything else is reported through `incomparable`,
- * since a silent false would pick the wrong branch without a word.
+ * since a silent false would pick the wrong branch without a word. Two texts compare character by
+ * character, unless `compareTexts` answers (two texts that both read as numbers, compared as numbers).
  */
-function compareValues(operator: CompareOperator, left: TemplateValue, right: TemplateValue, incomparable: (why: Incomparable) => never, compared?: (length: number) => void, readNumber?: (text: string) => number | null): boolean {
+function compareValues(operator: CompareOperator, left: TemplateValue, right: TemplateValue, reader: ConditionReader): boolean {
     const leftEmpty = left === null || left === undefined;
     const rightEmpty = right === null || right === undefined;
     if (leftEmpty || rightEmpty) {
@@ -435,15 +485,19 @@ function compareValues(operator: CompareOperator, left: TemplateValue, right: Te
     let leftKind = kindOfValue(left);
     let rightKind = kindOfValue(right);
     // Text that is a number, beside a number, is that number: data from a form or a table is all text.
-    if (readNumber && leftKind === 'text' && rightKind === 'number') {
-        const n = readNumber(left as string);
+    if (reader.readNumber && leftKind === 'text' && rightKind === 'number') {
+        const n = reader.readNumber(left as string);
         if (n !== null) { left = n; leftKind = 'number'; }
-    } else if (readNumber && leftKind === 'number' && rightKind === 'text') {
-        const n = readNumber(right as string);
+    } else if (reader.readNumber && leftKind === 'number' && rightKind === 'text') {
+        const n = reader.readNumber(right as string);
         if (n !== null) { right = n; rightKind = 'number'; }
     }
-    if (leftKind !== rightKind || leftKind === 'list' || leftKind === 'object' || leftKind === 'function' || leftKind === 'symbol') incomparable({ left: leftKind, right: rightKind });
-    if (typeof left === 'string' && typeof right === 'string') compared?.(Math.min(left.length, right.length));
+    if (leftKind !== rightKind || leftKind === 'list' || leftKind === 'object' || leftKind === 'function' || leftKind === 'symbol') reader.incomparable({ left: leftKind, right: rightKind });
+    if (typeof left === 'string' && typeof right === 'string') {
+        const decided = reader.compareTexts?.(operator, left, right);
+        if (decided !== undefined) return decided;
+        reader.compared?.(Math.min(left.length, right.length));
+    }
     const a = left instanceof Date ? left.getTime() : left as string | number | boolean;
     const b = right instanceof Date ? right.getTime() : right as string | number | boolean;
     switch (operator) {
@@ -456,22 +510,41 @@ function compareValues(operator: CompareOperator, left: TemplateValue, right: Te
     }
 }
 
+/** A value of a condition: a literal, a path, or one of them through filters. */
+type ConditionOperand = Extract<TemplateExpression, { kind: 'path' | 'literal' | 'filtered' }>;
+
+/** Whether a condition is a value (not a comparison, nor one joined or negated). */
+function isOperand(expression: TemplateExpression): expression is ConditionOperand {
+    return expression.kind === 'path' || expression.kind === 'literal' || expression.kind === 'filtered';
+}
+
 /**
- * Works out a condition. `lookup` reads a path from the data (returning {@link MISSING} for a field
- * the data does not have, or the value the caller's `onMissing` gives it). A missing value makes the
- * whole condition missing, so the block it heads can be kept as typed. `and` and `or` stop as soon
- * as their answer is known, as they do in JavaScript. `compared` is told how much of two strings a
- * comparison reads, so a caller can count it; `readNumber` reads text compared with a number.
+ * A value as a condition reads it, beside an operator or alone: a literal's, a path's (MISSING when the
+ * data does not have it), or a value through its filters (a missing value goes through none).
  */
-export function evaluateCondition(expression: TemplateExpression, lookup: (path: TemplatePath, text: string) => ConditionValue, incomparable: (why: Incomparable) => never, compared?: (length: number) => void, readNumber?: (text: string) => number | null): boolean | typeof MISSING {
+function valueOf(expression: ConditionOperand, reader: ConditionReader): ConditionValue {
+    if (expression.kind === 'literal') return expression.value;
+    if (expression.kind === 'path') return reader.lookup(expression.path, expression.text);
+    const value = valueOf(expression.operand, reader);
+    return value === MISSING ? MISSING : reader.filter(expression.chain, value);
+}
+
+/**
+ * Works out a condition. `reader.lookup` reads a path from the data (returning {@link MISSING} for a
+ * field the data does not have, or the value the caller's `onMissing` gives it). A missing value makes
+ * the whole condition missing, so the block it heads can be kept as typed. `and` and `or` stop as soon
+ * as their answer is known, as they do in JavaScript. A filtered value goes through `reader.filter`.
+ */
+export function evaluateCondition(expression: TemplateExpression, reader: ConditionReader): boolean | typeof MISSING {
     switch (expression.kind) {
-        case 'literal': return isTruthy(expression.value);
-        case 'path': {
-            const value = lookup(expression.path, expression.text);
+        case 'literal':
+        case 'path':
+        case 'filtered': {
+            const value = valueOf(expression, reader);
             return value === MISSING ? MISSING : isTruthy(value);
         }
         case 'not': {
-            const value = evaluateCondition(expression.operand, lookup, incomparable, compared, readNumber);
+            const value = evaluateCondition(expression.operand, reader);
             return value === MISSING ? MISSING : !value;
         }
         case 'and':
@@ -479,22 +552,20 @@ export function evaluateCondition(expression: TemplateExpression, lookup: (path:
             // `and` stops at the first false operand, `or` at the first true one.
             const stopAt = expression.kind === 'or';
             for (const operand of expression.operands) {
-                const value = evaluateCondition(operand, lookup, incomparable, compared, readNumber);
+                const value = evaluateCondition(operand, reader);
                 if (value === MISSING) return MISSING;
                 if (value === stopAt) return stopAt;
             }
             return !stopAt;
         }
         case 'compare': {
-            const operand = (side: TemplateExpression): ConditionValue => side.kind === 'literal' ? side.value
-                : side.kind === 'path' ? lookup(side.path, side.text)
-                // The parser only puts literals and paths beside an operator; a parenthesised condition is true/false.
-                : evaluateCondition(side, lookup, incomparable, compared, readNumber) as ConditionValue;
+            // The parser only puts values beside an operator; a parenthesised condition is true/false.
+            const operand = (side: TemplateExpression): ConditionValue => isOperand(side) ? valueOf(side, reader) : evaluateCondition(side, reader) as ConditionValue;
             const left = operand(expression.left);
             if (left === MISSING) return MISSING;
             const right = operand(expression.right);
             if (right === MISSING) return MISSING;
-            return compareValues(expression.operator, left, right, incomparable, compared, readNumber);
+            return compareValues(expression.operator, left, right, reader);
         }
     }
 }
@@ -509,5 +580,38 @@ export function conditionSize(expression: TemplateExpression): number {
         case 'and':
         case 'or': return expression.operands.reduce((total, operand) => total + conditionSize(operand), 1);
         case 'compare': return 1 + conditionSize(expression.left) + conditionSize(expression.right);
+        // Each filter is one more step, and its name and arguments are read: as long as their text.
+        case 'filtered': {
+            let size = 1 + conditionSize(expression.operand);
+            for (const filter of expression.filters) {
+                size += 1 + filter.name.length;
+                for (const arg of filter.args) size += String(arg).length;
+            }
+            return size;
+        }
     }
+}
+
+/** A condition's filter chains, by their place (see the `filtered` expression): each chain's filters as written. Iterative. */
+export function conditionFilters(expression: TemplateExpression): TemplateFilter[][] {
+    const chains: TemplateFilter[][] = [];
+    const todo: TemplateExpression[] = [expression];
+    while (todo.length) {
+        const e = todo.pop()!;
+        switch (e.kind) {
+            case 'path': case 'literal': break;
+            case 'filtered': chains[e.chain] = e.filters; break;
+            case 'not': todo.push(e.operand); break;
+            case 'and': case 'or': for (const operand of e.operands) todo.push(operand); break;
+            case 'compare': todo.push(e.left, e.right); break;
+        }
+    }
+    return chains;
+}
+
+/** The filters a condition's values go through, by name, each once, in the order first written. */
+export function conditionFilterNames(expression: TemplateExpression): string[] {
+    const names = new Set<string>();
+    for (const chain of conditionFilters(expression)) for (const filter of chain) names.add(filter.name);
+    return [...names];
 }
