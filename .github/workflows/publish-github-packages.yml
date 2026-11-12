@@ -1,0 +1,106 @@
+# Workflow Name: Publish to GitHub Packages
+# Publishes a release to GitHub Packages as @harshankur/officeparser.
+#
+# It is kept apart from "Build and Publish" (which publishes to npm) so that:
+#  - a GitHub Packages failure never touches the npm publish, and the npm publish never
+#    blocks this one;
+#  - a failed run can be re-run on its own ("Re-run failed jobs"), or a release published
+#    again later by running this workflow by hand with its tag, without publishing to npm
+#    a second time.
+#
+# The publish is retried, because GitHub Packages has refused a publish once with
+# "403 permission_denied: write_package" while the repository held Admin access to the
+# package and the same workflow had published the version before without a change
+# (v8.7.0 published, v8.7.1 refused a day later). A version already in GitHub Packages is
+# skipped, so a re-run is safe.
+
+name: Publish to GitHub Packages
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to publish (for example v8.7.1)'
+        required: true
+        type: string
+
+# Permissions:
+#  contents: read    (check out the release tag)
+#  packages: write   (publish to GitHub Packages)
+#  id-token: write   (OIDC token for the provenance statement, publishConfig.provenance)
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+
+concurrency:
+  group: publish-github-packages-${{ github.event.release.tag_name || inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  publish-github-packages:
+    runs-on: ubuntu-latest
+    env:
+      RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
+
+    steps:
+      # ── Step 1: Checkout the release tag ───────────────────────────────────
+      - name: Checkout Repository
+        uses: actions/checkout@v6
+        with:
+          ref: refs/tags/${{ env.RELEASE_TAG }}
+
+      # ── Step 2: Node.js environment for GitHub Packages ────────────────────
+      - name: Setup Node.js for GitHub Packages
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: 'npm'
+          registry-url: 'https://npm.pkg.github.com'
+          scope: '@harshankur'
+
+      # ── Step 3: Install dependencies ───────────────────────────────────────
+      # `npm publish` builds the package itself (prepublishOnly: clean, then build).
+      - name: Install Dependencies
+        run: npm ci
+
+      # ── Step 4: Publish, skipping a version already there ──────────────────
+      - name: Publish to GitHub Packages
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="$(node -p "require('./package.json').version")"
+          if [ "v$VERSION" != "$RELEASE_TAG" ]; then
+            echo "::error::package.json is $VERSION but the tag is $RELEASE_TAG"
+            exit 1
+          fi
+          npm pkg set name="@harshankur/officeparser"
+
+          # `npm view` prints nothing for a version that is not there.
+          published() {
+            [ "$(npm view "@harshankur/officeparser@$VERSION" version 2>/dev/null)" = "$VERSION" ]
+          }
+
+          if published; then
+            echo "@harshankur/officeparser@$VERSION is already in GitHub Packages; nothing to publish."
+            exit 0
+          fi
+
+          for ATTEMPT in 1 2 3; do
+            if npm publish; then
+              exit 0
+            fi
+            # A failed attempt may still have stored the version.
+            if published; then
+              echo "@harshankur/officeparser@$VERSION is in GitHub Packages after attempt $ATTEMPT."
+              exit 0
+            fi
+            if [ "$ATTEMPT" -lt 3 ]; then
+              echo "::warning::GitHub Packages publish attempt $ATTEMPT failed; retrying in $((ATTEMPT * 60)) seconds."
+              sleep $((ATTEMPT * 60))
+            fi
+          done
+          echo "::error::GitHub Packages refused @harshankur/officeparser@$VERSION three times."
+          exit 1

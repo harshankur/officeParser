@@ -9,7 +9,7 @@
 #      sbom.cdx.json                          — CycloneDX Software Bill of Materials
 #  - Attaches all artifacts to the GitHub Release
 #  - Publishes to npm registry with OIDC provenance (Sigstore attestation)
-#  - Publishes to GitHub Packages with @harshankur scope
+# GitHub Packages (@harshankur scope) is published by publish-github-packages.yml.
 
 name: Build and Publish
 
@@ -21,11 +21,9 @@ on:
 
 # Permissions:
 #  contents: write   — upload release assets
-#  packages: write   — publish to GitHub Packages
 #  id-token: write   — OIDC token for npm provenance (Sigstore)
 permissions:
   contents: write
-  packages: write
   id-token: write
 
 jobs:
@@ -117,17 +115,5 @@ jobs:
         env:
           NPM_CONFIG_PROVENANCE: true
 
-      # ── Step 9: Publish to GitHub Packages ────────────────────────────────
-      - name: Setup Node.js for GitHub Packages
-        uses: actions/setup-node@v6
-        with:
-          node-version: 24
-          registry-url: 'https://npm.pkg.github.com'
-          scope: '@harshankur'
-
-      - name: Publish to GitHub Packages
-        run: |
-          npm pkg set name="@harshankur/officeparser"
-          npm publish
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # GitHub Packages is published by its own workflow, publish-github-packages.yml,
+      # so that a failure there can be re-run without publishing to npm again.
