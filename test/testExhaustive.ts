@@ -1244,6 +1244,84 @@ async function testWordRunCharacters(): Promise<void> {
 }
 
 /**
+ * A chart in a Word document is a drawing naming its chart part (`c:chart`'s `r:id`): inline, floating,
+ * or in the branch of `mc:AlternateContent` the reader reads. Each is a chart node where it stands, and
+ * with `extractAttachments` a chart attachment holding its data.
+ */
+async function testWordCharts(): Promise<void> {
+    console.log('\n=== Running Word Chart Tests ===');
+
+    const strCache = (values: string[]) => `<c:strRef><c:strCache><c:ptCount val="${values.length}"/>${values.map((v, i) => `<c:pt idx="${i}"><c:v>${v}</c:v></c:pt>`).join('')}</c:strCache></c:strRef>`;
+    const numCache = (values: string[]) => `<c:numRef><c:numCache><c:formatCode>General</c:formatCode><c:ptCount val="${values.length}"/>${values.map((v, i) => `<c:pt idx="${i}"><c:v>${v}</c:v></c:pt>`).join('')}</c:numCache></c:numRef>`;
+    const series = (name: string, labels: string[], values: string[]) => `<c:ser><c:tx>${strCache([name])}</c:tx><c:cat>${strCache(labels)}</c:cat><c:val>${numCache(values)}</c:val></c:ser>`;
+    const chartPart = (title: string, plot: string) => `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><c:chart>${title}<c:plotArea>${plot}</c:plotArea></c:chart></c:chartSpace>`;
+    const categories = ['Category 1', 'Category 2', 'Category 3', 'Category 4'];
+    const quarters = ['1st Qtr', '2nd Qtr', '3rd Qtr', '4th Qtr'];
+    const barChart = chartPart('<c:autoTitleDeleted val="1"/>', `<c:barChart><c:barDir val="col"/>${series('Series 1', categories, ['4.3', '2.5', '3.5', '4.5'])}${series('Series 2', categories, ['2.4', '4.4', '1.8', '2.8'])}${series('Series 3', categories, ['2', '2', '3', '5'])}</c:barChart>`);
+    const pieChart = chartPart('<c:title/>', `<c:pieChart>${series('Sales', quarters, ['8.2', '3.2', '1.4', '1.2'])}</c:pieChart>`);
+
+    const graphic = (rId: string) => `<a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart r:id="${rId}"/></a:graphicData></a:graphic>`;
+    const inline = (rId: string, id: number) => `<w:drawing><wp:inline><wp:extent cx="5486400" cy="3200400"/><wp:docPr id="${id}" name="Chart ${id}"/>${graphic(rId)}</wp:inline></w:drawing>`;
+    const anchor = (rId: string, id: number) => `<w:drawing><wp:anchor behindDoc="0" locked="0" layoutInCell="1" allowOverlap="1" relativeHeight="1" simplePos="0" distT="0" distB="0" distL="0" distR="0"><wp:simplePos x="0" y="0"/><wp:positionH relativeFrom="column"><wp:posOffset>0</wp:posOffset></wp:positionH><wp:positionV relativeFrom="paragraph"><wp:posOffset>0</wp:posOffset></wp:positionV><wp:extent cx="5486400" cy="3200400"/><wp:wrapSquare wrapText="bothSides"/><wp:docPr id="${id}" name="Chart ${id}"/>${graphic(rId)}</wp:anchor></w:drawing>`;
+    const documentXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape" xmlns:v="urn:schemas-microsoft-com:vml">
+  <w:body>
+    <w:p><w:r><w:t>Before</w:t></w:r></w:p>
+    <w:p><w:r>${inline('rId4', 1)}</w:r></w:p>
+    <w:p><w:r><w:t>Between</w:t></w:r></w:p>
+    <w:p><w:r><mc:AlternateContent><mc:Choice Requires="wps">${anchor('rId5', 2)}</mc:Choice><mc:Fallback><w:pict><v:rect style="width:432pt;height:252pt"/></w:pict></mc:Fallback></mc:AlternateContent></w:r></w:p>
+    <w:p><w:r><w:t>After</w:t></w:r></w:p>
+  </w:body>
+</w:document>`;
+    const relationship = (id: string, target: string) => `<Relationship Id="${id}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart" Target="${target}"/>`;
+    const zip = zipSync({
+        '[Content_Types].xml': strToU8(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+  <Override PartName="/word/charts/chart1.xml" ContentType="application/vnd.openxmlformats-officedocument.drawingml.chart+xml"/>
+  <Override PartName="/word/charts/chart2.xml" ContentType="application/vnd.openxmlformats-officedocument.drawingml.chart+xml"/>
+</Types>`),
+        '_rels/.rels': strToU8(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
+</Relationships>`),
+        'word/_rels/document.xml.rels': strToU8(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${relationship('rId5', 'charts/chart2.xml')}${relationship('rId4', 'charts/chart1.xml')}</Relationships>`),
+        'word/document.xml': strToU8(documentXml),
+        'word/charts/chart1.xml': strToU8(barChart),
+        'word/charts/chart2.xml': strToU8(pieChart),
+    });
+    const charts = (ast: OfficeParserAST) => collectAllNodes(ast).filter(n => n.type === 'chart');
+
+    // Without attachments
+    const plain = await OfficeParser.parseOffice(Buffer.from(zip), { fileType: 'docx' });
+    assert.deepStrictEqual(charts(plain).map(n => (n.metadata as any)?.attachmentName), ['chart1.xml', 'chart2.xml'], 'Word: an inline chart and a floating one in alternate content are chart nodes, once each, in document order');
+    assert.strictEqual(plain.attachments.length, 0, 'Word: without extractAttachments a chart is no attachment');
+
+    // With attachments
+    const ast = await OfficeParser.parseOffice(Buffer.from(zip), { fileType: 'docx', extractAttachments: true });
+    const chartData = (name: string) => {
+        const data = ast.attachments.find(a => a.type === 'chart' && a.name === name)?.chartData;
+        return data && { title: data.title, labels: data.labels, series: data.dataSets.map(d => [d.name, d.values]) };
+    };
+    assert.deepStrictEqual(chartData('chart1.xml'), {
+        title: undefined,
+        labels: categories,
+        series: [['Series 1', ['4.3', '2.5', '3.5', '4.5']], ['Series 2', ['2.4', '4.4', '1.8', '2.8']], ['Series 3', ['2', '2', '3', '5']]],
+    }, 'Word: a bar chart\'s attachment holds its series and categories');
+    assert.deepStrictEqual(chartData('chart2.xml'), { title: 'Sales', labels: quarters, series: [['Sales', ['8.2', '3.2', '1.4', '1.2']]] }, 'Word: a pie chart\'s attachment holds its title, series and categories');
+    assert.ok(charts(ast).every(n => n.text), 'Word: a chart node holds its chart\'s text');
+    const text = (await ast.to('text')).value as string;
+    assert.ok(['Before', 'Category 1', 'Series 1', '4.3', 'Between', '1st Qtr', '8.2', 'After'].every(t => text.includes(t)), `Word: the text holds the charts' data where they stand; got ${JSON.stringify(text)}`);
+    assert.ok(text.indexOf('4.3') < text.indexOf('Between') && text.indexOf('8.2') < text.indexOf('After'), 'Word: each chart\'s text is where the chart stands');
+
+    console.log('  Word charts: All assertions passed ✓');
+}
+
+/**
  * Excel stores a date or a time as a day count and shows it through the cell's number format. An
  * XLSX is built in-memory with built-in and custom date/time formats, number formats that only look
  * like dates, and both date systems; every cell must read as the sheet shows it.
@@ -13941,6 +14019,7 @@ async function runTests(): Promise<void> {
         ['BlobInput', testBlobInput],
         ['WordParagraphMark', testWordParagraphMarkFormatting],
         ['WordRunCharacters', testWordRunCharacters],
+        ['WordCharts', testWordCharts],
         ['ExcelDates', testExcelDates],
         ['ExcelSheetOrder', testExcelSheetOrder],
         ['ExcelChartSheetKeepsWorksheetIdentity', testExcelChartSheetKeepsWorksheetIdentity],

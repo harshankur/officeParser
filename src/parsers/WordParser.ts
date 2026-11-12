@@ -1,10 +1,10 @@
 /**
  * Word Document (DOCX) Parser
- * 
+ *
  * **DOCX Format Overview:**
  * DOCX is the default format for Microsoft Word documents since Office 2007.
  * It's based on the Office Open XML (OOXML) standard (ECMA-376, ISO/IEC 29500).
- * 
+ *
  * **File Structure:**
  * DOCX files are ZIP archives containing:
  * - `word/document.xml` - Main document content
@@ -14,7 +14,7 @@
  * - `word/media/*` - Embedded images and media
  * - `docProps/core.xml` - Document metadata
  * - `[Content_Types].xml` - MIME type mappings
- * 
+ *
  * **XML Structure (word/document.xml):**
  * ```xml
  * <w:document>
@@ -61,13 +61,14 @@
  */
 
 import { attachmentLookup, contentWeigher, takeRepeats } from '../utils/repeatUtils.js';
-import { BreakMetadata, CellMetadata, CodeMetadata, CommentMetadata, FullOfficeParserConfig, HeaderFooterMetadata, ImageMetadata, ShapeMetadata, PageNumberFormat, IndentationMetadata, ListMetadata, NoteMetadata, OfficeAttachment, OfficeContentNode, OfficeErrorType, OfficeIssue, OfficeParserAST, OfficeWarningType, PageSetup, ParagraphSpacing, TableMetadata, TextFormatting, TextMetadata } from '../types.js';
+import { BreakMetadata, CellMetadata, ChartMetadata, CodeMetadata, CommentMetadata, FullOfficeParserConfig, HeaderFooterMetadata, ImageMetadata, ShapeMetadata, PageNumberFormat, IndentationMetadata, ListMetadata, NoteMetadata, OfficeAttachment, OfficeContentNode, OfficeErrorType, OfficeIssue, OfficeParserAST, OfficeWarningType, PageSetup, ParagraphSpacing, TableMetadata, TextFormatting, TextMetadata } from '../types.js';
 import { MAX_PAGE_PT } from '../utils/pageLimits.js';
 import { lengthToPt, titlePagesTakeHiddenFirsts } from '../utils/officeGenUtils.js';
 import { fieldSwitchFormat, pageNumberStartOf, wordPageNumberFormat } from '../utils/pageNumbers.js';
 import { createAST } from '../utils/astUtils.js';
 import { checkAbortSignal, getOfficeError, logWarning } from '../utils/errorUtils.js';
 import { createAttachment, renameAttachments } from '../utils/imageUtils.js';
+import { extractChartData } from '../utils/chartUtils.js';
 import { isEmptyMath, ommlToLatex } from '../utils/mathUtils.js';
 import { ocrDuringParse } from '../utils/ocrUtils.js';
 import { getAllElementsByTagName, getChildElements, getDirectChildren, getElementsByTagName, getOutermostElements, getFirstElementByTagName, getRawContent, isElement, parseOfficeMetadata, parseOOXMLAppProperties, parseOOXMLCustomProperties, parseXmlString, takeNodes, takeXmlElements, countByte } from '../utils/xmlUtils.js';
@@ -282,7 +283,7 @@ function textBoxFloat(drawing: Element): ShapeMetadata | undefined {
 
 /**
  * Parses a Word document (.docx) and extracts content, formatting, and metadata.
- * 
+ *
  * The parsing process:
  * 1. Unzip the DOCX file
  * 2. Parse word/document.xml to extract paragraphs and runs
@@ -291,7 +292,7 @@ function textBoxFloat(drawing: Element): ShapeMetadata | undefined {
  * 5. Process lists from numbering properties
  * 6. Extract images and optionally perform OCR
  * 7. Parse document metadata
- * 
+ *
  * @param buffer - The DOCX file as a Buffer
  * @param config - Parser configuration options
  * @returns A promise resolving to the parsed AST
@@ -314,6 +315,7 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
     const footerFileRegex = /word\/footer\d*\.xml/;
     const numberingFileRegex = /word\/numbering[\d+]?.xml/;
     const mediaFileRegex = /(word\/)?media\/.*/;
+    const chartFileRegex = /^word\/charts\/chart\d+\.xml$/;
     const corePropsFileRegex = /docProps\/core[\d+]?.xml/;
     const customPropsFileRegex = /docProps\/custom\.xml/;
     const appPropsFileRegex = /docProps\/app[\d+]?.xml/;
@@ -346,7 +348,7 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
         const u = getFirstElementByTagName(rPr, 'w:u');
         if (u) {
             const val = u.getAttribute('w:val');
-            // If val is missing, it's a default underline (true). 
+            // If val is missing, it's a default underline (true).
             // If val is present, it's true unless explicit 'none'.
             if (!val || val !== 'none') {
                 formatting.underline = true;
@@ -575,7 +577,7 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
             (!config.ignoreComments && !!x.match(commentsFileRegex)) ||
             // (The settings say whether even pages' headers are shown.)
             (!config.ignoreHeadersAndFooters && (!!x.match(headerFileRegex) || !!x.match(footerFileRegex) || x === 'word/settings.xml')) ||
-            (!!config.extractAttachments && !!x.match(mediaFileRegex)) ||
+            (!!config.extractAttachments && (!!x.match(mediaFileRegex) || chartFileRegex.test(x))) ||
             diagramDataRegex.test(x),
         // A DOCX read as a chunk inflates within what the enclosing document left.
         chunk ? { ...config.decompressionLimits, maxUncompressedBytes: chunk.bytesLeft } : config.decompressionLimits,
@@ -623,6 +625,17 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
         } finally {
             partRels = previous;
         }
+    };
+    /** A drawing's chart node, its `c:chart` part found among the relationships of the part being read (see withPartRels). */
+    const chartNodeOf = (drawing: Element, documentContent: string): OfficeContentNode | undefined => {
+        const graphicData = ownFirst(drawing, "a:graphicData");
+        if (graphicData?.getAttribute("uri") !== "http://schemas.openxmlformats.org/drawingml/2006/chart") return undefined;
+        const rId = getFirstElementByTagName(graphicData, "c:chart")?.getAttribute("r:id");
+        const attachmentName = rId ? partRels[rId]?.split('/').pop() : undefined;
+        if (!attachmentName) return undefined;
+        const chartNode: OfficeContentNode = { type: 'chart', text: '', metadata: { attachmentName } as ChartMetadata };
+        if (config.includeRawContent) chartNode.rawContent = getRawContent(drawing, documentContent, config);
+        return chartNode;
     };
 
     // The parts alternative-format chunks are read from, inflated second and only those an aFChunk
@@ -695,6 +708,7 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
     const attachments: OfficeAttachment[] = [];
     const attachmentsByName = attachmentLookup(attachments);
     const mediaFiles = files.filter(f => f.path.match(mediaFileRegex));
+    const chartFiles = files.filter(f => chartFileRegex.test(f.path));
 
     // A note referred to again: Word writes a later reference to a note as a NOTEREF field formatted as
     // its mark, naming a bookmark around the first reference. Each bookmark open where a note reference
@@ -736,9 +750,10 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
         logWarning(OfficeWarningType.ALT_CHUNK_NOT_READ, config, reason);
     };
     const readChunkParts = new Set<string>();
-    // A chunk's pictures take names none of the document's own media, or other chunks' pictures, take.
+    // A chunk's pictures and charts take names none of the document's own media and charts, or other
+    // chunks' attachments, take.
     const attachmentNames = new UniqueNames();
-    for (const media of mediaFiles) attachmentNames.add(media.path.split('/').pop() || '');
+    for (const part of [...mediaFiles, ...chartFiles]) attachmentNames.add(part.path.split('/').pop() || '');
     const claimAttachmentName = (name: string): string => {
         const dot = name.lastIndexOf('.');
         const stem = dot > 0 ? name.slice(0, dot) : name;
@@ -1402,52 +1417,57 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
                     else pushNodes(item.childNodes);
                 }
 
-                // Pictures: a drawing showing one (a DrawingML blip, or a VML image). A text box, SmartArt,
-                // chart or plain shape shows none, and gave an image node of nothing (`![image]()`).
-                if (config.extractAttachments) {
-                    for (const imgNode of runDrawings) {
-                        const blip = ownFirst(imgNode, "a:blip");
-                        const imagedata = blip ? undefined : ownFirst(imgNode, "v:imagedata");
-                        if (!blip && !imagedata) continue;
-                        // Extract Alt Text
-                        let altText = '';
-                        const docPr = ownFirst(imgNode, "wp:docPr");
-                        if (docPr) {
-                            altText = docPr.getAttribute("descr") || docPr.getAttribute("title") || '';
-                        }
-                        // A picture that is a link itself (Insert > Link on a picture writes it on docPr).
-                        const pictureLinkRid = docPr ? getFirstElementByTagName(docPr, "a:hlinkClick")?.getAttribute("r:id") : null;
-                        const pictureLink = pictureLinkRid && partRels[pictureLinkRid] ? { link: partRels[pictureLinkRid], linkType: 'external' as const } : {};
+                // Charts, with or without attachments, and pictures: a drawing showing a DrawingML blip or
+                // a VML image. A text box, SmartArt or plain shape shows neither, and gave an image node of
+                // nothing (`![image]()`).
+                for (const imgNode of runDrawings) {
+                    const chartNode = chartNodeOf(imgNode, documentContent);
+                    if (chartNode) {
+                        children.push(chartNode);
+                        continue;
+                    }
+                    if (!config.extractAttachments) continue;
+                    const blip = ownFirst(imgNode, "a:blip");
+                    const imagedata = blip ? undefined : ownFirst(imgNode, "v:imagedata");
+                    if (!blip && !imagedata) continue;
+                    // Extract Alt Text
+                    let altText = '';
+                    const docPr = ownFirst(imgNode, "wp:docPr");
+                    if (docPr) {
+                        altText = docPr.getAttribute("descr") || docPr.getAttribute("title") || '';
+                    }
+                    // A picture that is a link itself (Insert > Link on a picture writes it on docPr).
+                    const pictureLinkRid = docPr ? getFirstElementByTagName(docPr, "a:hlinkClick")?.getAttribute("r:id") : null;
+                    const pictureLink = pictureLinkRid && partRels[pictureLinkRid] ? { link: partRels[pictureLinkRid], linkType: 'external' as const } : {};
 
-                        // Extract Relationship ID
-                        const rId = (blip ? blip.getAttribute("r:embed") : imagedata!.getAttribute("r:id")) || '';
+                    // Extract Relationship ID
+                    const rId = (blip ? blip.getAttribute("r:embed") : imagedata!.getAttribute("r:id")) || '';
 
-                        if (rId && partRels[rId]) {
-                            const target = partRels[rId];
-                            const filename = target.split('/').pop();
-                            if (filename) {
-                                const imageNode: OfficeContentNode = {
-                                    type: 'image',
-                                    text: '',
-                                    metadata: { attachmentName: filename, altText: altText, ...pictureLink } as ImageMetadata
-                                };
-                                if (config.includeRawContent) {
-                                    imageNode.rawContent = getRawContent(imgNode, documentContent, config);
-                                }
-                                children.push(imageNode);
-                            }
-                        } else {
-                            // A picture whose data the package does not hold: its alt text, where it has one.
+                    if (rId && partRels[rId]) {
+                        const target = partRels[rId];
+                        const filename = target.split('/').pop();
+                        if (filename) {
                             const imageNode: OfficeContentNode = {
                                 type: 'image',
                                 text: '',
-                                ...(altText ? { metadata: { altText } as ImageMetadata } : {}),
+                                metadata: { attachmentName: filename, altText: altText, ...pictureLink } as ImageMetadata
                             };
                             if (config.includeRawContent) {
                                 imageNode.rawContent = getRawContent(imgNode, documentContent, config);
                             }
                             children.push(imageNode);
                         }
+                    } else {
+                        // A picture whose data the package does not hold: its alt text, where it has one.
+                        const imageNode: OfficeContentNode = {
+                            type: 'image',
+                            text: '',
+                            ...(altText ? { metadata: { altText } as ImageMetadata } : {}),
+                        };
+                        if (config.includeRawContent) {
+                            imageNode.rawContent = getRawContent(imgNode, documentContent, config);
+                        }
+                        children.push(imageNode);
                     }
                 }
 
@@ -2187,6 +2207,41 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
             if (config.ocr && attachment.mimeType.startsWith('image/')) {
                 const ocrText = await ocrDuringParse(media.content, config, attachment.name);
                 if (ocrText !== undefined) attachment.ocrText = ocrText;
+            }
+        }
+
+        for (const chart of chartFiles) {
+            const attachment: OfficeAttachment = {
+                type: 'chart',
+                mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+                data: chart.content.toString('base64'),
+                name: chart.path.split('/').pop() || '',
+                extension: 'xml'
+            };
+            attachments.push(attachment);
+            try {
+                attachment.chartData = extractChartData(chart.content, config);
+            } catch (e) {
+                logWarning(OfficeWarningType.CHART_DATA_EXTRACTION_FAILED, config, chart.path, e);
+            }
+        }
+
+        // Each chart node's text is its chart's data. A note or comment shared by many references is
+        // visited once.
+        if (chartFiles.length > 0) {
+            const seen = new Set<OfficeContentNode>();
+            const pending: OfficeContentNode[] = [];
+            for (const list of [content, headers, footers]) appendAll(pending, list);
+            while (pending.length) {
+                const node = pending.pop()!;
+                if (seen.has(node)) continue;
+                seen.add(node);
+                if (node.type === 'chart') {
+                    const attachment = attachmentsByName.get((node.metadata as ChartMetadata | undefined)?.attachmentName);
+                    const text = attachment && attachmentsByName.chartText(attachment, config.newlineDelimiter);
+                    if (text !== undefined) node.text = text;
+                }
+                for (const list of [node.children, node.notes, node.comments]) if (list) appendAll(pending, list);
             }
         }
 
