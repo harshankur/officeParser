@@ -88,8 +88,8 @@ const SPECIAL_CHAR = /^(\s)|(\p{Mn})|(\p{Cf})$/u;
 /** Letters of the right-to-left scripts: a text holding one pdf.js may have reordered. */
 const RTL = /[\u0590-\u08FF\uFB1D-\uFDFF\uFE70-\uFEFF]/;
 
-/** The control characters, a glyph's text where its font lost what it is. */
-const CONTROL = /[\u0000-\u001f\u007f]/;
+/** Control characters from lost glyph mappings, except tabs used for word spaces. */
+const CONTROL = /[\u0000-\u0008\u000a-\u001f\u007f]/;
 
 /** Graphics state the walk keeps across `q`/`Q` and forms. */
 interface State {
@@ -222,8 +222,8 @@ export function collectGlyphs(ops: any, OPS: any, fontOf: (id: string) => GlyphF
                     const width = num(glyph.width) * fm0 * size;
                     const spacing = s.charSpacing + (glyph.isSpace ? s.wordSpacing : 0);
                     const special = SPECIAL_CHAR.exec(unicode);
-                    // (A space: blank text that is no control character, which is a glyph whose text a font lost, drawn
-                    // as any other: pdf.js reads a vertical tab as a blank, LibreOffice's "त्र" was one.)
+                    // Tabs can represent word spaces. Other controls can represent lost glyph mappings:
+                    // pdf.js reads a vertical tab as a blank, but LibreOffice used one for "त्र".
                     const blank = !!unicode && !unicode.trim() && !CONTROL.test(unicode);
                     if (out.count < MAX_GLYPHS) {
                         out.px.push(userX(qtm, s.rise)); out.py.push(userY(qtm, s.rise));

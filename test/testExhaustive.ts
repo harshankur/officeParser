@@ -10110,6 +10110,35 @@ async function testPdfItemsMatchTheirOwnGlyphs(): Promise<void> {
 
 }
 
+/** A visible word space stays a separator when its font maps it to a tab. */
+async function testPdfTabMappedSpaces(): Promise<void> {
+    for (const mapping of ['0020', '0009']) {
+        const pdf = await PDFDocument.create();
+        const font = await pdf.embedFont(StandardFonts.Helvetica);
+        const page = pdf.addPage([300, 100]);
+        page.node.setFontDictionary(PDFName.of('F1'), font.ref);
+        await pdf.flush();
+        const cmap = `/CIDInit /ProcSet findresource begin 12 dict begin begincmap
+/CMapName /WordSpaces def /CMapType 2 def
+1 begincodespacerange <00> <FF> endcodespacerange
+1 beginbfrange <21> <7E> <0021> endbfrange
+1 beginbfchar <20> <${mapping}> endbfchar
+endcmap CMapName currentdict /CMap defineresource pop end end`;
+        pdf.context.lookup(font.ref, PDFDict).set(PDFName.of('ToUnicode'), pdf.context.register(pdf.context.flateStream(cmap)));
+        let content = 'BT /F1 12 Tf 20 50 Td';
+        for (const [i, word] of ['Hello', 'world', 'again'].entries()) {
+            if (i) content += ' /Span BMC ( ) Tj EMC';
+            content += ` (${word}) Tj`;
+        }
+        content += ' ET';
+        page.node.addContentStream(pdf.context.register(pdf.context.flateStream(content)));
+        const ast = await OfficeParser.parseOffice(Buffer.from(await pdf.save()), {
+            fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false },
+        });
+        assert.strictEqual(String((await ast.to('text')).value).trim(), 'Hello world again', `word spaces mapped to U+${mapping} stay between words`);
+    }
+}
+
 /**
  * Text a PDF's font maps to look-alikes of CJK ideographs (Kangxi radicals, compatibility ideographs),
  * as Chromium's PDFs of Chinese and Japanese do, reads as the unified ideographs: ⽇本語 was the text.
@@ -14039,6 +14068,7 @@ async function runTests(): Promise<void> {
         ['Unicode chunk boundaries', testUnicodeChunks],
         ['Brotli decoder with a known flaw avoided', testBrotliGuard],
         ['PDF items match their own glyphs', testPdfItemsMatchTheirOwnGlyphs],
+        ['PDF tab-mapped spaces', testPdfTabMappedSpaces],
         ['Markdown HTML cell formatting', testMarkdownHtmlCellFormatting],
         ['List marker reading', testListMarkerReading],
         ['PDF running lines as parts', testPdfRunningLinesAsParts],
