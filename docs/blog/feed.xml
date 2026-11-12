@@ -5,8 +5,700 @@
     <link>https://officeparser.harshankur.com/blog/</link>
     <description>How document formats work inside, how officeParser reads and writes them, where it falls short, and how to chunk documents for retrieval. Written by Harsh Ankur, author of officeParser.</description>
     <language>en</language>
-    <lastBuildDate>Mon, 09 Nov 2026 00:00:00 GMT</lastBuildDate>
+    <lastBuildDate>Thu, 12 Nov 2026 00:00:00 GMT</lastBuildDate>
     <atom:link href="https://officeparser.harshankur.com/blog/feed.xml" rel="self" type="application/rss+xml"/>
+    <item>
+      <title>Markdown Inside an HTML Table: Where a Reader Cuts the Lines</title>
+      <link>https://officeparser.harshankur.com/blog/markdown-inside-an-html-table.html</link>
+      <guid isPermaLink="true">https://officeparser.harshankur.com/blog/markdown-inside-an-html-table.html</guid>
+      <pubDate>Thu, 12 Nov 2026 00:00:00 GMT</pubDate>
+      <dc:creator>Harsh Ankur</dc:creator>
+      <category>Format Deep Dives</category>
+      <description>Why GitHub-style HTML tables with Markdown between blank lines in a cell lost their text, or showed a code like op9ta1at81p:0 in its place, and how officeParser 8.8.0 reads such a table as one HTML block from its first table tag to its last.</description>
+      <content:encoded><![CDATA[<p>
+    A README that wants two columns side by side reaches for an HTML table, and then wants Markdown inside it:
+    bold text, a list, a code span. GitHub's way of writing that is a blank line on each side of the Markdown:
+</p>
+<pre><code>&lt;table&gt;
+&lt;tr&gt;
+&lt;td&gt;
+
+**Fast**: reads *every* cell.
+
+&lt;/td&gt;
+&lt;/tr&gt;
+&lt;/table&gt;</code></pre>
+<p>
+    officeParser has read that since 8.1.0. But put one more line in the cell, a <code>&lt;div align="center"&gt;</code>
+    around the text, a heading, or a <code>---</code> under the table, and the cell came back empty, with a line
+    like <code>op9ta1at81p:0</code> after the table where the text should have been. 8.8.0 fixes that. This post is
+    about why it happened, which turns out to be one assumption failing several ways, and how 8.8.0 reads such a
+    table instead.
+</p>
+
+<h2>What a Renderer Does With It</h2>
+<p>
+    CommonMark has no idea of a table cell holding Markdown. It sees an HTML block, which starts at a line
+    beginning with a tag such as <code>&lt;table&gt;</code>, <code>&lt;tr&gt;</code>, <code>&lt;td&gt;</code> or
+    <code>&lt;div&gt;</code> and runs to the next blank line. Then a paragraph of Markdown. Then another HTML
+    block. A renderer passes the HTML blocks through as they are and turns the paragraph into
+    <code>&lt;p&gt;</code>, and the browser, given <code>&lt;table&gt;&lt;tr&gt;&lt;td&gt;&lt;p&gt;…&lt;/p&gt;&lt;/td&gt;…</code>,
+    builds one table. The Markdown ends up in the cell because the browser puts it there.
+</p>
+<p>
+    A library that reads Markdown into a tree has no browser to do that, so it has to stitch the pieces back
+    together itself. That is what the blank lines make hard: the table is cut into pieces, some HTML and some
+    Markdown, and the cell exists only once they are joined.
+</p>
+
+<h2>How officeParser Joined the Pieces</h2>
+<p>
+    From 8.1.0 to 8.7.1, the reader split the document at blank lines before reading its blocks. When a
+    piece opened a table, the pieces after it were joined to it while the table stayed open, up to 64 pieces. A
+    piece of HTML was joined as written. A piece of Markdown could not be, because the HTML reader would read
+    <code>**Fast**</code> as two asterisks, so it was set aside and a token joined in its place: a private-use
+    character, a random code made once per document, a colon, the piece's number, and another private-use
+    character. The HTML reader then read the whole table, and each token it found in a cell's text was replaced by
+    its piece, read as Markdown.
+</p>
+<p>
+    A private-use character means nothing on its own (a font may draw it as a box, or not at all), so a token
+    that reached the output read as <code>op9ta1at81p:0</code>: the random code and the piece's number. And a token only became its piece when the
+    HTML reader read it. Every reading of a token anywhere else showed the token and never read the piece.
+</p>
+<p>
+    That was the assumption: that a block holding tokens is always read whole, by the HTML reader. The next step
+    of the reader broke it. After the blank-line split, each block's lines were read again for the Markdown block
+    starts that need no blank line before them: a <code>&lt;div&gt;</code> line alone, a heading, a list item, a
+    rule, a setext underline. Each of those cut the joined table, and a part that held a token but did not start
+    with a tag was read as Markdown, with the token as its text.
+</p>
+<p>
+    Pick a sample below and switch between the two versions to see where each cuts the lines. The blocks come from
+    the reader's own split, logged from a copy of each version with one line added, and the Markdown under them is
+    what each version writes back:
+</p>
+<figure class="demo demo-cells-figure" data-demo="cells" data-cells='{"cases":[{"id":"divLine","label":"A &lt;div&gt; line in the cell","lines":["&lt;table&gt;","&lt;tr&gt;","&lt;td&gt;","","&lt;div align&#61;\"center\"&gt;","","**Fast**: reads *every* cell.","","&lt;/div&gt;","","&lt;/td&gt;","&lt;/tr&gt;","&lt;/table&gt;"],"pieces":[6],"readers":{"8.7.1":{"blocks":[{"from":0,"to":2,"kind":"html","note":"A table, closed at once with its cell empty"},{"from":4,"to":4,"kind":"html","note":"A &lt;div&gt; line alone, cut off as a block of its own"},{"from":6,"to":6,"kind":"text","note":"Paragraph: the piece’s token, read as text"},{"from":8,"to":8,"kind":"html","note":"A closing tag, nothing to read"},{"from":10,"to":12,"kind":"html","note":"Closing tags, nothing to read"}],"markdown":"|  |\n| --- |\n\n&lt;div style&#61;\"text-align: center\"&gt;op9ta1at81p:0&lt;/div&gt;"},"8.8.0":{"blocks":[{"from":0,"to":12,"kind":"html","note":"One HTML block, the table’s first tag to its last; the piece is read as Markdown in its cell"}],"markdown":"| **Fast**: reads *every* cell. |\n| --- |"}}},{"id":"headingLine","label":"A heading line in the cell","lines":["&lt;table&gt;","&lt;tr&gt;","&lt;td&gt;","# Install","","`npm i officeparser`, then *parse*.","","&lt;/td&gt;","&lt;/tr&gt;","&lt;/table&gt;"],"pieces":[5],"readers":{"8.7.1":{"blocks":[{"from":0,"to":2,"kind":"html","note":"A table, closed at once with its cell empty"},{"from":3,"to":3,"kind":"markdown","note":"Heading: Install, outside the table"},{"from":5,"to":9,"kind":"text","note":"Paragraph: the piece’s token, read as text; the closing tags read as nothing"}],"markdown":"|  |\n| --- |\n\n# Install {#install}\n\n9aso60ll8w:0"},"8.8.0":{"blocks":[{"from":0,"to":9,"kind":"html","note":"One HTML block: # Install is a line of it, text in the cell, as CommonMark reads it; the piece is read as Markdown in its cell"}],"markdown":"| # Install&lt;br&gt;`npm i officeparser`, then *parse*. |\n| --- |"}}},{"id":"ruleAfter","label":"A --- line under the table","lines":["&lt;table&gt;","&lt;tr&gt;","&lt;td&gt;","","**Fast**: reads *every* cell.","","&lt;/td&gt;","&lt;/tr&gt;","&lt;/table&gt;","---"],"pieces":[4],"readers":{"8.7.1":{"blocks":[{"from":0,"to":7,"kind":"text","note":"Paragraph: the tags shown as text, and the piece’s token"},{"from":8,"to":9,"kind":"markdown","note":"Heading: &lt;/table&gt;, underlined by ---"}],"markdown":"&amp;lt;table&gt; &amp;lt;tr&gt; &amp;lt;td&gt;  i8knqdf43sg:0  &amp;lt;/td&gt; &amp;lt;/tr&gt;\n\n## &amp;lt;/table&gt; {#table}"},"8.8.0":{"blocks":[{"from":0,"to":8,"kind":"html","note":"One HTML block: the table, its piece read as Markdown in its cell"},{"from":9,"to":9,"kind":"markdown","note":"A rule"}],"markdown":"| **Fast**: reads *every* cell. |\n| --- |\n\n---"}}},{"id":"commentLine","label":"A comment, no blank line at all","lines":["&lt;table&gt;&lt;tr&gt;&lt;th&gt;","&lt;div&gt;","&lt;!-- the name --&gt;","&lt;/div&gt;","&lt;/th&gt;&lt;/tr&gt;&lt;/table&gt;"],"pieces":[2],"readers":{"8.7.1":{"blocks":[{"from":0,"to":0,"kind":"html","note":"A table, closed at once with its cell empty"},{"from":1,"to":1,"kind":"html","note":"A &lt;div&gt; line alone"},{"from":2,"to":2,"kind":"text","note":"Paragraph: the comment, lifted out as a piece, read as its token"},{"from":3,"to":3,"kind":"html","note":"A closing tag, nothing to read"},{"from":4,"to":4,"kind":"html","note":"Closing tags, nothing to read"}],"markdown":"|  |\n| --- |\n\n5yq2o9bteip:0"},"8.8.0":{"blocks":[{"from":0,"to":4,"kind":"html","note":"One HTML block: the comment is kept in its cell"}],"markdown":"| &lt;!-- the name --&gt; |\n| --- |"}}}]}'>
+    <table role="table">
+        <thead role="rowgroup">
+            <tr role="row"><th role="columnheader">Sample</th><th role="columnheader">8.7.1 reads</th><th role="columnheader">8.8.0 reads</th></tr>
+        </thead>
+        <tbody role="rowgroup">
+            <tr role="row"><td role="cell">A <code>&lt;div&gt;</code> line in the cell</td><td role="cell" data-label="8.7.1 reads">An empty cell, then the token as a paragraph</td><td role="cell" data-label="8.8.0 reads">The piece in its cell</td></tr>
+            <tr role="row"><td role="cell">A heading line in the cell</td><td role="cell" data-label="8.7.1 reads">An empty cell, the heading after the table, then the token</td><td role="cell" data-label="8.8.0 reads"><code># Install</code> as text in the cell, then the piece</td></tr>
+            <tr role="row"><td role="cell">A <code>---</code> line under the table</td><td role="cell" data-label="8.7.1 reads">The tags as text with the token, then a heading <code>&lt;/table&gt;</code></td><td role="cell" data-label="8.8.0 reads">The table with its piece, then a rule</td></tr>
+            <tr role="row"><td role="cell">A comment, no blank line at all</td><td role="cell" data-label="8.7.1 reads">An empty cell, then the token</td><td role="cell" data-label="8.8.0 reads">The comment in its cell</td></tr>
+        </tbody>
+    </table>
+    <figcaption>Four tables, as each version cuts their lines into blocks and reads them. A token's code is random,
+        made again for every document read; the one shown is from a real run. 8.1.0 reads all four as 8.7.1 does.</figcaption>
+</figure>
+<p>
+    The last sample has no blank line at all, so no piece was written by its author. The reader made one. Before
+    the split, it lifts out fenced code, math, admonitions and comments on lines of their own, and puts a
+    placeholder line with a blank line on each side in their place. Inside a table, that blank line made the
+    comment a piece, the piece became a token, and the <code>&lt;div&gt;</code> line cut it off.
+</p>
+
+<h2>The Other Ways</h2>
+<p>
+    Cutting was the common way to lose a cell, not the only one. A placeholder could land where text is read as
+    written. A cell holding a <code>&lt;pre&gt;</code> with a fenced block in it:
+</p>
+<pre><code>&lt;table&gt;&lt;tr&gt;&lt;td&gt;&lt;pre&gt;Run:
+
+```
+npm test
+```
+
+&lt;/pre&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;</code></pre>
+<p>
+    8.7.1 read its code as <code>Run:</code>, four line breaks, <code>CODE_BLOCK_0</code> between two private-use
+    characters, and four more line breaks. 8.8.0 reads it as written, the fence's lines and blank lines included. A
+    comment holding an admonition, anywhere in a document, kept a placeholder the same way, and now keeps
+    <code>:::note</code> and its text.
+</p>
+<p>
+    A piece also stood in for its text inside other HTML. A link around a cell's Markdown,
+    <code>&lt;a href="https://example.com/docs"&gt;</code>, a blank line, <code>Read the **docs**</code>, a blank line,
+    <code>&lt;/a&gt;</code>, came back from 8.7.1 as the text with no link: the token's text node carried the link,
+    and the piece's runs that replaced it did not. In 8.8.0 each run of the piece carries it, and so does a picture
+    in it. And a piece that closed what a tag had opened, the <code>"</code> of an attribute or the
+    <code>--&gt;</code> of a comment, hid that end inside its token. A comment then ran on and took the rest of the
+    table with it; an attribute ran on to the next quote, and the words up to there were lost.
+</p>
+
+<h2>One Block, From the First Table Tag to the Last</h2>
+<p>
+    8.8.0 states the rule once and makes every step follow it: a table holding Markdown pieces is one HTML block
+    from its first table tag to its last. No line inside that range is read as a Markdown block start, so nothing
+    cuts it, and no underline makes it a heading. Its pieces are read in its cells where they stand in the cells'
+    content, and as the text of whatever they stand in otherwise: an attribute's value, a comment, a
+    <code>&lt;pre&gt;</code>. Every piece is read somewhere, and nothing of a token or a placeholder is shown.
+</p>
+<p>
+    That makes the lines inside the table read as CommonMark reads them, which is what GitHub shows. In the heading
+    sample, <code># Install</code> is a line of the HTML block that <code>&lt;td&gt;</code> opened, so it is text in
+    the cell, <code># Install</code> and all, not a heading. That can surprise, but it is what the CommonMark
+    specification says, which GitHub's Markdown follows: the line is part of the HTML block, and a browser shows
+    it as text.
+</p>
+<p>
+    After the last table tag, lines read as they did before. A heading, a list item, a rule or a fence there reads
+    as Markdown, as officeParser read it before (CommonMark would keep such a line in the table's HTML block up to
+    the next blank line, so GitHub shows a <code>---</code> right under <code>&lt;/table&gt;</code> as text). A plain text line right under <code>&lt;/table&gt;</code> stays in the table's HTML block up to the
+    next blank line, so <code>*Tested* on Node 18.</code> there is read with its asterisks. That is what CommonMark says,
+    and 8.7.1 read it the same way.
+</p>
+<p>
+    A comment or preformatted text holding a lifted block gets the block back as written. Each lift now remembers
+    the source it replaced, and wherever a placeholder lands in text read as written, the source goes back in its
+    place, blank lines and all. And a piece the HTML reader leaves out, because it stands in an element read as
+    nothing such as <code>&lt;template&gt;</code>, is read after the table, as it would be without the table.
+</p>
+
+<h2>Which Pieces Are Written as Text</h2>
+<p>
+    One part of this took two tries. A piece inside a tag or a quoted value has to be joined as written, so that a
+    piece holding the <code>"</code> that ends a value ends it where the HTML reader will. My first version decided
+    that while joining: it scanned the HTML so far, and joined a piece as written whenever the scan was not in a
+    cell's content.
+</p>
+<p>
+    The review before the release found where that went wrong. The HTML reader pairs quotes in a tag, and when a
+    quote never closes before the end of its text, it ends the tag at the first <code>&gt;</code> instead. An
+    unquoted value with an apostrophe, such as <code>&lt;td title=it's&gt;</code>, has a quote that never closes.
+    The scan, which could not know what came later, stayed inside that quote and joined every piece after it as
+    written, and the first apostrophe in the prose, <code>It's</code>, closed it:
+</p>
+<pre><code>&lt;table&gt;
+&lt;tr&gt;
+&lt;td title=it's&gt;
+
+First *cell*
+
+&lt;/td&gt;
+&lt;td&gt;
+
+It's the **second**
+
+&lt;/td&gt;
+&lt;/tr&gt;
+&lt;/table&gt;</code></pre>
+<p>
+    8.7.1 read both cells. The first version of the fix read one empty cell. That never went out. What did is
+    safer by construction: every piece is a token while the table is joined, as in 8.7.1, and which pieces go back
+    as written is decided only when the table is read, by a scan of exactly the text the HTML reader is given. A
+    piece is written back only where that scan proves the reader reads it the same way: a piece that holds the end
+    of what it stands in, or one that cannot change how the reader reads on. Anywhere the scan cannot be sure, after
+    a quote that holds a <code>&gt;</code>, inside an SVG, past a DOCTYPE, the piece keeps its token, and a token
+    the reader drops is read after the table. 8.8.0 reads both cells of that table, as 8.7.1 did.
+</p>
+
+<h2>How It Is Checked</h2>
+<p>
+    The release adds a property check that writes tables the way people write them and some ways they should not:
+    a Markdown piece in a cell beside every kind of block start (each of CommonMark's seven kinds of HTML block,
+    fences, math, admonitions, underlines, rules, headings, list items, quotes, indented code), inside six kinds of
+    opening, followed by one of thirteen endings after <code>&lt;/table&gt;</code> (nothing, text, an underline, a
+    rule, a heading, a list item, a quote, a block); then random mixes of up to four
+    of them; then a part of tables holding unpaired quotes, unclosed values and comments beside prose full of
+    apostrophes. Every piece holds marker words, and a document fails if a marker word is missing from what the
+    reader returns, or if a private-use character or a placeholder's name reaches it.
+</p>
+<p>
+    I ran the release's own check against both versions, seed 1, 10,130 distinct documents (4,524 systematic,
+    2,996 random, 2,610 with quotes):
+</p>
+<table role="table">
+    <thead role="rowgroup">
+        <tr role="row"><th role="columnheader">Version</th><th role="columnheader">Documents showing a token</th><th role="columnheader">Documents losing a word</th></tr>
+    </thead>
+    <tbody role="rowgroup">
+        <tr role="row"><td role="cell">8.7.1</td><td role="cell" data-label="Documents showing a token">2,102</td><td role="cell" data-label="Documents losing a word">3,031</td></tr>
+        <tr role="row"><td role="cell">8.8.0</td><td role="cell" data-label="Documents showing a token">0</td><td role="cell" data-label="Documents losing a word">0</td></tr>
+    </tbody>
+</table>
+<p>
+    Each new path is one pass over text the reader already holds, and the suite times the shapes that could make
+    it slower, at two lengths, and checks that the time grows with the length.
+</p>
+
+<h2>What It Does Not Do</h2>
+<ul>
+    <li>
+        A table with no Markdown piece is read as before. One written with no blank line, with a heading line in a
+        cell (<code>&lt;td&gt;</code>, <code># Install</code>, <code>&lt;/td&gt;</code> on lines of their own), still
+        moves the heading out of the table, in 8.8.0 as in 8.7.1. CommonMark keeps it in the cell. Nothing is lost
+        or shown as a token there, but the text is in the wrong place.
+    </li>
+    <li>
+        Words in markup the HTML reader reads as nothing stay unread: an attribute it does not keep (a
+        <code>title</code> on a cell), the text of a script or a style. That is the HTML reader's reading of such
+        markup in any document, not something the table loses.
+    </li>
+    <li>
+        A table whose cells nest elements 256 levels deep, past what the HTML reader reads, is read as 8.7.1 read
+        it, without its tokens: its pieces come after its cells instead of in them.
+    </li>
+</ul>
+<p>
+    The fix is in the <a href="https://github.com/harshankur/officeParser/blob/master/CHANGELOG.md">changelog</a>
+    under 8.8.0. If you have a README whose tables still read wrong, I would like to see it: open an
+    <a href="https://github.com/harshankur/officeParser/issues">issue</a> with the file, or the smallest part of it
+    that shows the problem.
+</p>]]></content:encoded>
+    </item>
+    <item>
+      <title>Chart Caches and Blank Points: Pairing a Label With Its Value</title>
+      <link>https://officeparser.harshankur.com/blog/chart-caches-and-blank-points.html</link>
+      <guid isPermaLink="true">https://officeparser.harshankur.com/blog/chart-caches-and-blank-points.html</guid>
+      <pubDate>Thu, 12 Nov 2026 00:00:00 GMT</pubDate>
+      <dc:creator>Harsh Ankur</dc:creator>
+      <category>Format Deep Dives</category>
+      <description>How a chart&#39;s cached categories and values skip blank points and say which point each entry is, why pairing them by position put values under the wrong categories, and what officeParser 8.8.0 reads and writes for a chart: point indexes, category levels, number formats, axes, X values and bubble sizes.</description>
+      <content:encoded><![CDATA[<p>
+    A chart in a Word document, a slide or a workbook carries a copy of the data it draws, so that a program can
+    show it without opening the sheet behind it. That copy is the chart's cache, and it is what officeParser reads
+    into a chart's <code>chartData</code>. A blank cell in the sheet is a gap in the cache, and until 8.8.0 the gap
+    vanished on the way in: the values after it moved to the wrong categories, in the data and in every output.
+</p>
+<p>
+    setthase reported that (<a href="https://github.com/harshankur/officeParser/issues/136">#136</a>)
+    and fixed it (<a href="https://github.com/harshankur/officeParser/pull/150">#150</a>), then reported four more
+    things a cache holds that officeParser lost: category levels
+    (<a href="https://github.com/harshankur/officeParser/issues/139">#139</a>), number formats
+    (<a href="https://github.com/harshankur/officeParser/issues/140">#140</a>, fixed in their
+    <a href="https://github.com/harshankur/officeParser/pull/151">#151</a>), axes
+    (<a href="https://github.com/harshankur/officeParser/issues/143">#143</a>) and the X values and sizes of scatter and
+    bubble charts (<a href="https://github.com/harshankur/officeParser/issues/144">#144</a>). Their
+    <a href="https://github.com/harshankur/officeParser/pull/132">#132</a> also makes 8.8.0 read charts in Word
+    documents. This post is about what a cache holds, why pairing its lists by position was wrong, and what 8.8.0
+    writes for a chart in every output.
+</p>
+
+<h2>What a Cache Holds</h2>
+<p>
+    Here is the cache from #136, as Excel writes it: one series of four months, with no label for the second month
+    and no value for the third.
+</p>
+<pre><code>&lt;c:cat&gt;&lt;c:strRef&gt;&lt;c:strCache&gt;&lt;c:ptCount val="4"/&gt;
+  &lt;c:pt idx="0"&gt;&lt;c:v&gt;Jan&lt;/c:v&gt;&lt;/c:pt&gt;
+  &lt;c:pt idx="2"&gt;&lt;c:v&gt;Mar&lt;/c:v&gt;&lt;/c:pt&gt;
+  &lt;c:pt idx="3"&gt;&lt;c:v&gt;Apr&lt;/c:v&gt;&lt;/c:pt&gt;
+&lt;/c:strCache&gt;&lt;/c:strRef&gt;&lt;/c:cat&gt;
+&lt;c:val&gt;&lt;c:numRef&gt;&lt;c:numCache&gt;&lt;c:formatCode&gt;General&lt;/c:formatCode&gt;&lt;c:ptCount val="4"/&gt;
+  &lt;c:pt idx="0"&gt;&lt;c:v&gt;10&lt;/c:v&gt;&lt;/c:pt&gt;
+  &lt;c:pt idx="1"&gt;&lt;c:v&gt;20&lt;/c:v&gt;&lt;/c:pt&gt;
+  &lt;c:pt idx="3"&gt;&lt;c:v&gt;40&lt;/c:v&gt;&lt;/c:pt&gt;
+&lt;/c:numCache&gt;&lt;/c:numRef&gt;&lt;/c:val&gt;</code></pre>
+<p>
+    A blank point is not written as an empty entry. It is not written at all. <code>c:ptCount</code> says how many
+    points there are, and each point that is there says which one it is, with <code>idx</code>. The categories and
+    each series are cached apart, each with its own gaps, so the only thing that ties <code>Mar</code> to its value
+    is the number 2.
+</p>
+<p>
+    8.7.1 read every <code>c:v</code> in order and kept the text alone. For this cache it gave:
+</p>
+<pre><code>labels  ["Jan","Mar","Apr"]
+values  ["10","20","40"]</code></pre>
+<p>
+    Nothing in that says which value goes with which label, and anyone reading it, officeParser's own writers
+    included, paired them by position. March got 20, which belongs to the second point, the one with no label.
+    That is the chart's table as 8.7.1's HTML output wrote it:
+</p>
+<pre><code>        Sales
+Jan     10
+Mar     20
+Apr     40</code></pre>
+
+<h2>Pairing by Point Index</h2>
+<p>
+    PR #150 keeps the indexes. Each list gets a list of the same length beside it holding each entry's point
+    index, and the categories say how many points there are:
+</p>
+<pre><code>labels        ["Jan","Mar","Apr"]    labelIndexes  [0,2,3]
+values        ["10","20","40"]       valueIndexes  [0,1,3]
+pointCount    4</code></pre>
+<p>
+    The lists are not padded with blanks up to <code>pointCount</code>. A file states its own point count, and a
+    small file can state a very large one: padding would make the output as large as the file says, not as large
+    as what it holds. Lists that existed keep their entries and their order, so code that read them before reads
+    the same. An index list is kept only when every entry has one and they ascend; a list without one holds its
+    points in order. Point labels (<code>pointLabels</code>, a data label's text) get
+    <code>pointLabelIndexes</code> the same way.
+</p>
+<p>
+    Every writer that lays a chart out by point now pairs through the indexes: one row (or one group of bars) for
+    each point index that holds a label or a value, in order, and each list's entry for that index in it. Switch
+    between the two ways of pairing below. The entries are the cache as 8.8.0 reads it, and the table under them is
+    what each version's HTML output wrote:
+</p>
+<figure class="demo demo-pairing-figure" data-demo="pairing" data-pairing='{"cases":[{"id":"gaps","label":"Issue #136’s cache","8.7.1":[["","Sales"],["Jan","10"],["Mar","20"],["Apr","40"]],"8.8.0":[["","Sales"],["Jan","10"],["","20"],["Mar",""],["Apr","40"]],"pointCount":4,"labels":[[0,"Jan"],[2,"Mar"],[3,"Apr"]],"series":[{"name":"Sales","values":[[0,"10"],[1,"20"],[3,"40"]]}],"notes":{"position":"8.7.1 gave March the 20 of the point with no label, and wrote three rows for four points.","index":"8.8.0 writes a row for each point that holds a label or a value: 20 stands on a row with no label, and March has no value."}},{"id":"twoSeries","label":"Two series, one blank value","8.7.1":[["","North","South"],["Jan","12","8"],["Feb","15","11"],["Mar","9","13"],["Apr","14",""]],"8.8.0":[["","North","South"],["Jan","12","8"],["Feb","15",""],["Mar","9","11"],["Apr","14","13"]],"pointCount":4,"labels":[[0,"Jan"],[1,"Feb"],[2,"Mar"],[3,"Apr"]],"series":[{"name":"North","values":[[0,"12"],[1,"15"],[2,"9"],[3,"14"]]},{"name":"South","values":[[0,"8"],[2,"11"],[3,"13"]]}],"notes":{"position":"South has no value for February. Paired by position, its 11 went to February, its 13 to March, and April was left blank.","index":"Each value stands at its point: February is blank for South, March holds 11 and April 13."}}]}'>
+    <table role="table">
+        <thead role="rowgroup">
+            <tr role="row"><th role="columnheader">Row of the table</th><th role="columnheader">8.7.1 wrote</th><th role="columnheader">8.8.0 wrote</th></tr>
+        </thead>
+        <tbody role="rowgroup">
+            <tr role="row"><td role="cell">1</td><td role="cell" data-label="8.7.1 wrote">Jan, 10</td><td role="cell" data-label="8.8.0 wrote">Jan, 10 (idx 0)</td></tr>
+            <tr role="row"><td role="cell">2</td><td role="cell" data-label="8.7.1 wrote">Mar, 20</td><td role="cell" data-label="8.8.0 wrote">no label, 20 (idx 1)</td></tr>
+            <tr role="row"><td role="cell">3</td><td role="cell" data-label="8.7.1 wrote">Apr, 40</td><td role="cell" data-label="8.8.0 wrote">Mar, no value (idx 2)</td></tr>
+            <tr role="row"><td role="cell">4</td><td role="cell" data-label="8.7.1 wrote">no row</td><td role="cell" data-label="8.8.0 wrote">Apr, 40 (idx 3)</td></tr>
+        </tbody>
+    </table>
+    <figcaption>#136's cache, and a chart of two series where one has no value for February. Each entry stands at
+        its own point index or, paired by position, at its place in its list; red entries are away from their
+        point. The tables are the real HTML output of each version (<code>htmlConfig.chartJsSrc</code> empty, so
+        the chart is written as its table).</figcaption>
+</figure>
+<p>
+    OpenDocument charts had the same fault in another shape. Their data is a small table, a row per point, and
+    8.7.1 dropped a blank category's label but kept its values, which then paired with the next row's category; a
+    blank value was read as the text <code>NaN</code> that LibreOffice writes for it. 8.8.0 reads each row as its
+    point, with the same index lists.
+</p>
+
+<h2>Quarters Under Years</h2>
+<p>
+    A chart can group its categories: quarters under years, regions under countries. Excel caches each level
+    apart, innermost first, and an outer label stands only on the first point of its group (#139):
+</p>
+<pre><code>&lt;c:multiLvlStrCache&gt;&lt;c:ptCount val="4"/&gt;
+  &lt;c:lvl&gt; Q1 (idx 0)  Q2 (idx 1)  Q1 (idx 2)  Q2 (idx 3) &lt;/c:lvl&gt;
+  &lt;c:lvl&gt; 2025 (idx 0)  2026 (idx 2) &lt;/c:lvl&gt;
+&lt;/c:multiLvlStrCache&gt;</code></pre>
+<p>
+    8.7.1 ran the levels into one list, so four values met six labels:
+</p>
+<pre><code>labels  ["Q1","Q2","Q1","Q2","2025","2026"]
+values  ["1","2","3","4"]</code></pre>
+<p>
+    8.8.0 keeps <code>labels</code> to the innermost level, as for a chart of one level, and puts every level in
+    <code>labelLevels</code>, each with its indexes. An outer label covers the points from its index to the next
+    label's:
+</p>
+<pre><code>labels       ["Q1","Q2","Q1","Q2"]
+labelLevels  [{ labels: ["Q1","Q2","Q1","Q2"], labelIndexes: [0,1,2,3] },
+              { labels: ["2025","2026"], labelIndexes: [0,2] }]</code></pre>
+<p>
+    That is a change to <code>labels</code> for such charts, and a fix: a list of six labels for four points was
+    never right. A chart's table gets a column for each outer level, before the label column, with an outer label
+    on its first point's row, as the sheet behind the chart holds it. 8.8.0's Markdown output:
+</p>
+<pre><code>|  |  | Sales |
+| --- | --- | --- |
+| 2025 | Q1 | 1 |
+|  | Q2 | 2 |
+| 2026 | Q1 | 3 |
+|  | Q2 | 4 |</code></pre>
+
+<h2>The Text a Chart Shows</h2>
+<p>
+    A cache holds raw values: a date is a day count, a share is a fraction. The format the chart shows them in is
+    beside them (<code>c:formatCode</code>), and PR #151 reads it. Each series keeps its <code>formatCode</code>
+    and <code>shownValues</code>, the categories <code>labelFormatCode</code> and <code>shownLabels</code>, and the
+    raw values stay as they were:
+</p>
+<pre><code>labels       ["45658","45689"]           shownLabels  ["Jan-25","Feb-25"]
+Revenue      ["1250000","1500000"]       shownValues  ["£1,250,000","£1,500,000"]
+Margin       ["0.12","0.15"]             shownValues  ["12%","15%"]</code></pre>
+<p>
+    The shown text lines up with the raw list, so it shares its indexes. A chart's table writes the shown text:
+</p>
+<pre><code>|  | Revenue | Margin |
+| --- | --- | --- |
+| Jan-25 | £1,250,000 | 12% |
+| Feb-25 | £1,500,000 | 15% |</code></pre>
+
+<h2>Every Axis</h2>
+<p>
+    That chart has bars on a date axis and a value axis on the left, and a line of margins on a second value axis
+    on the right. 8.7.1 read the first category axis and the first value axis, by kind. A date axis is not a
+    category axis, so the X title was lost, and the right-hand axis's title with it:
+</p>
+<pre><code>8.7.1  yAxisTitle "Revenue (£)"                        (no xAxisTitle, no "Margin %")
+8.8.0  xAxisTitle "Month", yAxisTitle "Revenue (£)"
+       axes: Month (date, bottom), Revenue (£) (value, left), Margin % (value, right),
+             a hidden date axis (bottom)
+       Revenue: chartType "bar", axisIds ["11","12"]
+       Margin:  chartType "line", axisIds ["13","14"]</code></pre>
+<p>
+    8.8.0 keeps every axis in <code>axes</code> (its id, kind, side, title, and whether it is hidden) and gives each
+    series the kind of chart it is drawn as and the axes it is drawn on. <code>xAxisTitle</code> and
+    <code>yAxisTitle</code> keep their meaning, now taken from the chart's primary axes: the axes it lists first,
+    whichever plot group comes first in the file. In a scatter
+    chart both axes are value axes, so 8.7.1's "first value axis" was the horizontal one: its title came back as
+    <code>yAxisTitle</code>. In 8.8.0 it is <code>xAxisTitle</code>. HTML and native PDF output draw a series on a
+    right-hand value axis on a second axis there; the native PDF engine does so in every chart but a scatter or bubble chart.
+</p>
+
+<h2>X Values and Bubble Sizes</h2>
+<p>
+    In a scatter chart each series has its own X values (<code>c:xVal</code>), and a bubble series has sizes too
+    (<code>c:bubbleSize</code>). 8.7.1 kept the first series' X values as the chart's labels and dropped the rest. A
+    chart of two servers, one measured at 1 and 2 users and the other at 100 and 200, read as if both were measured
+    at 1 and 2 (#144). 8.8.0 keeps <code>xValues</code> per series and <code>bubbleSizes</code>, each with its
+    indexes, and leaves <code>labels</code> as it was. The table gives each series its own columns, under a header
+    row that spans them, which a pipe table cannot write, so Markdown output writes this one as an HTML table. Its cells:
+</p>
+<pre><code>Server A        Server B
+Users   ms      Users   ms
+1       10      100     30
+2       20      200     40</code></pre>
+<p>
+    HTML and native PDF output draw scatter and bubble charts as points, a bubble's radius from its size.
+</p>
+
+<h2>Every Output Writes a Chart</h2>
+<p>
+    Markdown and RTF output wrote nothing for a chart, with no warning. Written alone, a chart of two series came out of
+    8.7.1 as 107 bytes of RTF with no table in it, and as Markdown holding the workbook's properties and no chart. 8.8.0 writes the
+    chart's data as a table under its title, as DOCX output does. Its RTF, read back by officeParser and written as
+    Markdown:
+</p>
+<pre><code>**Sales**
+
+|  | North | South |
+| --- | --- | --- |
+| Jan | 12 | 8 |
+| Feb | 15 |  |
+| Mar | 9 | 11 |
+| Apr | 14 | 13 |</code></pre>
+<p>
+    So every writer writes a chart's data now. DOCX, ODT, LaTeX, Markdown, RTF, PPTX, ODP, XLSX and ODS write it as
+    a table. HTML writes a Chart.js chart, or the table when <code>htmlConfig.chartJsSrc</code> is empty. The native
+    PDF engine draws it: bars, or points for a scatter or bubble chart, with category levels and, except in a scatter or bubble chart, a right-hand axis.
+    Plain text and chunks write the chart's text, its labels and then each series' name and values, as before: that is text
+    to search, not a table, and it is not paired.
+</p>
+
+<h2>What It Does Not Do</h2>
+<ul>
+    <li>Category levels, X values and bubble sizes are read from OpenXML charts (DOCX, PPTX, XLSX) only. An
+        OpenDocument chart's axes are read, but not which side each stands on, so its series share one axis in HTML
+        and PDF output.</li>
+    <li>A point that is blank in every list has no row: writers write a row for each point index that holds a
+        label or a value, and never pad to <code>pointCount</code>.</li>
+    <li>The native PDF engine draws a chart of at most 12 series, and at most 120 groups of bars or 2,000 points
+        of a scatter or bubble chart; a larger chart is written as its data's text.</li>
+</ul>
+<p>
+    If you read <code>chartData</code> yourself, pair a label with a value through their indexes when they have
+    them, and by position only when they do not. The fields are listed in the README's
+    <a href="https://github.com/harshankur/officeParser#4-charts">Charts</a> section, and the changes in the
+    <a href="https://github.com/harshankur/officeParser/blob/master/CHANGELOG.md">changelog</a> under 8.8.0. Thank
+    you to setthase for the reports, which came with sample files, the XML that shows the problem, and the shape
+    of a fix.
+</p>]]></content:encoded>
+    </item>
+    <item>
+      <title>When &#39;250&#39; Is More Than &#39;1000&#39;: Comparing Numbers in a Template</title>
+      <link>https://officeparser.harshankur.com/blog/comparing-numbers-in-templates.html</link>
+      <guid isPermaLink="true">https://officeparser.harshankur.com/blog/comparing-numbers-in-templates.html</guid>
+      <pubDate>Thu, 12 Nov 2026 00:00:00 GMT</pubDate>
+      <dc:creator>Harsh Ankur</dc:creator>
+      <category>Format Deep Dives</category>
+      <description>Why two texts that read as numbers still compare as text in officeParser 8.8.0&#39;s templates, the warning that says so, numericTextComparison comparing twenty-digit ids exactly, filters and &lt;&gt; in conditions, and dataNumberSeparators as a list that refuses text two ways read differently.</description>
+      <content:encoded><![CDATA[<p>
+    A stock list is kept in a spreadsheet and exported for a template, so every value arrives as text. The template
+    says which items to reorder:
+</p>
+<pre><code>{{ for row in rows }}{{ if row.stock &lt; row.reorderAt }}Reorder {{ row.name }}. {{ endif }}{{ endfor }}</code></pre>
+<pre><code>bolts     stock "250"    reorderAt "1000"
+nuts      stock "90"     reorderAt "100"
+washers   stock "5000"   reorderAt "800"</code></pre>
+<p>
+    officeParser renders that as <code>Reorder washers.</code> Bolts and nuts are running out and are not on the
+    list; washers, of which there are plenty, are. Each comparison was right for what it compared: two texts,
+    character by character, and <code>"5000"</code> comes before <code>"800"</code> for the same reason
+    <code>"apple"</code> comes before <code>"banana"</code>.
+</p>
+<p>
+    8.8.0 does not change that answer by default. It says so instead, and gives a way to compare such texts as
+    numbers, exactly. This post is about why the default stays, what "exactly" takes when a number has twenty
+    digits, and the other things 8.8.0 lets a condition do: filters, <code>&lt;&gt;</code>, and data written with
+    more than one kind of decimal separator.
+</p>
+
+<h2>Why the Default Stays</h2>
+<p>
+    Since 8.7.0, text compared with a number typed in the tag is read as that number:
+    <code>{{ if total &gt; 100 }}</code> with <code>total: "250"</code> is true. There, one side is plainly a
+    number, so the other is meant as one. Between two texts there is no such clue. A spreadsheet column of text
+    may be quantities, or it may be codes: part numbers, postcodes, ids, account numbers. Read as numbers,
+    <code>"007"</code> equals <code>"7"</code>, and a template that tells two codes apart would start treating them
+    as the same. Changing the default would change documents that render correctly today, with no word.
+</p>
+<p>
+    So two texts still compare as text. What 8.8.0 adds is a warning, <code>TEMPLATE_NUMBERS_COMPARED_AS_TEXT</code>,
+    when a condition orders two texts that both read as numbers. For the stock list, a render now reports:
+</p>
+<pre><code>TEMPLATE_NUMBERS_COMPARED_AS_TEXT
+{"tag":"{{ if row.stock &lt; row.reorderAt }}","part":"word/document.xml","operator":"&lt;",
+ "left":"250","right":"1000","differs":true}
+Template tag '{{ if row.stock &lt; row.reorderAt }}' in word/document.xml compares two texts that read as
+numbers, '250' &lt; '1000', as text, character by character, which here answers otherwise than comparing them
+as numbers. Set numericTextComparison to 'number' to compare such texts as numbers, or to 'text' to keep
+comparing them as text without this warning.</code></pre>
+<p>
+    It comes once per tag in a render or a check, for the first such comparison, however many rows the loop has.
+    <code>differs</code> says whether comparing as numbers would have answered otherwise for that pair. Only
+    <code>&lt;</code>, <code>&lt;=</code>, <code>&gt;</code> and <code>&gt;=</code> are reported: equality between two
+    texts is what codes need, and is no sign of a mistake.
+</p>
+
+<h2>Comparing as Numbers, Exactly</h2>
+<p>
+    <code>numericTextComparison: 'number'</code> compares two texts that both read as numbers as numbers, for
+    every operator. The stock list then renders <code>Reorder bolts. Reorder nuts.</code>, with no warning.
+    <code>'text'</code> keeps comparing them as text and says nothing, for a template that orders codes on purpose.
+</p>
+<p>
+    The obvious way to compare as numbers is to turn both texts into JavaScript numbers. That is wrong for the data
+    this option is for. A double holds about sixteen significant digits, and an id often has more:
+</p>
+<pre><code>Number('12345678901234567890') === Number('12345678901234567891')   // true</code></pre>
+<p>
+    So 8.8.0 does not compare doubles. It reads a number from text as its sign, its digits with no leading or
+    trailing zeros, and where the point stands among them, and compares those: the sign first, then where the point
+    stands, then the digits as text, so no digit is ever rounded away. With <code>{{ if order == last }}</code> and those two ids, the answer is
+    <code>New order</code> under <code>'number'</code>, as it is by default. The same reading makes
+    <code>"1.0"</code> equal <code>"1"</code>, and, as said above, <code>"007"</code> equal <code>"7"</code>: the
+    option is for columns of quantities.
+</p>
+<p>
+    A text compares as a number under <code>'number'</code> only if it reads as one the way a number picture reads
+    it: an optional sign, digits, a point, an exponent, white space around, all as
+    <code>dataNumberSeparators</code> says. A text past the range of a double (about 1.8e308, such as
+    <code>"1e400"</code>) is no number there, as it is no number for <code>format</code>, and compares as text. A
+    text beside a text that is no number compares as text too.
+</p>
+
+<h2>Try a Pair</h2>
+<p>
+    Pick two texts, an operator and a way of reading numbers. Every answer below is what a real render of
+    <code>{{ if a &lt; b }}</code> or <code>{{ if a == b }}</code> gave, by default and with
+    <code>numericTextComparison: 'number'</code>; each reading is what a number picture made of that text:
+</p>
+<figure class="demo demo-numtext-figure" data-demo="numtext" data-numtext='{"texts":["250","1000","007","7","1.0","1","1.250","12,50","12345678901234567890","12345678901234567891"],"ops":["&lt;","&#61;&#61;"],"settings":[{"id":"none","label":"Not given","short":"Not given"},{"id":"german","label":"{ decimal: &#39;,&#39;, group: &#39;.&#39; }","short":"One way: &#39;,&#39; and &#39;.&#39;"},{"id":"list","label":"[{ decimal: &#39;,&#39;, group: &#39;.&#39; }, { decimal: &#39;.&#39; }]","short":"A list of two ways"}],"readings":{"none":[{"value":"250"},{"value":"1,000"},{"value":"7"},{"value":"7"},{"value":"1"},{"value":"1"},{"value":"1.25"},{"none":"unformattable"},{"value":"12,345,678,901,234,600,000"},{"value":"12,345,678,901,234,600,000"}],"german":[{"value":"250"},{"value":"1,000"},{"value":"7"},{"value":"7"},{"none":"unformattable"},{"value":"1"},{"value":"1,250"},{"value":"12.5"},{"value":"12,345,678,901,234,600,000"},{"value":"12,345,678,901,234,600,000"}],"list":[{"value":"250"},{"value":"1,000"},{"value":"7"},{"value":"7"},{"value":"1"},{"value":"1"},{"ambiguous":[1250,1.25]},{"value":"12.5"},{"value":"12,345,678,901,234,600,000"},{"value":"12,345,678,901,234,600,000"}]},"results":{"&lt; none":["FSF FWT FSF TWF FSF FSF FSF FF FWT FWT","TWF FSF FSF TWF FSF FSF FSF TT TST TST","TST TST FSF TWF TWF TWF TWF TT TST TST","FWT FWT FSF FSF FSF FSF FSF FF FWT FWT","TST TST FWT TST FSF FSF TST TT TST TST","TST TST FWT TST TWF FSF TST TT TST TST","TST TST FWT TST FSF FSF FSF TT TST TST","TT FF FF TT FF FF FF FF TT TT","TWF FSF FSF TWF FSF FSF FSF FF FSF TST","TWF FSF FSF TWF FSF FSF FSF FF FSF FSF"],"&lt; german":["FSF FWT FSF TWF FF FSF FWT FSF FWT FWT","TWF FSF FSF TWF FF FSF FWT TWF TST TST","TST TST FSF TWF TT TWF TST TST TST TST","FWT FWT FSF FSF FF FSF FWT FWT FWT FWT","TT TT FF TT FF FF TT TT TT TT","TST TST FWT TST TT FSF TST TST TST TST","TWF TWF FSF TWF FF FSF FSF TWF TST TST","TST FWT FSF TWF FF FSF FWT FSF TST TST","TWF FSF FSF TWF FF FSF FSF FSF FSF TST","TWF FSF FSF TWF FF FSF FSF FSF FSF FSF"],"&lt; list":["FSF FWT FSF TWF FSF FSF FwA FSF FWT FWT","TWF FSF FSF TWF FSF FSF FwA TWF TST TST","TST TST FSF TWF TWF TWF TwA TST TST TST","FWT FWT FSF FSF FSF FSF FwA FWT FWT FWT","TST TST FWT TST FSF FSF TwA TST TST TST","TST TST FWT TST TWF FSF TwA TST TST TST","TwA TwA FwA TwA FwA FwA FwA TwA TwA TwA","TST FWT FSF TWF FSF FSF FwA FSF TST TST","TWF FSF FSF TWF FSF FSF FwA FSF FSF TST","TWF FSF FSF TWF FSF FSF FwA FSF FSF FSF"],"&#61;&#61; none":["TT FF FF FF FF FF FF FF FF FF","FF TT FF FF FF FF FF FF FF FF","FF FF TT FT FF FF FF FF FF FF","FF FF FT TT FF FF FF FF FF FF","FF FF FF FF TT FT FF FF FF FF","FF FF FF FF FT TT FF FF FF FF","FF FF FF FF FF FF TT FF FF FF","FF FF FF FF FF FF FF TT FF FF","FF FF FF FF FF FF FF FF TT FF","FF FF FF FF FF FF FF FF FF TT"],"&#61;&#61; german":["TT FF FF FF FF FF FF FF FF FF","FF TT FF FF FF FF FF FF FF FF","FF FF TT FT FF FF FF FF FF FF","FF FF FT TT FF FF FF FF FF FF","FF FF FF FF TT FF FF FF FF FF","FF FF FF FF FF TT FF FF FF FF","FF FF FF FF FF FF TT FF FF FF","FF FF FF FF FF FF FF TT FF FF","FF FF FF FF FF FF FF FF TT FF","FF FF FF FF FF FF FF FF FF TT"],"&#61;&#61; list":["TT FF FF FF FF FF FA FF FF FF","FF TT FF FF FF FF FA FF FF FF","FF FF TT FT FF FF FA FF FF FF","FF FF FT TT FF FF FA FF FF FF","FF FF FF FF TT FT FA FF FF FF","FF FF FF FF FT TT FA FF FF FF","FA FA FA FA FA FA TA FA FA FA","FF FF FF FF FF FF FA TT FF FF","FF FF FF FF FF FF FA FF TT FF","FF FF FF FF FF FF FA FF FF TT"]},"notes":{"12345678901234567890":"A picture writes the double; compared as numbers, every digit counts.","12345678901234567891":"A picture writes the double; compared as numbers, every digit counts."}}'>
+    <table role="table">
+        <thead role="rowgroup">
+            <tr role="row"><th role="columnheader">Condition</th><th role="columnheader">dataNumberSeparators</th><th role="columnheader">Default</th><th role="columnheader">'number'</th></tr>
+        </thead>
+        <tbody role="rowgroup">
+            <tr role="row"><td role="cell"><code>'250' &lt; '1000'</code></td><td role="cell" data-label="dataNumberSeparators">Not given</td><td role="cell" data-label="Default">false, warned</td><td role="cell" data-label="'number'">true</td></tr>
+            <tr role="row"><td role="cell"><code>'007' == '7'</code></td><td role="cell" data-label="dataNumberSeparators">Not given</td><td role="cell" data-label="Default">false</td><td role="cell" data-label="'number'">true</td></tr>
+            <tr role="row"><td role="cell"><code>'1.0' == '1'</code></td><td role="cell" data-label="dataNumberSeparators">Not given</td><td role="cell" data-label="Default">false</td><td role="cell" data-label="'number'">true</td></tr>
+            <tr role="row"><td role="cell"><code>'12345678901234567890' == '12345678901234567891'</code></td><td role="cell" data-label="dataNumberSeparators">Not given</td><td role="cell" data-label="Default">false</td><td role="cell" data-label="'number'">false</td></tr>
+            <tr role="row"><td role="cell"><code>'12,50' &lt; '250'</code></td><td role="cell" data-label="dataNumberSeparators">Not given</td><td role="cell" data-label="Default">true</td><td role="cell" data-label="'number'">true, as text: '12,50' is no number</td></tr>
+            <tr role="row"><td role="cell"><code>'12,50' &lt; '250'</code></td><td role="cell" data-label="dataNumberSeparators"><code>{ decimal: ',', group: '.' }</code></td><td role="cell" data-label="Default">true, warned</td><td role="cell" data-label="'number'">true</td></tr>
+            <tr role="row"><td role="cell"><code>'1.250' &lt; '250'</code></td><td role="cell" data-label="dataNumberSeparators">The list of both ways</td><td role="cell" data-label="Default">true, warned</td><td role="cell" data-label="'number'">refused, <code>ambiguous-number</code></td></tr>
+        </tbody>
+    </table>
+    <figcaption>Ten texts, two operators and three settings: 600 conditions, each rendered by 8.8.0 twice. The
+        list is <code>[{ decimal: ',', group: '.' }, { decimal: '.' }]</code>.</figcaption>
+</figure>
+
+<h2>Filters in a Condition, and &lt;&gt;</h2>
+<p>
+    A form answer is <code>Yes</code>, <code>yes</code> or <code>YES</code>. In 8.7.1 a condition had no way to
+    compare it without case: <code>{{ if answer == "yes" }}</code> with <code>YES</code> is false, and a filter in a
+    condition was refused:
+</p>
+<pre><code>{{ if (answer | lower) == "yes" }}Confirmed{{ else }}Not confirmed{{ endif }}
+8.7.1  TEMPLATE_SYNTAX: uses |, which a condition does not take (a filter goes on a field, and conditions are
+       joined with or)
+8.8.0  Confirmed</code></pre>
+<p>
+    In 8.8.0 a condition's values take the same filters as a field: <code>upper</code>, <code>lower</code>,
+    <code>format</code>, and your own <code>formatters</code>. A filter binds tighter than a comparison, so
+    <code>answer | lower == "yes"</code> is the same as the parenthesised form, and
+    <code>{{ if (a | upper) == (b | upper) }}</code> compares two columns without case. <code>tags()</code> lists the
+    filters an <code>if</code> tag uses.
+</p>
+<p>
+    <code>upper</code> and <code>lower</code> are JavaScript's case mapping, the same in every language:
+    <code>"straße"</code> and <code>"STRASSE"</code> are the same under <code>upper</code>, which is right for German,
+    but the Turkish dotted and dotless i are not mapped the Turkish way. For one language's rules, a formatter of
+    your own does it (<code>fold: v =&gt; String(v).toLocaleLowerCase('tr')</code>), and goes in a condition like any
+    filter.
+</p>
+<p>
+    A word after <code>|</code> that is no filter leaves the tag as text, in a condition as in a field. A condition
+    left as text has no block to open, so its <code>{{ endif }}</code> has nothing to close, and the render is
+    refused with the reason named:
+</p>
+<pre><code>{{ if (answer | lowr) == "yes" }}Confirmed{{ endif }}
+TEMPLATE_SYNTAX: uses lowr after |, which is not a filter (format, upper, lower, or one of formatters)</code></pre>
+<p>
+    And <code>&lt;&gt;</code> now reads as <code>!=</code>, as spreadsheets write it. 8.7.1 refused it ("uses &lt;&gt;;
+    use != to compare"). A single <code>=</code> is still refused, with a message that asks for <code>==</code>.
+</p>
+
+<h2>Numbers Written Two Ways</h2>
+<p>
+    <code>dataNumberSeparators</code>, from 8.7.0, says how numbers written as text in the data are read:
+    <code>{ decimal: ',', group: '.' }</code> reads German or Brazilian data such as <code>1.234,50</code>. But data
+    often comes from two hands: a program that writes <code>12.50</code> and a person who types
+    <code>12,50</code>. One way reads only one of them. In 8.8.0 it takes a list, each way tried in turn. With
+    <code>Total: {{ total | format "#,##0.00" }}</code>:
+</p>
+<table role="table">
+    <thead role="rowgroup">
+        <tr role="row"><th role="columnheader">Data</th><th role="columnheader">Not given</th><th role="columnheader"><code>{ decimal: ',', group: '.' }</code></th><th role="columnheader">The list of both ways</th></tr>
+    </thead>
+    <tbody role="rowgroup">
+        <tr role="row"><td role="cell"><code>"12,50"</code></td><td role="cell" data-label="Not given">refused</td><td role="cell" data-label="{ decimal: ',', group: '.' }">Total: 12.50</td><td role="cell" data-label="The list of both ways">Total: 12.50</td></tr>
+        <tr role="row"><td role="cell"><code>"12.50"</code></td><td role="cell" data-label="Not given">Total: 12.50</td><td role="cell" data-label="{ decimal: ',', group: '.' }">refused</td><td role="cell" data-label="The list of both ways">Total: 12.50</td></tr>
+        <tr role="row"><td role="cell"><code>"1.234,50"</code></td><td role="cell" data-label="Not given">refused</td><td role="cell" data-label="{ decimal: ',', group: '.' }">Total: 1,234.50</td><td role="cell" data-label="The list of both ways">Total: 1,234.50</td></tr>
+        <tr role="row"><td role="cell"><code>"1250"</code></td><td role="cell" data-label="Not given">Total: 1,250.00</td><td role="cell" data-label="{ decimal: ',', group: '.' }">Total: 1,250.00</td><td role="cell" data-label="The list of both ways">Total: 1,250.00</td></tr>
+        <tr role="row"><td role="cell"><code>"1.250"</code></td><td role="cell" data-label="Not given">Total: 1.25</td><td role="cell" data-label="{ decimal: ',', group: '.' }">Total: 1,250.00</td><td role="cell" data-label="The list of both ways">refused, <code>ambiguous-number</code></td></tr>
+        <tr role="row"><td role="cell"><code>"1.000"</code></td><td role="cell" data-label="Not given">Total: 1.00</td><td role="cell" data-label="{ decimal: ',', group: '.' }">Total: 1,000.00</td><td role="cell" data-label="The list of both ways">refused, <code>ambiguous-number</code></td></tr>
+    </tbody>
+</table>
+<p>
+    The last two rows are the point of the list. <code>1.250</code> is twelve hundred and fifty written the German
+    way, or one and a quarter written the English way, and nothing in the text says which. When the ways a list
+    gives read a text as different numbers, it is refused with <code>TEMPLATE_DATA_INVALID</code>, reason
+    <code>ambiguous-number</code>, and every reading in <code>details.readings</code>:
+</p>
+<pre><code>{"reason":"ambiguous-number","tag":"{{ total | format \"#,##0.00\" }}","part":"word/document.xml","kind":"text",
+ "readings":[{"separators":0,"decimal":",","group":".","value":1250},
+             {"separators":1,"decimal":".","group":"","value":1.25}]}</code></pre>
+<p>
+    That is a trade, and it is stated where the option is documented: such a list refuses a German whole number
+    with one group separator, which the German way alone reads. If your data never writes a decimal with a point,
+    keep the single German object, which reads exactly as it did. Where the ways agree, as both read
+    <code>1250</code> as 1250, the text is that number. <code>check()</code> lists the refusal per
+    data entry, so a batch shows which rows to fix: for <code>12,50</code>, <code>1.250</code> and
+    <code>12.50</code>, only the second entry has a problem.
+</p>
+<p>
+    A comparison reads text the same way. With the list, <code>{{ if price &lt; 2000 }}</code> and
+    <code>price: "1.250"</code> is refused, where the German way alone answers true. Two texts under
+    <code>'number'</code> are refused the same way. Under the default they compare as text, and the warning leaves
+    out <code>differs</code>, since there is no one number to compare.
+</p>
+
+<h2>What It Does Not Do</h2>
+<ul>
+    <li><code>numericTextComparison</code> is set for a whole render, not per tag. A template that compares
+        quantities in one place and codes in another has to keep its codes from reading as numbers, or compare
+        them with <code>==</code> under the default.</li>
+    <li>With one way given, nothing is ambiguous: <code>{ decimal: ',', group: '.' }</code> reads
+        <code>1.250</code> as 1250, as before, even if a program meant one and a quarter.</li>
+    <li>The warning names the first comparison of each tag that ordered two number texts as text. Later rows of a
+        loop that do the same are not listed one by one.</li>
+    <li><code>lower</code> and <code>upper</code> are not language-aware; a formatter is.</li>
+</ul>
+<p>
+    The options are in the README's template section and the changes in the
+    <a href="https://github.com/harshankur/officeParser/blob/master/CHANGELOG.md">changelog</a> under 8.8.0. The
+    Template Studio on the <a href="https://officeparser.harshankur.com/">site</a> has a sample of conditions to
+    try them on.
+</p>]]></content:encoded>
+    </item>
     <item>
       <title>What a Workbook Means by Sheet1</title>
       <link>https://officeparser.harshankur.com/blog/what-a-workbook-means-by-sheet1.html</link>

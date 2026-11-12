@@ -1,0 +1,198 @@
+<p>
+    A stock list is kept in a spreadsheet and exported for a template, so every value arrives as text. The template
+    says which items to reorder:
+</p>
+<pre><code>{{ for row in rows }}{{ if row.stock &lt; row.reorderAt }}Reorder {{ row.name }}. {{ endif }}{{ endfor }}</code></pre>
+<pre><code>bolts     stock "250"    reorderAt "1000"
+nuts      stock "90"     reorderAt "100"
+washers   stock "5000"   reorderAt "800"</code></pre>
+<p>
+    officeParser renders that as <code>Reorder washers.</code> Bolts and nuts are running out and are not on the
+    list; washers, of which there are plenty, are. Each comparison was right for what it compared: two texts,
+    character by character, and <code>"5000"</code> comes before <code>"800"</code> for the same reason
+    <code>"apple"</code> comes before <code>"banana"</code>.
+</p>
+<p>
+    8.8.0 does not change that answer by default. It says so instead, and gives a way to compare such texts as
+    numbers, exactly. This post is about why the default stays, what "exactly" takes when a number has twenty
+    digits, and the other things 8.8.0 lets a condition do: filters, <code>&lt;&gt;</code>, and data written with
+    more than one kind of decimal separator.
+</p>
+
+<h2>Why the Default Stays</h2>
+<p>
+    Since 8.7.0, text compared with a number typed in the tag is read as that number:
+    <code>{{ if total &gt; 100 }}</code> with <code>total: "250"</code> is true. There, one side is plainly a
+    number, so the other is meant as one. Between two texts there is no such clue. A spreadsheet column of text
+    may be quantities, or it may be codes: part numbers, postcodes, ids, account numbers. Read as numbers,
+    <code>"007"</code> equals <code>"7"</code>, and a template that tells two codes apart would start treating them
+    as the same. Changing the default would change documents that render correctly today, with no word.
+</p>
+<p>
+    So two texts still compare as text. What 8.8.0 adds is a warning, <code>TEMPLATE_NUMBERS_COMPARED_AS_TEXT</code>,
+    when a condition orders two texts that both read as numbers. For the stock list, a render now reports:
+</p>
+<pre><code>TEMPLATE_NUMBERS_COMPARED_AS_TEXT
+{"tag":"{{ if row.stock &lt; row.reorderAt }}","part":"word/document.xml","operator":"&lt;",
+ "left":"250","right":"1000","differs":true}
+Template tag '{{ if row.stock &lt; row.reorderAt }}' in word/document.xml compares two texts that read as
+numbers, '250' &lt; '1000', as text, character by character, which here answers otherwise than comparing them
+as numbers. Set numericTextComparison to 'number' to compare such texts as numbers, or to 'text' to keep
+comparing them as text without this warning.</code></pre>
+<p>
+    It comes once per tag in a render or a check, for the first such comparison, however many rows the loop has.
+    <code>differs</code> says whether comparing as numbers would have answered otherwise for that pair. Only
+    <code>&lt;</code>, <code>&lt;=</code>, <code>&gt;</code> and <code>&gt;=</code> are reported: equality between two
+    texts is what codes need, and is no sign of a mistake.
+</p>
+
+<h2>Comparing as Numbers, Exactly</h2>
+<p>
+    <code>numericTextComparison: 'number'</code> compares two texts that both read as numbers as numbers, for
+    every operator. The stock list then renders <code>Reorder bolts. Reorder nuts.</code>, with no warning.
+    <code>'text'</code> keeps comparing them as text and says nothing, for a template that orders codes on purpose.
+</p>
+<p>
+    The obvious way to compare as numbers is to turn both texts into JavaScript numbers. That is wrong for the data
+    this option is for. A double holds about sixteen significant digits, and an id often has more:
+</p>
+<pre><code>Number('12345678901234567890') === Number('12345678901234567891')   // true</code></pre>
+<p>
+    So 8.8.0 does not compare doubles. It reads a number from text as its sign, its digits with no leading or
+    trailing zeros, and where the point stands among them, and compares those: the sign first, then where the point
+    stands, then the digits as text, so no digit is ever rounded away. With <code>{{ if order == last }}</code> and those two ids, the answer is
+    <code>New order</code> under <code>'number'</code>, as it is by default. The same reading makes
+    <code>"1.0"</code> equal <code>"1"</code>, and, as said above, <code>"007"</code> equal <code>"7"</code>: the
+    option is for columns of quantities.
+</p>
+<p>
+    A text compares as a number under <code>'number'</code> only if it reads as one the way a number picture reads
+    it: an optional sign, digits, a point, an exponent, white space around, all as
+    <code>dataNumberSeparators</code> says. A text past the range of a double (about 1.8e308, such as
+    <code>"1e400"</code>) is no number there, as it is no number for <code>format</code>, and compares as text. A
+    text beside a text that is no number compares as text too.
+</p>
+
+<h2>Try a Pair</h2>
+<p>
+    Pick two texts, an operator and a way of reading numbers. Every answer below is what a real render of
+    <code>{{ if a &lt; b }}</code> or <code>{{ if a == b }}</code> gave, by default and with
+    <code>numericTextComparison: 'number'</code>; each reading is what a number picture made of that text:
+</p>
+<figure class="demo demo-numtext-figure" data-demo="numtext" data-numtext='{"texts":["250","1000","007","7","1.0","1","1.250","12,50","12345678901234567890","12345678901234567891"],"ops":["&lt;","&#61;&#61;"],"settings":[{"id":"none","label":"Not given","short":"Not given"},{"id":"german","label":"{ decimal: &#39;,&#39;, group: &#39;.&#39; }","short":"One way: &#39;,&#39; and &#39;.&#39;"},{"id":"list","label":"[{ decimal: &#39;,&#39;, group: &#39;.&#39; }, { decimal: &#39;.&#39; }]","short":"A list of two ways"}],"readings":{"none":[{"value":"250"},{"value":"1,000"},{"value":"7"},{"value":"7"},{"value":"1"},{"value":"1"},{"value":"1.25"},{"none":"unformattable"},{"value":"12,345,678,901,234,600,000"},{"value":"12,345,678,901,234,600,000"}],"german":[{"value":"250"},{"value":"1,000"},{"value":"7"},{"value":"7"},{"none":"unformattable"},{"value":"1"},{"value":"1,250"},{"value":"12.5"},{"value":"12,345,678,901,234,600,000"},{"value":"12,345,678,901,234,600,000"}],"list":[{"value":"250"},{"value":"1,000"},{"value":"7"},{"value":"7"},{"value":"1"},{"value":"1"},{"ambiguous":[1250,1.25]},{"value":"12.5"},{"value":"12,345,678,901,234,600,000"},{"value":"12,345,678,901,234,600,000"}]},"results":{"&lt; none":["FSF FWT FSF TWF FSF FSF FSF FF FWT FWT","TWF FSF FSF TWF FSF FSF FSF TT TST TST","TST TST FSF TWF TWF TWF TWF TT TST TST","FWT FWT FSF FSF FSF FSF FSF FF FWT FWT","TST TST FWT TST FSF FSF TST TT TST TST","TST TST FWT TST TWF FSF TST TT TST TST","TST TST FWT TST FSF FSF FSF TT TST TST","TT FF FF TT FF FF FF FF TT TT","TWF FSF FSF TWF FSF FSF FSF FF FSF TST","TWF FSF FSF TWF FSF FSF FSF FF FSF FSF"],"&lt; german":["FSF FWT FSF TWF FF FSF FWT FSF FWT FWT","TWF FSF FSF TWF FF FSF FWT TWF TST TST","TST TST FSF TWF TT TWF TST TST TST TST","FWT FWT FSF FSF FF FSF FWT FWT FWT FWT","TT TT FF TT FF FF TT TT TT TT","TST TST FWT TST TT FSF TST TST TST TST","TWF TWF FSF TWF FF FSF FSF TWF TST TST","TST FWT FSF TWF FF FSF FWT FSF TST TST","TWF FSF FSF TWF FF FSF FSF FSF FSF TST","TWF FSF FSF TWF FF FSF FSF FSF FSF FSF"],"&lt; list":["FSF FWT FSF TWF FSF FSF FwA FSF FWT FWT","TWF FSF FSF TWF FSF FSF FwA TWF TST TST","TST TST FSF TWF TWF TWF TwA TST TST TST","FWT FWT FSF FSF FSF FSF FwA FWT FWT FWT","TST TST FWT TST FSF FSF TwA TST TST TST","TST TST FWT TST TWF FSF TwA TST TST TST","TwA TwA FwA TwA FwA FwA FwA TwA TwA TwA","TST FWT FSF TWF FSF FSF FwA FSF TST TST","TWF FSF FSF TWF FSF FSF FwA FSF FSF TST","TWF FSF FSF TWF FSF FSF FwA FSF FSF FSF"],"&#61;&#61; none":["TT FF FF FF FF FF FF FF FF FF","FF TT FF FF FF FF FF FF FF FF","FF FF TT FT FF FF FF FF FF FF","FF FF FT TT FF FF FF FF FF FF","FF FF FF FF TT FT FF FF FF FF","FF FF FF FF FT TT FF FF FF FF","FF FF FF FF FF FF TT FF FF FF","FF FF FF FF FF FF FF TT FF FF","FF FF FF FF FF FF FF FF TT FF","FF FF FF FF FF FF FF FF FF TT"],"&#61;&#61; german":["TT FF FF FF FF FF FF FF FF FF","FF TT FF FF FF FF FF FF FF FF","FF FF TT FT FF FF FF FF FF FF","FF FF FT TT FF FF FF FF FF FF","FF FF FF FF TT FF FF FF FF FF","FF FF FF FF FF TT FF FF FF FF","FF FF FF FF FF FF TT FF FF FF","FF FF FF FF FF FF FF TT FF FF","FF FF FF FF FF FF FF FF TT FF","FF FF FF FF FF FF FF FF FF TT"],"&#61;&#61; list":["TT FF FF FF FF FF FA FF FF FF","FF TT FF FF FF FF FA FF FF FF","FF FF TT FT FF FF FA FF FF FF","FF FF FT TT FF FF FA FF FF FF","FF FF FF FF TT FT FA FF FF FF","FF FF FF FF FT TT FA FF FF FF","FA FA FA FA FA FA TA FA FA FA","FF FF FF FF FF FF FA TT FF FF","FF FF FF FF FF FF FA FF TT FF","FF FF FF FF FF FF FA FF FF TT"]},"notes":{"12345678901234567890":"A picture writes the double; compared as numbers, every digit counts.","12345678901234567891":"A picture writes the double; compared as numbers, every digit counts."}}'>
+    <table>
+        <thead>
+            <tr><th>Condition</th><th>dataNumberSeparators</th><th>Default</th><th>'number'</th></tr>
+        </thead>
+        <tbody>
+            <tr><td><code>'250' &lt; '1000'</code></td><td>Not given</td><td>false, warned</td><td>true</td></tr>
+            <tr><td><code>'007' == '7'</code></td><td>Not given</td><td>false</td><td>true</td></tr>
+            <tr><td><code>'1.0' == '1'</code></td><td>Not given</td><td>false</td><td>true</td></tr>
+            <tr><td><code>'12345678901234567890' == '12345678901234567891'</code></td><td>Not given</td><td>false</td><td>false</td></tr>
+            <tr><td><code>'12,50' &lt; '250'</code></td><td>Not given</td><td>true</td><td>true, as text: '12,50' is no number</td></tr>
+            <tr><td><code>'12,50' &lt; '250'</code></td><td><code>{ decimal: ',', group: '.' }</code></td><td>true, warned</td><td>true</td></tr>
+            <tr><td><code>'1.250' &lt; '250'</code></td><td>The list of both ways</td><td>true, warned</td><td>refused, <code>ambiguous-number</code></td></tr>
+        </tbody>
+    </table>
+    <figcaption>Ten texts, two operators and three settings: 600 conditions, each rendered by 8.8.0 twice. The
+        list is <code>[{ decimal: ',', group: '.' }, { decimal: '.' }]</code>.</figcaption>
+</figure>
+
+<h2>Filters in a Condition, and &lt;&gt;</h2>
+<p>
+    A form answer is <code>Yes</code>, <code>yes</code> or <code>YES</code>. In 8.7.1 a condition had no way to
+    compare it without case: <code>{{ if answer == "yes" }}</code> with <code>YES</code> is false, and a filter in a
+    condition was refused:
+</p>
+<pre><code>{{ if (answer | lower) == "yes" }}Confirmed{{ else }}Not confirmed{{ endif }}
+8.7.1  TEMPLATE_SYNTAX: uses |, which a condition does not take (a filter goes on a field, and conditions are
+       joined with or)
+8.8.0  Confirmed</code></pre>
+<p>
+    In 8.8.0 a condition's values take the same filters as a field: <code>upper</code>, <code>lower</code>,
+    <code>format</code>, and your own <code>formatters</code>. A filter binds tighter than a comparison, so
+    <code>answer | lower == "yes"</code> is the same as the parenthesised form, and
+    <code>{{ if (a | upper) == (b | upper) }}</code> compares two columns without case. <code>tags()</code> lists the
+    filters an <code>if</code> tag uses.
+</p>
+<p>
+    <code>upper</code> and <code>lower</code> are JavaScript's case mapping, the same in every language:
+    <code>"straße"</code> and <code>"STRASSE"</code> are the same under <code>upper</code>, which is right for German,
+    but the Turkish dotted and dotless i are not mapped the Turkish way. For one language's rules, a formatter of
+    your own does it (<code>fold: v =&gt; String(v).toLocaleLowerCase('tr')</code>), and goes in a condition like any
+    filter.
+</p>
+<p>
+    A word after <code>|</code> that is no filter leaves the tag as text, in a condition as in a field. A condition
+    left as text has no block to open, so its <code>{{ endif }}</code> has nothing to close, and the render is
+    refused with the reason named:
+</p>
+<pre><code>{{ if (answer | lowr) == "yes" }}Confirmed{{ endif }}
+TEMPLATE_SYNTAX: uses lowr after |, which is not a filter (format, upper, lower, or one of formatters)</code></pre>
+<p>
+    And <code>&lt;&gt;</code> now reads as <code>!=</code>, as spreadsheets write it. 8.7.1 refused it ("uses &lt;&gt;;
+    use != to compare"). A single <code>=</code> is still refused, with a message that asks for <code>==</code>.
+</p>
+
+<h2>Numbers Written Two Ways</h2>
+<p>
+    <code>dataNumberSeparators</code>, from 8.7.0, says how numbers written as text in the data are read:
+    <code>{ decimal: ',', group: '.' }</code> reads German or Brazilian data such as <code>1.234,50</code>. But data
+    often comes from two hands: a program that writes <code>12.50</code> and a person who types
+    <code>12,50</code>. One way reads only one of them. In 8.8.0 it takes a list, each way tried in turn. With
+    <code>Total: {{ total | format "#,##0.00" }}</code>:
+</p>
+<table>
+    <thead>
+        <tr><th>Data</th><th>Not given</th><th><code>{ decimal: ',', group: '.' }</code></th><th>The list of both ways</th></tr>
+    </thead>
+    <tbody>
+        <tr><td><code>"12,50"</code></td><td>refused</td><td>Total: 12.50</td><td>Total: 12.50</td></tr>
+        <tr><td><code>"12.50"</code></td><td>Total: 12.50</td><td>refused</td><td>Total: 12.50</td></tr>
+        <tr><td><code>"1.234,50"</code></td><td>refused</td><td>Total: 1,234.50</td><td>Total: 1,234.50</td></tr>
+        <tr><td><code>"1250"</code></td><td>Total: 1,250.00</td><td>Total: 1,250.00</td><td>Total: 1,250.00</td></tr>
+        <tr><td><code>"1.250"</code></td><td>Total: 1.25</td><td>Total: 1,250.00</td><td>refused, <code>ambiguous-number</code></td></tr>
+        <tr><td><code>"1.000"</code></td><td>Total: 1.00</td><td>Total: 1,000.00</td><td>refused, <code>ambiguous-number</code></td></tr>
+    </tbody>
+</table>
+<p>
+    The last two rows are the point of the list. <code>1.250</code> is twelve hundred and fifty written the German
+    way, or one and a quarter written the English way, and nothing in the text says which. When the ways a list
+    gives read a text as different numbers, it is refused with <code>TEMPLATE_DATA_INVALID</code>, reason
+    <code>ambiguous-number</code>, and every reading in <code>details.readings</code>:
+</p>
+<pre><code>{"reason":"ambiguous-number","tag":"{{ total | format \"#,##0.00\" }}","part":"word/document.xml","kind":"text",
+ "readings":[{"separators":0,"decimal":",","group":".","value":1250},
+             {"separators":1,"decimal":".","group":"","value":1.25}]}</code></pre>
+<p>
+    That is a trade, and it is stated where the option is documented: such a list refuses a German whole number
+    with one group separator, which the German way alone reads. If your data never writes a decimal with a point,
+    keep the single German object, which reads exactly as it did. Where the ways agree, as both read
+    <code>1250</code> as 1250, the text is that number. <code>check()</code> lists the refusal per
+    data entry, so a batch shows which rows to fix: for <code>12,50</code>, <code>1.250</code> and
+    <code>12.50</code>, only the second entry has a problem.
+</p>
+<p>
+    A comparison reads text the same way. With the list, <code>{{ if price &lt; 2000 }}</code> and
+    <code>price: "1.250"</code> is refused, where the German way alone answers true. Two texts under
+    <code>'number'</code> are refused the same way. Under the default they compare as text, and the warning leaves
+    out <code>differs</code>, since there is no one number to compare.
+</p>
+
+<h2>What It Does Not Do</h2>
+<ul>
+    <li><code>numericTextComparison</code> is set for a whole render, not per tag. A template that compares
+        quantities in one place and codes in another has to keep its codes from reading as numbers, or compare
+        them with <code>==</code> under the default.</li>
+    <li>With one way given, nothing is ambiguous: <code>{ decimal: ',', group: '.' }</code> reads
+        <code>1.250</code> as 1250, as before, even if a program meant one and a quarter.</li>
+    <li>The warning names the first comparison of each tag that ordered two number texts as text. Later rows of a
+        loop that do the same are not listed one by one.</li>
+    <li><code>lower</code> and <code>upper</code> are not language-aware; a formatter is.</li>
+</ul>
+<p>
+    The options are in the README's template section and the changes in the
+    <a href="https://github.com/harshankur/officeParser/blob/master/CHANGELOG.md">changelog</a> under 8.8.0. The
+    Template Studio on the <a href="https://officeparser.harshankur.com/">site</a> has a sample of conditions to
+    try them on.
+</p>

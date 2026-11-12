@@ -560,6 +560,174 @@
             figure.classList.add('demo-live');
             draw();
         },
+
+        /**
+         * A Markdown document's lines and the blocks a reader cuts them into (`data-cells`: for each sample,
+         * its lines, the lines that are pieces of Markdown in a cell, and for each version the blocks, each a
+         * range of lines, the kind of reading it got and what it was read as, with the Markdown that version
+         * wrote back). A sample and a version are chosen; the lines are shown in their blocks.
+         */
+        cells(figure) {
+            let data;
+            try { data = JSON.parse(figure.dataset.cells || '{}'); } catch { return; }
+            if (!data.cases?.length) return;
+            const versions = Object.keys(data.cases[0].readers || {});
+            if (!versions.length) return;
+            const state = { at: 0, version: versions[0] };
+            const KIND = { html: 'HTML', text: 'Token shown', markdown: 'Markdown' };
+            const body = el('div', { class: 'demo-cells', 'aria-live': 'polite' });
+            const picks = el('div', { class: 'demo-picks', role: 'radiogroup', 'aria-label': 'Sample' });
+            const pickButtons = data.cases.map((c, i) => el('button', {
+                type: 'button', role: 'radio', 'aria-checked': String(i === state.at),
+                onclick: () => { state.at = i; for (const [j, b] of pickButtons.entries()) b.setAttribute('aria-checked', String(j === i)); draw(); },
+            }, c.label));
+            picks.append(...pickButtons);
+            const lineOf = (c, i, tokened) => el('div', { class: `demo-cells-line${c.pieces.includes(i) ? ' demo-cells-piece' : ''}` },
+                el('span', { class: 'demo-cells-num', 'aria-hidden': 'true' }, String(i + 1)),
+                el('code', {}, c.lines[i] || ' '),
+                c.pieces.includes(i) ? el('span', { class: 'demo-cells-tag' }, tokened ? 'token' : 'Markdown') : null);
+            const draw = () => {
+                const c = data.cases[state.at];
+                const reader = c.readers[state.version];
+                const parts = [];
+                let i = 0;
+                while (i < c.lines.length) {
+                    const block = reader.blocks.find(b => b.from === i);
+                    if (block) {
+                        const tokened = block.kind === 'text';
+                        parts.push(el('div', { class: `demo-cells-block demo-cells-${block.kind}` },
+                            el('div', { class: 'demo-cells-note' }, el('span', { class: 'demo-cells-kind' }, KIND[block.kind] || block.kind), el('span', {}, block.note)),
+                            ...Array.from({ length: block.to - block.from + 1 }, (_, k) => lineOf(c, block.from + k, tokened))));
+                        i = block.to + 1;
+                    } else {
+                        parts.push(el('div', { class: 'demo-cells-gap' }, lineOf(c, i, false)));
+                        i++;
+                    }
+                }
+                body.replaceChildren(el('div', { class: 'demo-cells-lines' }, ...parts),
+                    el('div', { class: 'demo-cells-out' }, el('div', { class: 'demo-cells-out-head' }, `${state.version} writes it back as Markdown`), el('pre', {}, el('code', {}, reader.markdown))));
+            };
+            const controls = el('div', { class: 'demo-controls' }, picks,
+                segmented('Version', versions.map(v => [v, v]), state.version, value => { state.version = value; draw(); }));
+            figure.querySelector('.demo-fallback')?.remove();
+            figure.prepend(controls, body);
+            figure.classList.add('demo-live');
+            draw();
+        },
+
+        /**
+         * A chart's cache with blank points, its labels and each series' values placed by position or by
+         * point index (`data-pairing`: for each sample, the points, each entry with its point index, and the
+         * rows of the chart's table each version wrote). Changing how they are paired moves the entries.
+         */
+        pairing(figure) {
+            let data;
+            try { data = JSON.parse(figure.dataset.pairing || '{}'); } catch { return; }
+            if (!data.cases?.length) return;
+            const state = { at: 0, by: 'position' };
+            const MODES = { position: { version: '8.7.1', head: 'Paired by position: the nth label with the nth value' }, index: { version: '8.8.0', head: 'Paired by point index (c:pt idx)' } };
+            const grid = el('div', { class: 'demo-pair' });
+            const out = el('div', { class: 'demo-pair-out', 'aria-live': 'polite' });
+            const note = el('div', { class: 'demo-result', 'aria-live': 'polite' });
+            const picks = el('div', { class: 'demo-picks', role: 'radiogroup', 'aria-label': 'Sample' });
+            const pickButtons = data.cases.map((c, i) => el('button', {
+                type: 'button', role: 'radio', 'aria-checked': String(i === state.at),
+                onclick: () => { state.at = i; for (const [j, b] of pickButtons.entries()) b.setAttribute('aria-checked', String(j === i)); build(); },
+            }, c.label));
+            picks.append(...pickButtons);
+            let chips = [];
+            const place = () => {
+                const c = data.cases[state.at];
+                for (const chip of chips) {
+                    const column = state.by === 'index' ? chip.index : chip.order;
+                    chip.node.style.gridColumn = String(column + 2);
+                    chip.node.classList.toggle('demo-pair-moved', column !== chip.index);
+                }
+                const rows = c[MODES[state.by].version] || [];
+                out.replaceChildren(el('div', { class: 'demo-pair-out-head' }, `The chart's table, as ${MODES[state.by].version} writes it`),
+                    el('div', { class: 'demo-pair-rows', style: `grid-template-columns: repeat(${rows[0]?.length || 1}, minmax(0, 1fr))` },
+                        ...rows.flatMap((row, r) => row.map(cell => el('span', { class: r === 0 ? 'demo-pair-th' : '' }, cell || (r === 0 ? '' : '·'))))));
+                note.replaceChildren(el('span', {}, c.notes?.[state.by] || ''));
+            };
+            const build = () => {
+                const c = data.cases[state.at];
+                const lists = [['Categories', c.labels], ...c.series.map(s => [s.name, s.values])];
+                chips = [];
+                const cells = [el('span', { class: 'demo-pair-corner' }, ''), ...Array.from({ length: c.pointCount }, (_, p) => el('span', { class: 'demo-pair-point', style: `grid-column:${p + 2};grid-row:1` }, `idx ${p}`))];
+                lists.forEach(([name, list], r) => {
+                    cells.push(el('span', { class: 'demo-pair-name', style: `grid-column:1;grid-row:${r + 2}` }, name));
+                    for (let p = 0; p < c.pointCount; p++) cells.push(el('span', { class: 'demo-pair-slot', style: `grid-column:${p + 2};grid-row:${r + 2}`, 'aria-hidden': 'true' }));
+                    list.forEach(([index, text], order) => {
+                        const node = el('span', { class: 'demo-pair-chip', style: `grid-row:${r + 2}`, title: `idx ${index}` }, text);
+                        chips.push({ node, index, order });
+                        cells.push(node);
+                    });
+                });
+                grid.style.gridTemplateColumns = `minmax(4.5rem, auto) repeat(${c.pointCount}, minmax(0, 1fr))`;
+                grid.replaceChildren(...cells);
+                place();
+            };
+            const controls = el('div', { class: 'demo-controls' }, picks,
+                segmented('Pairing', [['position', 'By position (8.7.1)'], ['index', 'By point index (8.8.0)']], state.by, value => { state.by = value; glide(grid, place); }));
+            figure.querySelector('.demo-fallback')?.remove();
+            figure.prepend(controls, grid, out, note);
+            figure.classList.add('demo-live');
+            build();
+        },
+
+        /**
+         * Two texts compared in a template condition (`data-numtext`: the texts, the operators and the
+         * `dataNumberSeparators` settings, each text's reading under each setting, and for every pair, operator
+         * and setting what a real render answered by default and with `numericTextComparison: 'number'`).
+         * Each result is a code: the default's answer (T, F), W when it warned and comparing as numbers answers
+         * otherwise, S when it warned and the answer is the same, w when it warned for a text read two ways,
+         * then the 'number' answer (T, F, or A for refused as ambiguous).
+         */
+        numtext(figure) {
+            let data;
+            try { data = JSON.parse(figure.dataset.numtext || '{}'); } catch { return; }
+            if (!data.texts?.length || !data.results) return;
+            const state = { a: 0, b: 1, op: data.ops[0], setting: data.settings[0].id };
+            const select = (label, chosen, pick) => el('label', { class: 'demo-select' }, el('span', {}, label),
+                el('select', { onchange: event => { pick(Number(event.target.value)); draw(); } },
+                    ...data.texts.map((t, i) => el('option', { value: String(i), selected: i === chosen }, `'${t}'`))));
+            const body = el('div', { class: 'demo-num', 'aria-live': 'polite' });
+            const answer = code => code === 'T' ? 'true' : code === 'F' ? 'false' : 'refused';
+            const reading = (i) => {
+                const r = data.readings[state.setting][i];
+                const text = `'${data.texts[i]}'`;
+                if (r.ambiguous) return el('div', { class: 'demo-num-reading demo-num-two' }, el('code', {}, text), el('span', {}, `reads two ways: ${r.ambiguous.join(' and ')}`));
+                if (r.none) return el('div', { class: 'demo-num-reading demo-num-none' }, el('code', {}, text), el('span', {}, 'is no number'));
+                return el('div', { class: 'demo-num-reading' }, el('code', {}, text), el('span', {}, `reads as ${r.value}`), data.notes?.[data.texts[i]] ? el('span', { class: 'demo-num-aside' }, data.notes[data.texts[i]]) : null);
+            };
+            const draw = () => {
+                const row = data.results[`${state.op} ${state.setting}`][state.a].split(' ')[state.b];
+                const first = row[0], warn = row.length === 3 ? row[1] : '', last = row[row.length - 1];
+                const setting = data.settings.find(s => s.id === state.setting);
+                const numbers = !data.readings[state.setting][state.a].none && !data.readings[state.setting][state.b].none;
+                const warning = warn === 'W' ? 'warned: as numbers the answer is the other one'
+                    : warn === 'S' ? 'warned: as numbers the answer is the same here'
+                    : warn === 'w' ? 'warned: a text reads as two numbers'
+                    : !numbers ? 'no warning: a text that is no number'
+                    : 'no warning: == and != are not reported';
+                body.replaceChildren(
+                    el('pre', { class: 'demo-num-tag' }, el('code', {}, `{{ if a ${state.op} b }}   a: '${data.texts[state.a]}', b: '${data.texts[state.b]}'\ndataNumberSeparators: ${setting.label}`)),
+                    el('div', { class: 'demo-num-readings' }, reading(state.a), reading(state.b)),
+                    el('div', { class: 'demo-num-answers' },
+                        el('div', { class: `demo-num-answer${warn ? ' demo-num-warned' : ''}` }, el('span', { class: 'demo-num-mode' }, 'Default (as text)'), el('strong', {}, answer(first)), el('span', { class: 'demo-num-why' }, warning)),
+                        el('div', { class: `demo-num-answer${last === 'A' ? ' demo-num-refused' : ''}` }, el('span', { class: 'demo-num-mode' }, "numericTextComparison: 'number'"), el('strong', {}, answer(last)),
+                            el('span', { class: 'demo-num-why' }, last === 'A' ? 'TEMPLATE_DATA_INVALID, ambiguous-number' : numbers ? 'compared as numbers, exactly' : 'compared as text: a text that is no number'))));
+            };
+            const controls = el('div', { class: 'demo-controls' },
+                select('a', state.a, v => { state.a = v; }),
+                segmented('Operator', data.ops.map(op => [op, op]), state.op, value => { state.op = value; draw(); }),
+                select('b', state.b, v => { state.b = v; }),
+                segmented('dataNumberSeparators', data.settings.map(s => [s.id, s.short || s.label]), state.setting, value => { state.setting = value; draw(); }));
+            figure.querySelector('.demo-fallback')?.remove();
+            figure.prepend(controls, body);
+            figure.classList.add('demo-live');
+            draw();
+        },
     };
 
     const wireDemos = () => {

@@ -1,0 +1,234 @@
+<p>
+    A chart in a Word document, a slide or a workbook carries a copy of the data it draws, so that a program can
+    show it without opening the sheet behind it. That copy is the chart's cache, and it is what officeParser reads
+    into a chart's <code>chartData</code>. A blank cell in the sheet is a gap in the cache, and until 8.8.0 the gap
+    vanished on the way in: the values after it moved to the wrong categories, in the data and in every output.
+</p>
+<p>
+    setthase reported that (<a href="https://github.com/harshankur/officeParser/issues/136">#136</a>)
+    and fixed it (<a href="https://github.com/harshankur/officeParser/pull/150">#150</a>), then reported four more
+    things a cache holds that officeParser lost: category levels
+    (<a href="https://github.com/harshankur/officeParser/issues/139">#139</a>), number formats
+    (<a href="https://github.com/harshankur/officeParser/issues/140">#140</a>, fixed in their
+    <a href="https://github.com/harshankur/officeParser/pull/151">#151</a>), axes
+    (<a href="https://github.com/harshankur/officeParser/issues/143">#143</a>) and the X values and sizes of scatter and
+    bubble charts (<a href="https://github.com/harshankur/officeParser/issues/144">#144</a>). Their
+    <a href="https://github.com/harshankur/officeParser/pull/132">#132</a> also makes 8.8.0 read charts in Word
+    documents. This post is about what a cache holds, why pairing its lists by position was wrong, and what 8.8.0
+    writes for a chart in every output.
+</p>
+
+<h2>What a Cache Holds</h2>
+<p>
+    Here is the cache from #136, as Excel writes it: one series of four months, with no label for the second month
+    and no value for the third.
+</p>
+<pre><code>&lt;c:cat&gt;&lt;c:strRef&gt;&lt;c:strCache&gt;&lt;c:ptCount val="4"/&gt;
+  &lt;c:pt idx="0"&gt;&lt;c:v&gt;Jan&lt;/c:v&gt;&lt;/c:pt&gt;
+  &lt;c:pt idx="2"&gt;&lt;c:v&gt;Mar&lt;/c:v&gt;&lt;/c:pt&gt;
+  &lt;c:pt idx="3"&gt;&lt;c:v&gt;Apr&lt;/c:v&gt;&lt;/c:pt&gt;
+&lt;/c:strCache&gt;&lt;/c:strRef&gt;&lt;/c:cat&gt;
+&lt;c:val&gt;&lt;c:numRef&gt;&lt;c:numCache&gt;&lt;c:formatCode&gt;General&lt;/c:formatCode&gt;&lt;c:ptCount val="4"/&gt;
+  &lt;c:pt idx="0"&gt;&lt;c:v&gt;10&lt;/c:v&gt;&lt;/c:pt&gt;
+  &lt;c:pt idx="1"&gt;&lt;c:v&gt;20&lt;/c:v&gt;&lt;/c:pt&gt;
+  &lt;c:pt idx="3"&gt;&lt;c:v&gt;40&lt;/c:v&gt;&lt;/c:pt&gt;
+&lt;/c:numCache&gt;&lt;/c:numRef&gt;&lt;/c:val&gt;</code></pre>
+<p>
+    A blank point is not written as an empty entry. It is not written at all. <code>c:ptCount</code> says how many
+    points there are, and each point that is there says which one it is, with <code>idx</code>. The categories and
+    each series are cached apart, each with its own gaps, so the only thing that ties <code>Mar</code> to its value
+    is the number 2.
+</p>
+<p>
+    8.7.1 read every <code>c:v</code> in order and kept the text alone. For this cache it gave:
+</p>
+<pre><code>labels  ["Jan","Mar","Apr"]
+values  ["10","20","40"]</code></pre>
+<p>
+    Nothing in that says which value goes with which label, and anyone reading it, officeParser's own writers
+    included, paired them by position. March got 20, which belongs to the second point, the one with no label.
+    That is the chart's table as 8.7.1's HTML output wrote it:
+</p>
+<pre><code>        Sales
+Jan     10
+Mar     20
+Apr     40</code></pre>
+
+<h2>Pairing by Point Index</h2>
+<p>
+    PR #150 keeps the indexes. Each list gets a list of the same length beside it holding each entry's point
+    index, and the categories say how many points there are:
+</p>
+<pre><code>labels        ["Jan","Mar","Apr"]    labelIndexes  [0,2,3]
+values        ["10","20","40"]       valueIndexes  [0,1,3]
+pointCount    4</code></pre>
+<p>
+    The lists are not padded with blanks up to <code>pointCount</code>. A file states its own point count, and a
+    small file can state a very large one: padding would make the output as large as the file says, not as large
+    as what it holds. Lists that existed keep their entries and their order, so code that read them before reads
+    the same. An index list is kept only when every entry has one and they ascend; a list without one holds its
+    points in order. Point labels (<code>pointLabels</code>, a data label's text) get
+    <code>pointLabelIndexes</code> the same way.
+</p>
+<p>
+    Every writer that lays a chart out by point now pairs through the indexes: one row (or one group of bars) for
+    each point index that holds a label or a value, in order, and each list's entry for that index in it. Switch
+    between the two ways of pairing below. The entries are the cache as 8.8.0 reads it, and the table under them is
+    what each version's HTML output wrote:
+</p>
+<figure class="demo demo-pairing-figure" data-demo="pairing" data-pairing='{"cases":[{"id":"gaps","label":"Issue #136’s cache","8.7.1":[["","Sales"],["Jan","10"],["Mar","20"],["Apr","40"]],"8.8.0":[["","Sales"],["Jan","10"],["","20"],["Mar",""],["Apr","40"]],"pointCount":4,"labels":[[0,"Jan"],[2,"Mar"],[3,"Apr"]],"series":[{"name":"Sales","values":[[0,"10"],[1,"20"],[3,"40"]]}],"notes":{"position":"8.7.1 gave March the 20 of the point with no label, and wrote three rows for four points.","index":"8.8.0 writes a row for each point that holds a label or a value: 20 stands on a row with no label, and March has no value."}},{"id":"twoSeries","label":"Two series, one blank value","8.7.1":[["","North","South"],["Jan","12","8"],["Feb","15","11"],["Mar","9","13"],["Apr","14",""]],"8.8.0":[["","North","South"],["Jan","12","8"],["Feb","15",""],["Mar","9","11"],["Apr","14","13"]],"pointCount":4,"labels":[[0,"Jan"],[1,"Feb"],[2,"Mar"],[3,"Apr"]],"series":[{"name":"North","values":[[0,"12"],[1,"15"],[2,"9"],[3,"14"]]},{"name":"South","values":[[0,"8"],[2,"11"],[3,"13"]]}],"notes":{"position":"South has no value for February. Paired by position, its 11 went to February, its 13 to March, and April was left blank.","index":"Each value stands at its point: February is blank for South, March holds 11 and April 13."}}]}'>
+    <table>
+        <thead>
+            <tr><th>Row of the table</th><th>8.7.1 wrote</th><th>8.8.0 wrote</th></tr>
+        </thead>
+        <tbody>
+            <tr><td>1</td><td>Jan, 10</td><td>Jan, 10 (idx 0)</td></tr>
+            <tr><td>2</td><td>Mar, 20</td><td>no label, 20 (idx 1)</td></tr>
+            <tr><td>3</td><td>Apr, 40</td><td>Mar, no value (idx 2)</td></tr>
+            <tr><td>4</td><td>no row</td><td>Apr, 40 (idx 3)</td></tr>
+        </tbody>
+    </table>
+    <figcaption>#136's cache, and a chart of two series where one has no value for February. Each entry stands at
+        its own point index or, paired by position, at its place in its list; red entries are away from their
+        point. The tables are the real HTML output of each version (<code>htmlConfig.chartJsSrc</code> empty, so
+        the chart is written as its table).</figcaption>
+</figure>
+<p>
+    OpenDocument charts had the same fault in another shape. Their data is a small table, a row per point, and
+    8.7.1 dropped a blank category's label but kept its values, which then paired with the next row's category; a
+    blank value was read as the text <code>NaN</code> that LibreOffice writes for it. 8.8.0 reads each row as its
+    point, with the same index lists.
+</p>
+
+<h2>Quarters Under Years</h2>
+<p>
+    A chart can group its categories: quarters under years, regions under countries. Excel caches each level
+    apart, innermost first, and an outer label stands only on the first point of its group (#139):
+</p>
+<pre><code>&lt;c:multiLvlStrCache&gt;&lt;c:ptCount val="4"/&gt;
+  &lt;c:lvl&gt; Q1 (idx 0)  Q2 (idx 1)  Q1 (idx 2)  Q2 (idx 3) &lt;/c:lvl&gt;
+  &lt;c:lvl&gt; 2025 (idx 0)  2026 (idx 2) &lt;/c:lvl&gt;
+&lt;/c:multiLvlStrCache&gt;</code></pre>
+<p>
+    8.7.1 ran the levels into one list, so four values met six labels:
+</p>
+<pre><code>labels  ["Q1","Q2","Q1","Q2","2025","2026"]
+values  ["1","2","3","4"]</code></pre>
+<p>
+    8.8.0 keeps <code>labels</code> to the innermost level, as for a chart of one level, and puts every level in
+    <code>labelLevels</code>, each with its indexes. An outer label covers the points from its index to the next
+    label's:
+</p>
+<pre><code>labels       ["Q1","Q2","Q1","Q2"]
+labelLevels  [{ labels: ["Q1","Q2","Q1","Q2"], labelIndexes: [0,1,2,3] },
+              { labels: ["2025","2026"], labelIndexes: [0,2] }]</code></pre>
+<p>
+    That is a change to <code>labels</code> for such charts, and a fix: a list of six labels for four points was
+    never right. A chart's table gets a column for each outer level, before the label column, with an outer label
+    on its first point's row, as the sheet behind the chart holds it. 8.8.0's Markdown output:
+</p>
+<pre><code>|  |  | Sales |
+| --- | --- | --- |
+| 2025 | Q1 | 1 |
+|  | Q2 | 2 |
+| 2026 | Q1 | 3 |
+|  | Q2 | 4 |</code></pre>
+
+<h2>The Text a Chart Shows</h2>
+<p>
+    A cache holds raw values: a date is a day count, a share is a fraction. The format the chart shows them in is
+    beside them (<code>c:formatCode</code>), and PR #151 reads it. Each series keeps its <code>formatCode</code>
+    and <code>shownValues</code>, the categories <code>labelFormatCode</code> and <code>shownLabels</code>, and the
+    raw values stay as they were:
+</p>
+<pre><code>labels       ["45658","45689"]           shownLabels  ["Jan-25","Feb-25"]
+Revenue      ["1250000","1500000"]       shownValues  ["£1,250,000","£1,500,000"]
+Margin       ["0.12","0.15"]             shownValues  ["12%","15%"]</code></pre>
+<p>
+    The shown text lines up with the raw list, so it shares its indexes. A chart's table writes the shown text:
+</p>
+<pre><code>|  | Revenue | Margin |
+| --- | --- | --- |
+| Jan-25 | £1,250,000 | 12% |
+| Feb-25 | £1,500,000 | 15% |</code></pre>
+
+<h2>Every Axis</h2>
+<p>
+    That chart has bars on a date axis and a value axis on the left, and a line of margins on a second value axis
+    on the right. 8.7.1 read the first category axis and the first value axis, by kind. A date axis is not a
+    category axis, so the X title was lost, and the right-hand axis's title with it:
+</p>
+<pre><code>8.7.1  yAxisTitle "Revenue (£)"                        (no xAxisTitle, no "Margin %")
+8.8.0  xAxisTitle "Month", yAxisTitle "Revenue (£)"
+       axes: Month (date, bottom), Revenue (£) (value, left), Margin % (value, right),
+             a hidden date axis (bottom)
+       Revenue: chartType "bar", axisIds ["11","12"]
+       Margin:  chartType "line", axisIds ["13","14"]</code></pre>
+<p>
+    8.8.0 keeps every axis in <code>axes</code> (its id, kind, side, title, and whether it is hidden) and gives each
+    series the kind of chart it is drawn as and the axes it is drawn on. <code>xAxisTitle</code> and
+    <code>yAxisTitle</code> keep their meaning, now taken from the chart's primary axes: the axes it lists first,
+    whichever plot group comes first in the file. In a scatter
+    chart both axes are value axes, so 8.7.1's "first value axis" was the horizontal one: its title came back as
+    <code>yAxisTitle</code>. In 8.8.0 it is <code>xAxisTitle</code>. HTML and native PDF output draw a series on a
+    right-hand value axis on a second axis there; the native PDF engine does so in every chart but a scatter or bubble chart.
+</p>
+
+<h2>X Values and Bubble Sizes</h2>
+<p>
+    In a scatter chart each series has its own X values (<code>c:xVal</code>), and a bubble series has sizes too
+    (<code>c:bubbleSize</code>). 8.7.1 kept the first series' X values as the chart's labels and dropped the rest. A
+    chart of two servers, one measured at 1 and 2 users and the other at 100 and 200, read as if both were measured
+    at 1 and 2 (#144). 8.8.0 keeps <code>xValues</code> per series and <code>bubbleSizes</code>, each with its
+    indexes, and leaves <code>labels</code> as it was. The table gives each series its own columns, under a header
+    row that spans them, which a pipe table cannot write, so Markdown output writes this one as an HTML table. Its cells:
+</p>
+<pre><code>Server A        Server B
+Users   ms      Users   ms
+1       10      100     30
+2       20      200     40</code></pre>
+<p>
+    HTML and native PDF output draw scatter and bubble charts as points, a bubble's radius from its size.
+</p>
+
+<h2>Every Output Writes a Chart</h2>
+<p>
+    Markdown and RTF output wrote nothing for a chart, with no warning. Written alone, a chart of two series came out of
+    8.7.1 as 107 bytes of RTF with no table in it, and as Markdown holding the workbook's properties and no chart. 8.8.0 writes the
+    chart's data as a table under its title, as DOCX output does. Its RTF, read back by officeParser and written as
+    Markdown:
+</p>
+<pre><code>**Sales**
+
+|  | North | South |
+| --- | --- | --- |
+| Jan | 12 | 8 |
+| Feb | 15 |  |
+| Mar | 9 | 11 |
+| Apr | 14 | 13 |</code></pre>
+<p>
+    So every writer writes a chart's data now. DOCX, ODT, LaTeX, Markdown, RTF, PPTX, ODP, XLSX and ODS write it as
+    a table. HTML writes a Chart.js chart, or the table when <code>htmlConfig.chartJsSrc</code> is empty. The native
+    PDF engine draws it: bars, or points for a scatter or bubble chart, with category levels and, except in a scatter or bubble chart, a right-hand axis.
+    Plain text and chunks write the chart's text, its labels and then each series' name and values, as before: that is text
+    to search, not a table, and it is not paired.
+</p>
+
+<h2>What It Does Not Do</h2>
+<ul>
+    <li>Category levels, X values and bubble sizes are read from OpenXML charts (DOCX, PPTX, XLSX) only. An
+        OpenDocument chart's axes are read, but not which side each stands on, so its series share one axis in HTML
+        and PDF output.</li>
+    <li>A point that is blank in every list has no row: writers write a row for each point index that holds a
+        label or a value, and never pad to <code>pointCount</code>.</li>
+    <li>The native PDF engine draws a chart of at most 12 series, and at most 120 groups of bars or 2,000 points
+        of a scatter or bubble chart; a larger chart is written as its data's text.</li>
+</ul>
+<p>
+    If you read <code>chartData</code> yourself, pair a label with a value through their indexes when they have
+    them, and by position only when they do not. The fields are listed in the README's
+    <a href="https://github.com/harshankur/officeParser#4-charts">Charts</a> section, and the changes in the
+    <a href="https://github.com/harshankur/officeParser/blob/master/CHANGELOG.md">changelog</a> under 8.8.0. Thank
+    you to setthase for the reports, which came with sample files, the XML that shows the problem, and the shape
+    of a fix.
+</p>

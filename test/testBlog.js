@@ -331,13 +331,13 @@ try {
     check('revisions: the feed writes each note out, its release linked whole', typeof withRevisions !== 'string'
         && String(withRevisions.get('feed.xml')).includes(`<em>(Updated ${Number(latestDay.slice(8))} `) && String(withRevisions.get('feed.xml')).includes(`for <a href="${new URL('../', blog.blog.url).href}#doc/changelog/${latestAnchor}">${latest}</a>: Something came with the release.)</em>`));
     for (const [what, days, said] of [
-        ['a release the changelog has no section for', { updated: latestDay, revisions: [correction, { ...update, release: '0.0.99' }] }, /names the release 0.0.99, which CHANGELOG.md has no section for/],
+        ['a release the changelog has no section for', { published: '2026-01-01', updated: latestDay, revisions: [correction, { ...update, release: '0.0.99' }] }, /names the release 0.0.99, which CHANGELOG.md has no section for/],
         ['an update dated before its release', { published: '2020-01-01', updated: latestDay, revisions: [correction, { ...update, date: '2020-01-02' }] }, /is for .*, which went out on/],
         ['a revision after the day the post was updated', { updated: '2026-01-02', published: '2026-01-01', revisions: [{ ...correction, date: latestDay }, update] }, /is not between the day the post was published/],
         ['revisions on a post never updated', { updated: undefined, revisions: [correction, update] }, /a post with revisions has the day it was updated/],
-        ['a revision id used twice', { updated: latestDay, revisions: [correction, update, { ...correction }] }, /"word" is listed twice/],
-        ['a revision with no note', { updated: latestDay, revisions: [{ ...correction, note: ' ' }, update] }, /"word" has no note/],
-        ['a revision the post does not mark', { updated: latestDay, revisions: [correction, update, { ...correction, id: 'unused' }] }, /"unused" marks nothing/],
+        ['a revision id used twice', { published: '2026-01-01', updated: latestDay, revisions: [correction, update, { ...correction }] }, /"word" is listed twice/],
+        ['a revision with no note', { published: '2026-01-01', updated: latestDay, revisions: [{ ...correction, note: ' ' }, update] }, /"word" has no note/],
+        ['a revision the post does not mark', { published: '2026-01-01', updated: latestDay, revisions: [correction, update, { ...correction, id: 'unused' }] }, /"unused" marks nothing/],
     ]) check(`revisions: ${what} is refused, and said`, typeof builtWith(days) === 'string' && said.test(builtWith(days)), String(builtWith(days)).slice(0, 160));
     fs.writeFileSync(path.join(copy, 'posts', `${second.slug}.html`), original);
     for (const [what, days, said] of [

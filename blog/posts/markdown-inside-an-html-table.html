@@ -1,0 +1,233 @@
+<p>
+    A README that wants two columns side by side reaches for an HTML table, and then wants Markdown inside it:
+    bold text, a list, a code span. GitHub's way of writing that is a blank line on each side of the Markdown:
+</p>
+<pre><code>&lt;table&gt;
+&lt;tr&gt;
+&lt;td&gt;
+
+**Fast**: reads *every* cell.
+
+&lt;/td&gt;
+&lt;/tr&gt;
+&lt;/table&gt;</code></pre>
+<p>
+    officeParser has read that since 8.1.0. But put one more line in the cell, a <code>&lt;div align="center"&gt;</code>
+    around the text, a heading, or a <code>---</code> under the table, and the cell came back empty, with a line
+    like <code>op9ta1at81p:0</code> after the table where the text should have been. 8.8.0 fixes that. This post is
+    about why it happened, which turns out to be one assumption failing several ways, and how 8.8.0 reads such a
+    table instead.
+</p>
+
+<h2>What a Renderer Does With It</h2>
+<p>
+    CommonMark has no idea of a table cell holding Markdown. It sees an HTML block, which starts at a line
+    beginning with a tag such as <code>&lt;table&gt;</code>, <code>&lt;tr&gt;</code>, <code>&lt;td&gt;</code> or
+    <code>&lt;div&gt;</code> and runs to the next blank line. Then a paragraph of Markdown. Then another HTML
+    block. A renderer passes the HTML blocks through as they are and turns the paragraph into
+    <code>&lt;p&gt;</code>, and the browser, given <code>&lt;table&gt;&lt;tr&gt;&lt;td&gt;&lt;p&gt;…&lt;/p&gt;&lt;/td&gt;…</code>,
+    builds one table. The Markdown ends up in the cell because the browser puts it there.
+</p>
+<p>
+    A library that reads Markdown into a tree has no browser to do that, so it has to stitch the pieces back
+    together itself. That is what the blank lines make hard: the table is cut into pieces, some HTML and some
+    Markdown, and the cell exists only once they are joined.
+</p>
+
+<h2>How officeParser Joined the Pieces</h2>
+<p>
+    From 8.1.0 to 8.7.1, the reader split the document at blank lines before reading its blocks. When a
+    piece opened a table, the pieces after it were joined to it while the table stayed open, up to 64 pieces. A
+    piece of HTML was joined as written. A piece of Markdown could not be, because the HTML reader would read
+    <code>**Fast**</code> as two asterisks, so it was set aside and a token joined in its place: a private-use
+    character, a random code made once per document, a colon, the piece's number, and another private-use
+    character. The HTML reader then read the whole table, and each token it found in a cell's text was replaced by
+    its piece, read as Markdown.
+</p>
+<p>
+    A private-use character means nothing on its own (a font may draw it as a box, or not at all), so a token
+    that reached the output read as <code>op9ta1at81p:0</code>: the random code and the piece's number. And a token only became its piece when the
+    HTML reader read it. Every reading of a token anywhere else showed the token and never read the piece.
+</p>
+<p>
+    That was the assumption: that a block holding tokens is always read whole, by the HTML reader. The next step
+    of the reader broke it. After the blank-line split, each block's lines were read again for the Markdown block
+    starts that need no blank line before them: a <code>&lt;div&gt;</code> line alone, a heading, a list item, a
+    rule, a setext underline. Each of those cut the joined table, and a part that held a token but did not start
+    with a tag was read as Markdown, with the token as its text.
+</p>
+<p>
+    Pick a sample below and switch between the two versions to see where each cuts the lines. The blocks come from
+    the reader's own split, logged from a copy of each version with one line added, and the Markdown under them is
+    what each version writes back:
+</p>
+<figure class="demo demo-cells-figure" data-demo="cells" data-cells='{"cases":[{"id":"divLine","label":"A &lt;div&gt; line in the cell","lines":["&lt;table&gt;","&lt;tr&gt;","&lt;td&gt;","","&lt;div align&#61;\"center\"&gt;","","**Fast**: reads *every* cell.","","&lt;/div&gt;","","&lt;/td&gt;","&lt;/tr&gt;","&lt;/table&gt;"],"pieces":[6],"readers":{"8.7.1":{"blocks":[{"from":0,"to":2,"kind":"html","note":"A table, closed at once with its cell empty"},{"from":4,"to":4,"kind":"html","note":"A &lt;div&gt; line alone, cut off as a block of its own"},{"from":6,"to":6,"kind":"text","note":"Paragraph: the piece’s token, read as text"},{"from":8,"to":8,"kind":"html","note":"A closing tag, nothing to read"},{"from":10,"to":12,"kind":"html","note":"Closing tags, nothing to read"}],"markdown":"|  |\n| --- |\n\n&lt;div style&#61;\"text-align: center\"&gt;op9ta1at81p:0&lt;/div&gt;"},"8.8.0":{"blocks":[{"from":0,"to":12,"kind":"html","note":"One HTML block, the table’s first tag to its last; the piece is read as Markdown in its cell"}],"markdown":"| **Fast**: reads *every* cell. |\n| --- |"}}},{"id":"headingLine","label":"A heading line in the cell","lines":["&lt;table&gt;","&lt;tr&gt;","&lt;td&gt;","# Install","","`npm i officeparser`, then *parse*.","","&lt;/td&gt;","&lt;/tr&gt;","&lt;/table&gt;"],"pieces":[5],"readers":{"8.7.1":{"blocks":[{"from":0,"to":2,"kind":"html","note":"A table, closed at once with its cell empty"},{"from":3,"to":3,"kind":"markdown","note":"Heading: Install, outside the table"},{"from":5,"to":9,"kind":"text","note":"Paragraph: the piece’s token, read as text; the closing tags read as nothing"}],"markdown":"|  |\n| --- |\n\n# Install {#install}\n\n9aso60ll8w:0"},"8.8.0":{"blocks":[{"from":0,"to":9,"kind":"html","note":"One HTML block: # Install is a line of it, text in the cell, as CommonMark reads it; the piece is read as Markdown in its cell"}],"markdown":"| # Install&lt;br&gt;`npm i officeparser`, then *parse*. |\n| --- |"}}},{"id":"ruleAfter","label":"A --- line under the table","lines":["&lt;table&gt;","&lt;tr&gt;","&lt;td&gt;","","**Fast**: reads *every* cell.","","&lt;/td&gt;","&lt;/tr&gt;","&lt;/table&gt;","---"],"pieces":[4],"readers":{"8.7.1":{"blocks":[{"from":0,"to":7,"kind":"text","note":"Paragraph: the tags shown as text, and the piece’s token"},{"from":8,"to":9,"kind":"markdown","note":"Heading: &lt;/table&gt;, underlined by ---"}],"markdown":"&amp;lt;table&gt; &amp;lt;tr&gt; &amp;lt;td&gt;  i8knqdf43sg:0  &amp;lt;/td&gt; &amp;lt;/tr&gt;\n\n## &amp;lt;/table&gt; {#table}"},"8.8.0":{"blocks":[{"from":0,"to":8,"kind":"html","note":"One HTML block: the table, its piece read as Markdown in its cell"},{"from":9,"to":9,"kind":"markdown","note":"A rule"}],"markdown":"| **Fast**: reads *every* cell. |\n| --- |\n\n---"}}},{"id":"commentLine","label":"A comment, no blank line at all","lines":["&lt;table&gt;&lt;tr&gt;&lt;th&gt;","&lt;div&gt;","&lt;!-- the name --&gt;","&lt;/div&gt;","&lt;/th&gt;&lt;/tr&gt;&lt;/table&gt;"],"pieces":[2],"readers":{"8.7.1":{"blocks":[{"from":0,"to":0,"kind":"html","note":"A table, closed at once with its cell empty"},{"from":1,"to":1,"kind":"html","note":"A &lt;div&gt; line alone"},{"from":2,"to":2,"kind":"text","note":"Paragraph: the comment, lifted out as a piece, read as its token"},{"from":3,"to":3,"kind":"html","note":"A closing tag, nothing to read"},{"from":4,"to":4,"kind":"html","note":"Closing tags, nothing to read"}],"markdown":"|  |\n| --- |\n\n5yq2o9bteip:0"},"8.8.0":{"blocks":[{"from":0,"to":4,"kind":"html","note":"One HTML block: the comment is kept in its cell"}],"markdown":"| &lt;!-- the name --&gt; |\n| --- |"}}}]}'>
+    <table>
+        <thead>
+            <tr><th>Sample</th><th>8.7.1 reads</th><th>8.8.0 reads</th></tr>
+        </thead>
+        <tbody>
+            <tr><td>A <code>&lt;div&gt;</code> line in the cell</td><td>An empty cell, then the token as a paragraph</td><td>The piece in its cell</td></tr>
+            <tr><td>A heading line in the cell</td><td>An empty cell, the heading after the table, then the token</td><td><code># Install</code> as text in the cell, then the piece</td></tr>
+            <tr><td>A <code>---</code> line under the table</td><td>The tags as text with the token, then a heading <code>&lt;/table&gt;</code></td><td>The table with its piece, then a rule</td></tr>
+            <tr><td>A comment, no blank line at all</td><td>An empty cell, then the token</td><td>The comment in its cell</td></tr>
+        </tbody>
+    </table>
+    <figcaption>Four tables, as each version cuts their lines into blocks and reads them. A token's code is random,
+        made again for every document read; the one shown is from a real run. 8.1.0 reads all four as 8.7.1 does.</figcaption>
+</figure>
+<p>
+    The last sample has no blank line at all, so no piece was written by its author. The reader made one. Before
+    the split, it lifts out fenced code, math, admonitions and comments on lines of their own, and puts a
+    placeholder line with a blank line on each side in their place. Inside a table, that blank line made the
+    comment a piece, the piece became a token, and the <code>&lt;div&gt;</code> line cut it off.
+</p>
+
+<h2>The Other Ways</h2>
+<p>
+    Cutting was the common way to lose a cell, not the only one. A placeholder could land where text is read as
+    written. A cell holding a <code>&lt;pre&gt;</code> with a fenced block in it:
+</p>
+<pre><code>&lt;table&gt;&lt;tr&gt;&lt;td&gt;&lt;pre&gt;Run:
+
+```
+npm test
+```
+
+&lt;/pre&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;</code></pre>
+<p>
+    8.7.1 read its code as <code>Run:</code>, four line breaks, <code>CODE_BLOCK_0</code> between two private-use
+    characters, and four more line breaks. 8.8.0 reads it as written, the fence's lines and blank lines included. A
+    comment holding an admonition, anywhere in a document, kept a placeholder the same way, and now keeps
+    <code>:::note</code> and its text.
+</p>
+<p>
+    A piece also stood in for its text inside other HTML. A link around a cell's Markdown,
+    <code>&lt;a href="https://example.com/docs"&gt;</code>, a blank line, <code>Read the **docs**</code>, a blank line,
+    <code>&lt;/a&gt;</code>, came back from 8.7.1 as the text with no link: the token's text node carried the link,
+    and the piece's runs that replaced it did not. In 8.8.0 each run of the piece carries it, and so does a picture
+    in it. And a piece that closed what a tag had opened, the <code>"</code> of an attribute or the
+    <code>--&gt;</code> of a comment, hid that end inside its token. A comment then ran on and took the rest of the
+    table with it; an attribute ran on to the next quote, and the words up to there were lost.
+</p>
+
+<h2>One Block, From the First Table Tag to the Last</h2>
+<p>
+    8.8.0 states the rule once and makes every step follow it: a table holding Markdown pieces is one HTML block
+    from its first table tag to its last. No line inside that range is read as a Markdown block start, so nothing
+    cuts it, and no underline makes it a heading. Its pieces are read in its cells where they stand in the cells'
+    content, and as the text of whatever they stand in otherwise: an attribute's value, a comment, a
+    <code>&lt;pre&gt;</code>. Every piece is read somewhere, and nothing of a token or a placeholder is shown.
+</p>
+<p>
+    That makes the lines inside the table read as CommonMark reads them, which is what GitHub shows. In the heading
+    sample, <code># Install</code> is a line of the HTML block that <code>&lt;td&gt;</code> opened, so it is text in
+    the cell, <code># Install</code> and all, not a heading. That can surprise, but it is what the CommonMark
+    specification says, which GitHub's Markdown follows: the line is part of the HTML block, and a browser shows
+    it as text.
+</p>
+<p>
+    After the last table tag, lines read as they did before. A heading, a list item, a rule or a fence there reads
+    as Markdown, as officeParser read it before (CommonMark would keep such a line in the table's HTML block up to
+    the next blank line, so GitHub shows a <code>---</code> right under <code>&lt;/table&gt;</code> as text). A plain text line right under <code>&lt;/table&gt;</code> stays in the table's HTML block up to the
+    next blank line, so <code>*Tested* on Node 18.</code> there is read with its asterisks. That is what CommonMark says,
+    and 8.7.1 read it the same way.
+</p>
+<p>
+    A comment or preformatted text holding a lifted block gets the block back as written. Each lift now remembers
+    the source it replaced, and wherever a placeholder lands in text read as written, the source goes back in its
+    place, blank lines and all. And a piece the HTML reader leaves out, because it stands in an element read as
+    nothing such as <code>&lt;template&gt;</code>, is read after the table, as it would be without the table.
+</p>
+
+<h2>Which Pieces Are Written as Text</h2>
+<p>
+    One part of this took two tries. A piece inside a tag or a quoted value has to be joined as written, so that a
+    piece holding the <code>"</code> that ends a value ends it where the HTML reader will. My first version decided
+    that while joining: it scanned the HTML so far, and joined a piece as written whenever the scan was not in a
+    cell's content.
+</p>
+<p>
+    The review before the release found where that went wrong. The HTML reader pairs quotes in a tag, and when a
+    quote never closes before the end of its text, it ends the tag at the first <code>&gt;</code> instead. An
+    unquoted value with an apostrophe, such as <code>&lt;td title=it's&gt;</code>, has a quote that never closes.
+    The scan, which could not know what came later, stayed inside that quote and joined every piece after it as
+    written, and the first apostrophe in the prose, <code>It's</code>, closed it:
+</p>
+<pre><code>&lt;table&gt;
+&lt;tr&gt;
+&lt;td title=it's&gt;
+
+First *cell*
+
+&lt;/td&gt;
+&lt;td&gt;
+
+It's the **second**
+
+&lt;/td&gt;
+&lt;/tr&gt;
+&lt;/table&gt;</code></pre>
+<p>
+    8.7.1 read both cells. The first version of the fix read one empty cell. That never went out. What did is
+    safer by construction: every piece is a token while the table is joined, as in 8.7.1, and which pieces go back
+    as written is decided only when the table is read, by a scan of exactly the text the HTML reader is given. A
+    piece is written back only where that scan proves the reader reads it the same way: a piece that holds the end
+    of what it stands in, or one that cannot change how the reader reads on. Anywhere the scan cannot be sure, after
+    a quote that holds a <code>&gt;</code>, inside an SVG, past a DOCTYPE, the piece keeps its token, and a token
+    the reader drops is read after the table. 8.8.0 reads both cells of that table, as 8.7.1 did.
+</p>
+
+<h2>How It Is Checked</h2>
+<p>
+    The release adds a property check that writes tables the way people write them and some ways they should not:
+    a Markdown piece in a cell beside every kind of block start (each of CommonMark's seven kinds of HTML block,
+    fences, math, admonitions, underlines, rules, headings, list items, quotes, indented code), inside six kinds of
+    opening, followed by one of thirteen endings after <code>&lt;/table&gt;</code> (nothing, text, an underline, a
+    rule, a heading, a list item, a quote, a block); then random mixes of up to four
+    of them; then a part of tables holding unpaired quotes, unclosed values and comments beside prose full of
+    apostrophes. Every piece holds marker words, and a document fails if a marker word is missing from what the
+    reader returns, or if a private-use character or a placeholder's name reaches it.
+</p>
+<p>
+    I ran the release's own check against both versions, seed 1, 10,130 distinct documents (4,524 systematic,
+    2,996 random, 2,610 with quotes):
+</p>
+<table>
+    <thead>
+        <tr><th>Version</th><th>Documents showing a token</th><th>Documents losing a word</th></tr>
+    </thead>
+    <tbody>
+        <tr><td>8.7.1</td><td>2,102</td><td>3,031</td></tr>
+        <tr><td>8.8.0</td><td>0</td><td>0</td></tr>
+    </tbody>
+</table>
+<p>
+    Each new path is one pass over text the reader already holds, and the suite times the shapes that could make
+    it slower, at two lengths, and checks that the time grows with the length.
+</p>
+
+<h2>What It Does Not Do</h2>
+<ul>
+    <li>
+        A table with no Markdown piece is read as before. One written with no blank line, with a heading line in a
+        cell (<code>&lt;td&gt;</code>, <code># Install</code>, <code>&lt;/td&gt;</code> on lines of their own), still
+        moves the heading out of the table, in 8.8.0 as in 8.7.1. CommonMark keeps it in the cell. Nothing is lost
+        or shown as a token there, but the text is in the wrong place.
+    </li>
+    <li>
+        Words in markup the HTML reader reads as nothing stay unread: an attribute it does not keep (a
+        <code>title</code> on a cell), the text of a script or a style. That is the HTML reader's reading of such
+        markup in any document, not something the table loses.
+    </li>
+    <li>
+        A table whose cells nest elements 256 levels deep, past what the HTML reader reads, is read as 8.7.1 read
+        it, without its tokens: its pieces come after its cells instead of in them.
+    </li>
+</ul>
+<p>
+    The fix is in the <a href="https://github.com/harshankur/officeParser/blob/master/CHANGELOG.md">changelog</a>
+    under 8.8.0. If you have a README whose tables still read wrong, I would like to see it: open an
+    <a href="https://github.com/harshankur/officeParser/issues">issue</a> with the file, or the smallest part of it
+    that shows the problem.
+</p>
