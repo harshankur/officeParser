@@ -20,6 +20,7 @@
 import { fillPageNumber } from '../../utils/pageNumbers.js';
 import { clampInt } from '../../utils/numberUtils.js';
 import { EmbedMetadata, FullGeneratorConfig, ImageMode, IndentationMetadata, OfficeContentNode, OfficeErrorType, OfficeMetadata, OfficeParserAST, OfficeWarningType, PageSetup, ParagraphSpacing, SheetMetadata, TextAlignment, TextFormatting, BreakMetadata, ChartData, HeaderFooterMetadata, NodeBounds, ShapeMetadata, SlideMetadata, PageNumberFormat } from '../../types.js';
+import { atPosition, chartPositions } from '../../utils/chartUtils.js';
 import { hasPageSize, onDocumentPage } from '../../utils/pageLimits.js';
 import { getAbortError, getOfficeError } from '../../utils/errorUtils.js';
 import { documentLanguage, embedUrl, isHeaderRow, lengthToPt, paperSizePt, resolveImageMode, sniffImageSize, writableSpacing } from '../../utils/officeGenUtils.js';
@@ -2653,8 +2654,13 @@ class NativeLayout {
         const name = (node.metadata as { attachmentName?: string } | undefined)?.attachmentName;
         const data = (name ? this.attachmentsByName.get(name) as { chartData?: ChartData } | undefined : undefined)?.chartData;
         if (!data || !Array.isArray(data.dataSets) || !Array.isArray(data.labels)) return false;
-        const series = data.dataSets.slice(0, 12).map(set => (Array.isArray(set.values) ? set.values : []).map(v => { const n = Number(String(v).replace(/,/g, '')); return Number.isFinite(n) ? n : NaN; }));
-        const groups = maxOf(series.map(v => v.length), data.labels.length);
+        // Checked before chartPositions sorts the lists: a list of more than 120 entries makes more than 120 groups.
+        if (data.dataSets.length > 12 || maxOf(data.dataSets.map(set => Array.isArray(set?.values) ? set.values.length : 0), data.labels.length) > 120) return false;
+        const positions = chartPositions(data);
+        const number = (v: unknown) => { const n = Number(String(v).replace(/,/g, '')); return Number.isFinite(n) ? n : NaN; };
+        const labels = positions ? positions.map(p => atPosition(data.labels, data.labelIndexes, p)) : data.labels;
+        const series = data.dataSets.map(set => positions ? positions.map(p => number(atPosition(set?.values, set?.valueIndexes, p))) : (Array.isArray(set?.values) ? set.values : []).map(number));
+        const groups = positions ? positions.length : maxOf(series.map(v => v.length), data.labels.length);
         if (!groups || groups > 120 || data.dataSets.length > 12 || !series.some(v => v.some(n => !Number.isNaN(n)))) return false;
         const ink = this.lib.rgb(0.12, 0.12, 0.12), grid = this.lib.rgb(0.85, 0.85, 0.85);
         const palette = [[255, 99, 132], [54, 162, 235], [255, 206, 86], [75, 192, 192], [153, 102, 255], [255, 159, 64]].map(([r, g, b]) => this.lib.rgb(r / 255, g / 255, b / 255));
@@ -2711,7 +2717,7 @@ class NativeLayout {
         }));
         // Each label under its bars, cut to their width; every few, where they are too many to be read.
         const every = Math.max(1, Math.ceil(groups * 18 / width));
-        data.labels.slice(0, groups).forEach((label, g) => {
+        labels.slice(0, groups).forEach((label, g) => {
             if (g % every) return;
             const text = splitToWidth(this.enc(String(label ?? ''), 'regular'), t => this.widthOf(t, 'regular', 7), groupW * every - 2)[0] ?? '';
             this.drawText(text, 'regular', left + g * groupW + Math.max(0, (groupW - this.widthOf(text, 'regular', 7)) / 2), plotBottom - 10, 7, ink);

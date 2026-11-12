@@ -6,6 +6,7 @@ import { StyleMapper } from '../utils/styleMapper.js';
 import { isSourceComment } from '../utils/commentUtils.js';
 import { gridPositionsFor } from '../utils/sheetGridUtils.js';
 import { MAX_LAYOUT_COLUMNS } from '../utils/tableLayout.js';
+import { atPosition, chartPositions } from '../utils/chartUtils.js';
 import { NoteMarks } from '../utils/noteMarks.js';
 
 /** The most cells one chart's data table holds in DOCX, ODT and LaTeX output (see BaseGenerator.chartTable). */
@@ -30,9 +31,12 @@ export abstract class BaseGenerator<D extends UniversalGeneratorFormat = Univers
     private paddingCellsLeft: number;
     private paddingLimit: number;
     private gridLimitWarned = false;
+    /** Point indexes of each chart's data, found once however many chart nodes show it. */
+    private readonly chartPositionsOf = new Map<ChartData, number[] | undefined>();
 
     /**
-     * A chart's data as DOCX, ODT and LaTeX write it: a header of series names, then a row per label.
+     * A chart's data as DOCX, ODT and LaTeX write it: a header of series names, then a row per label, or a
+     * row per point index when the chart's lists give them (see chartPositions).
      * The table is labels x series, which a 9.6 KB PPTX made nine million cells (the process ran out of
      * memory), and it is written at every chart showing the data; so it is built within the grid budget
      * (see padWithinBudget) and at most MAX_CHART_TABLE_CELLS cells: at most MAX_LAYOUT_COLUMNS - 1 series,
@@ -43,9 +47,14 @@ export abstract class BaseGenerator<D extends UniversalGeneratorFormat = Univers
         const labels = Array.isArray(data.labels) ? data.labels : [];
         const series = dataSets.slice(0, MAX_LAYOUT_COLUMNS - 1);
         const width = series.length + 1;
-        const allowed = Math.min(labels.length + 1, Math.floor(Math.min(this.paddingCellsLeft, MAX_CHART_TABLE_CELLS) / width));
+        if (!this.chartPositionsOf.has(data)) this.chartPositionsOf.set(data, chartPositions(data));
+        const positions = this.chartPositionsOf.get(data);
+        const rowCount = positions ? positions.length : labels.length;
+        const labelAt = (i: number) => positions ? atPosition(labels, data.labelIndexes, positions[i]) : labels[i];
+        const valueAt = (d: ChartData['dataSets'][number] | undefined, i: number) => positions ? atPosition(d?.values, d?.valueIndexes, positions[i]) : d?.values?.[i];
+        const allowed = Math.min(rowCount + 1, Math.floor(Math.min(this.paddingCellsLeft, MAX_CHART_TABLE_CELLS) / width));
         this.paddingCellsLeft -= allowed * width;
-        if (series.length < dataSets.length || allowed < labels.length + 1) {
+        if (series.length < dataSets.length || allowed < rowCount + 1) {
             this.warn(OfficeWarningType.CONTENT_NOT_REPRESENTABLE, { feature: 'chart data past the table limit', format: this.destination });
         }
         const rows: OfficeContentNode[] = [];
@@ -58,7 +67,7 @@ export abstract class BaseGenerator<D extends UniversalGeneratorFormat = Univers
         }
         if (allowed > 0) rows.push({ type: 'row', children: [cellOf(''), ...series.map(d => cellOf(d?.name || ''))] } as OfficeContentNode);
         for (let i = 0; i < allowed - 1; i++) {
-            rows.push({ type: 'row', children: [cellOf(String(labels[i] ?? '')), ...series.map(d => cellOf(String(d?.values?.[i] ?? '')))] } as OfficeContentNode);
+            rows.push({ type: 'row', children: [cellOf(String(labelAt(i) ?? '')), ...series.map(d => cellOf(String(valueAt(d, i) ?? '')))] } as OfficeContentNode);
         }
         return { type: 'table', children: rows } as OfficeContentNode;
     }

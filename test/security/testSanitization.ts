@@ -3067,6 +3067,15 @@ async function parserHardeningTests() {
         ...Object.fromEntries(Object.entries(extra).map(([k, v]) => [k, enc(v)])),
     }));
     await heapBudget('pptx: a chart of 20,000 series and 30,000 labels is read', () => parseQuiet(pptxOf({ 'ppt/charts/chart1.xml': `<?xml version="1.0"?><c:chartSpace ${pns}><c:chart><c:plotArea><c:barChart><c:ser><c:cat>${'<c:v>1</c:v>'.repeat(30000)}</c:cat></c:ser>${'<c:ser/>'.repeat(20000)}</c:barChart></c:plotArea></c:chart></c:chartSpace>` }), 'pptx', { extractAttachments: true }));
+    // The parser keeps a cache's point count as a number: a cache that counts a billion points and holds
+    // three gives three entries in each list and in each output.
+    const farPoints = ['0', '500000000', '999999999'].map((idx, i) => `<c:pt idx="${idx}"><c:v>${i + 1}</c:v></c:pt>`).join('');
+    const countedChart = await heapBudget('pptx: a chart counting a billion points and holding three is read', () => parseQuiet(pptxOf({ 'ppt/charts/chart1.xml': `<?xml version="1.0"?><c:chartSpace ${pns}><c:chart><c:plotArea><c:barChart><c:ser><c:cat><c:strCache><c:ptCount val="1000000000"/>${farPoints}</c:strCache></c:cat><c:val><c:numCache><c:ptCount val="1000000000"/>${farPoints}</c:numCache></c:val></c:ser></c:barChart></c:plotArea></c:chart></c:chartSpace>` }), 'pptx', { extractAttachments: true })) as Awaited<ReturnType<typeof parseQuiet>>;
+    const countedData = countedChart.ast?.attachments.find(a => a.chartData)?.chartData;
+    check('pptx: a billion-point count is kept as a count', countedData?.pointCount === 1_000_000_000 && countedData.labelIndexes?.length === 3, JSON.stringify(countedData?.labelIndexes));
+    const countedAst = countedChart.ast && { ...countedChart.ast, content: [{ type: 'chart', metadata: { attachmentName: 'chart1.xml' } }] };
+    const countedOutputs = await heapBudget('docx, html, pdf: a chart counting a billion points is written', () => Promise.all((['docx', 'html', 'pdf'] as const).map(format => countedAst ? OfficeGenerator.generate(countedAst as any, format, { onWarning: () => {}, pdfConfig: { engine: 'native' } } as any) : undefined))) as ({ value: unknown } | undefined)[];
+    check('docx, html, pdf: a chart counting a billion points is written at the size of its three', (countedOutputs ?? []).every(out => out && (out.value as any).length < 2_000_000), (countedOutputs ?? []).map(out => (out?.value as any)?.length).join(' '));
     const sharedComments = await heapBudget('pptx: one comments part named 2,000 times is read', () => parseQuiet(pptxOf({
         'ppt/slides/_rels/slide1.xml.rels': `<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${Array.from({ length: 2000 }, (_, i) => `<Relationship Id="rId${i}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments" Target="../comments/comment1.xml"/>`).join('')}</Relationships>`,
         'ppt/comments/comment1.xml': `<?xml version="1.0"?><p:cmLst ${pns}>${'<p:cm authorId="0"><p:text>c</p:text></p:cm>'.repeat(20000)}</p:cmLst>`,

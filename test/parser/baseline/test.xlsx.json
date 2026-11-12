@@ -8755,6 +8755,12 @@
               "3.5",
               "4.5"
             ],
+            "valueIndexes": [
+              0,
+              1,
+              2,
+              3
+            ],
             "pointLabels": []
           },
           {
@@ -8764,6 +8770,12 @@
               "4.4000000000000004",
               "1.8",
               "2.8"
+            ],
+            "valueIndexes": [
+              0,
+              1,
+              2,
+              3
             ],
             "pointLabels": []
           },
@@ -8775,6 +8787,12 @@
               "3",
               "5"
             ],
+            "valueIndexes": [
+              0,
+              1,
+              2,
+              3
+            ],
             "pointLabels": []
           }
         ],
@@ -8784,6 +8802,13 @@
           "Category 3",
           "Category 4"
         ],
+        "labelIndexes": [
+          0,
+          1,
+          2,
+          3
+        ],
+        "pointCount": 4,
         "rawTexts": [
           "Category 1",
           "Category 2",

@@ -1,5 +1,6 @@
 import { AdmonitionMetadata, CellMetadata, CodeMetadata, ConversionResult, DisclosureMetadata, EmbedMetadata, GeneratorConfig, HeadingMetadata, ImageMetadata, ListMetadata, NoteMetadata, OfficeAttachment, OfficeContentNode, OfficeParserAST, OfficeWarningType, PageMetadata, SheetMetadata, SlideMetadata, StandaloneConfig, TableMetadata, TextMetadata } from '../types.js';
 import { captionOf } from '../utils/figureCaptions.js';
+import { chartPositions } from '../utils/chartUtils.js';
 import { summaryLine } from '../utils/disclosures.js';
 import { quoteIdOf, sameQuote } from '../utils/quoteGroups.js';
 import { BaseGenerator } from './BaseGenerator.js';
@@ -1511,7 +1512,9 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                     let data = '';
                     if (dataId === undefined) {
                         this.chartDataIds.set(chartAttachment, dataId = `${chartId}-data`);
-                        data = `<script type="application/json" id="${dataId}">${serializeForInlineScript(chartData)}</script>`;
+                        // The script below draws one bar group per point index in `positions`.
+                        const positions = chartPositions(chartData);
+                        data = `<script type="application/json" id="${dataId}">${serializeForInlineScript(positions ? { ...chartData, positions } : chartData)}</script>`;
                     }
                     const canvas = `<div class="chart-container"><canvas id="${chartId}"></canvas></div>`;
                     const script = `
@@ -1535,9 +1538,15 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
             try {
                 const canvas = document.getElementById('${chartId}');
                 if (!canvas) return;
+                const positions = chartData.positions;
+                const atPoints = (list, indexes) => {
+                    const byPosition = new Map();
+                    (indexes || []).forEach((position, i) => byPosition.set(position, list[i]));
+                    return positions.map(position => byPosition.get(position));
+                };
                 const datasets = chartData.dataSets.map((ds, index) => ({
                     label: ds.name || 'Series ' + (index + 1),
-                    data: ds.values.map(Number),
+                    data: positions ? atPoints(ds.values, ds.valueIndexes).map(v => v === undefined ? null : Number(v)) : ds.values.map(Number),
                     backgroundColor: getRandomColor(index, 0.5),
                     borderColor: getRandomColor(index, 1),
                     borderWidth: 1
@@ -1545,7 +1554,7 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                 new Chart(canvas, {
                     type: 'bar',
                     data: {
-                        labels: chartData.labels,
+                        labels: positions ? atPoints(chartData.labels, chartData.labelIndexes).map(label => label === undefined ? '' : label) : chartData.labels,
                         datasets: datasets
                     },
                     options: {
