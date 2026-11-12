@@ -126,7 +126,7 @@ export enum OfficeWarningType {
     REPEATED_CONTENT_LIMIT_EXCEEDED = 'REPEATED_CONTENT_LIMIT_EXCEEDED',
     /** A DOCX alternative-format chunk (`w:altChunk`) could not be read (its part is missing, of a format not read, a DOCX inside a DOCX chunk, or unreadable: not a ZIP, no document part, nested too deep); its content is not in the AST, and the rest of the document is */
     ALT_CHUNK_NOT_READ = 'ALT_CHUNK_NOT_READ',
-    /** A part of the document was not read, and what it holds is not in the AST: an EPUB chapter its package lists that is missing from the archive or encrypted; in a PPTX, the presentation's slide list or relationships, or the relationships of a notes page or a slide master, that are not XML; or, in a PDF, an XObject whose text pdf.js could not read (with its page) */
+    /** A part of the document was not read, and what it holds is not in the AST: an EPUB chapter its package lists that is missing from the archive or encrypted; in a PPTX, the presentation's slide list or relationships, or the relationships of a notes page or a slide master, that are not XML; in a PDF, an XObject whose text pdf.js could not read (with its page); or an RTF picture in a format not read (`\macpict`, `\pmmetafile`, none named, or data held as `\binN`); an RTF equation of no text to read and no picture of it; or an embedded object (DOCX `w:object`, RTF `\object`) with no picture of it; or a DOCX glossary part that is not well-formed XML (content controls' placeholder prompts are then read as text) */
     CONTENT_PART_NOT_READ = 'CONTENT_PART_NOT_READ',
     /** A metadata override could not be represented in the destination format's vocabulary */
     METADATA_NOT_REPRESENTABLE = 'METADATA_NOT_REPRESENTABLE',
@@ -3091,6 +3091,8 @@ export type OfficeMimeType =
     | 'image/bmp'
     | 'image/tiff'
     | 'image/svg+xml'
+    | 'image/emf'
+    | 'image/wmf'
     | 'application/pdf'
     | 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
     | 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
@@ -3954,6 +3956,14 @@ export interface CodeMetadata {
      * 'block' as `$$...$$`. Matches attribute-driven editors' math nodes.
      */
     math?: 'inline' | 'block';
+    /**
+     * For math: the attachment holding the source document's own picture of the equation (RTF `\mmathPict`).
+     * The node stays the equation, and no image node shows the picture. Output that cannot typeset math (DOCX,
+     * ODT, RTF, PPTX, ODP and PDF, both engines) writes the equation as this picture where pictures are written
+     * (`includeImages`), its LaTeX the picture's alt text; HTML, EPUB, Markdown, LaTeX, text and chunks keep the
+     * LaTeX. Absent when the document gives no picture or attachments are not extracted.
+     */
+    fallbackAttachmentName?: string;
 }
 
 /**
@@ -4204,6 +4214,23 @@ export type OfficeContentNode = BaseContentNode & (
     | { type: 'summary'; metadata?: undefined }
 );
 
+/** An axis of a chart. */
+export interface ChartAxis {
+    /** Its id in the chart (OpenXML `c:axId`, ODF `chart:name` such as `primary-y`). */
+    id: string;
+    /** What it measures: categories, dates, values, or series (the depth axis of a 3D chart). */
+    kind: 'category' | 'date' | 'value' | 'series';
+    /** The side it is drawn on (OpenXML `c:axPos`), where the chart says. */
+    position?: 'bottom' | 'left' | 'right' | 'top';
+    /** Its title, where it has one. */
+    title?: string;
+    /** Whether the chart hides it (OpenXML `c:delete`). */
+    deleted?: boolean;
+}
+
+/** The kind of a chart's plot group, 3D and flat alike. */
+export type ChartType = 'area' | 'bar' | 'bubble' | 'doughnut' | 'line' | 'ofPie' | 'pie' | 'radar' | 'scatter' | 'stock' | 'surface';
+
 /**
  * Structured information extracted from a chart.
  */
@@ -4211,10 +4238,13 @@ export interface ChartData {
     /** Chart title (if any) */
     title?: string;
 
-    /** X-axis title (for continuous or categorical axes) */
+    /**
+     * The X axis title: that of the chart's primary X axis (of the axes it lists first, as Office and
+     * LibreOffice take them). A date axis gives it, and a scatter chart's horizontal value axis.
+     */
     xAxisTitle?: string;
 
-    /** Y-axis title (for value or continuous axes) */
+    /** The Y axis title: that of the chart's primary value axis (of the axes it lists first), as `xAxisTitle`. */
     yAxisTitle?: string;
 
     /** 
@@ -4225,11 +4255,24 @@ export interface ChartData {
     dataSets: {
         /** Name of this data group (e.g., 'Sales 2023') */
         name?: string;
+        /** The kind of chart the series is drawn as (a combo chart has several): the plot group it is in. */
+        chartType?: ChartType;
+        /** The axes the series is drawn on (`ChartAxis.id`): its X axis first, then its value axis. */
+        axisIds?: string[];
+        /** A scatter or bubble series' own X values (`c:xVal`), raw. `labels` stays the first series' X values. */
+        xValues?: string[];
+        /** The point index of each X value (`c:pt idx`), ascending, as `valueIndexes`. */
+        xValueIndexes?: number[];
+        /** A bubble series' sizes (`c:bubbleSize`), raw. */
+        bubbleSizes?: string[];
+        /** The point index of each bubble size, ascending. */
+        bubbleSizeIndexes?: number[];
         /** Actual numeric or string values for this group */
         values: string[];
         /**
-         * The point index of each value (OpenXML's `c:pt idx`), ascending. A chart's cache leaves out blank
-         * points, so `values[i]` belongs to point `valueIndexes[i]`. Absent when the chart gives no point
+         * The point index of each value (OpenXML's `c:pt idx`; an ODF chart's table row, from 0), ascending. A
+         * chart's cache leaves out blank points (an ODF table's blank or NaN cells), so `values[i]` belongs to
+         * point `valueIndexes[i]`. Absent when the chart gives no point
          * indexes: the values then hold the points in order.
          */
         valueIndexes?: number[];
@@ -4254,18 +4297,20 @@ export interface ChartData {
     /** 
      * Labels for the chart facets (e.g., 'Jan', 'Feb', 'Mar' on X-axis).
      * These typically correspond to the data points in each dataSet.
+     * In a scatter or bubble chart, the first series' X values: OpenXML's first `c:xVal` (each series' own
+     * are its `xValues`), or an ODF chart's first column, which every series shares.
      */
     labels: string[];
 
     /**
-     * The point index of each label (OpenXML's `c:pt idx`), ascending. A label and a value of one point
+     * The point index of each label (OpenXML's `c:pt idx`; an ODF chart's table row, from 0), ascending. A label and a value of one point
      * share its index, and a point missing from either list is blank in it. Absent when the chart gives no
      * point indexes: the labels then hold the points in order.
      */
     labelIndexes?: number[];
 
     /**
-     * How many points the chart's categories span (OpenXML's `c:ptCount`), blank ones included. No list
+     * How many points the chart's categories span (OpenXML's `c:ptCount`; an ODF chart's table's data rows), blank ones included. No list
      * holds an entry for each of them.
      */
     pointCount?: number;
@@ -4278,6 +4323,20 @@ export interface ChartData {
      * entries line up with `labels`, so they share `labelIndexes`.
      */
     shownLabels?: string[];
+
+    /**
+     * The levels of a chart's categories when they have more than one (quarters under years), innermost first, as
+     * the chart caches them. `labels` (and `labelIndexes`) hold the innermost level, as for a chart of one level;
+     * an outer level's label covers the points from its index to the next label's. Absent for a chart of one level.
+     * OpenXML's `c:multiLvlStrRef` (`c:lvl`).
+     */
+    labelLevels?: { labels: string[]; labelIndexes?: number[] }[];
+
+    /**
+     * Every axis the chart has, in the order it lists them. A series names the axes it is drawn on (`axisIds`).
+     * OpenXML's `c:catAx`, `c:dateAx`, `c:valAx`, `c:serAx`; ODF's `chart:axis`.
+     */
+    axes?: ChartAxis[];
 
     /** Every text node discovered in the chart XML (for keyword search/raw extraction) */
     rawTexts: string[];

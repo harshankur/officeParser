@@ -13,6 +13,9 @@ import { strFromU8, Unzlib, unzipSync, unzlibSync, zipSync, zlibSync } from 'ffl
 import { PDFDocument, PDFName, PDFRawStream } from 'pdf-lib';
 import { OfficeGenerator } from '../../src/OfficeGenerator';
 import { documentShapeEscapingTests } from './documentShapeEscaping';
+import { wordRtfContentHardeningTests } from './wordRtfContentHardening';
+import { chartWritersHardeningTests } from './chartWritersHardening';
+import { picturesHardeningTests } from './picturesHardening';
 import { OfficeParser } from '../../src/OfficeParser';
 import { OfficeTemplate } from '../../src/OfficeTemplate';
 import { OfficeParserAST, OfficeWarningType } from '../../src/types';
@@ -27,6 +30,7 @@ import { archiveCancellationTests } from './archiveCancellation';
 import { extractFiles } from '../../src/utils/zipUtils';
 import { cssColorHex } from '../../src/utils/colorUtils';
 import { parseXmlString } from '../../src/utils/xmlUtils';
+import { extractChartData } from '../../src/utils/chartUtils';
 import { getOfficeError, getWrappedError } from '../../src/utils/errorUtils';
 import { terminateOcr } from '../../src/utils/ocrUtils';
 import { OfficeErrorType } from '../../src/types';
@@ -3077,6 +3081,45 @@ async function parserHardeningTests() {
     const countedAst = countedChart.ast && { ...countedChart.ast, content: [{ type: 'chart', metadata: { attachmentName: 'chart1.xml' } }] };
     const countedOutputs = await heapBudget('docx, html, pdf: a chart counting a billion points is written', () => Promise.all((['docx', 'html', 'pdf'] as const).map(format => countedAst ? OfficeGenerator.generate(countedAst as any, format, { onWarning: () => {}, pdfConfig: { engine: 'native' } } as any) : undefined))) as ({ value: unknown } | undefined)[];
     check('docx, html, pdf: a chart counting a billion points is written at the size of its three', (countedOutputs ?? []).every(out => out && (out.value as any).length < 2_000_000), (countedOutputs ?? []).map(out => (out?.value as any)?.length).join(' '));
+    // A chart's category levels: at most 16 read, however many a cache holds, all sharing one budget of values.
+    const levelsChart = (count: number, points: number) => `<?xml version="1.0"?><c:chartSpace ${pns}><c:chart><c:plotArea><c:barChart><c:ser><c:cat><c:multiLvlStrRef><c:multiLvlStrCache><c:ptCount val="${points}"/>${`<c:lvl>${Array.from({ length: points }, (_, i) => `<c:pt idx="${i}"><c:v>L${i}</c:v></c:pt>`).join('')}</c:lvl>`.repeat(count)}</c:multiLvlStrCache></c:multiLvlStrRef></c:cat><c:val><c:numCache><c:pt idx="0"><c:v>1</c:v></c:pt></c:numCache></c:val></c:ser></c:barChart></c:plotArea></c:chart></c:chartSpace>`;
+    const manyLevels = await heapBudget('pptx: a chart of 1,000 category levels is read', () => parseQuiet(pptxOf({ 'ppt/charts/chart1.xml': levelsChart(1000, 20) }), 'pptx', { extractAttachments: true })) as Awaited<ReturnType<typeof parseQuiet>>;
+    const levelData = manyLevels.ast?.attachments.find(a => a.chartData)?.chartData;
+    check('pptx: a chart of 1,000 category levels keeps 16', levelData?.labelLevels?.length === 16, `${levelData?.labelLevels?.length}`);
+    await linear('pptx: a chart of 4 category levels of 20,000 points is read and written', async () => {
+        const read = await parseQuiet(pptxOf({ 'ppt/charts/chart1.xml': levelsChart(4, n(20000)) }), 'pptx', { extractAttachments: true });
+        return read.ast && OfficeGenerator.generate({ ...read.ast, content: [{ type: 'chart', metadata: { attachmentName: 'chart1.xml' } }] } as any, 'docx', { onWarning: () => {} } as any);
+    });
+    // A chart's axes: at most 64 read, however many its plot area holds.
+    const axesChart = (count: number, titled = true) => `<?xml version="1.0"?><c:chartSpace ${pns}><c:chart><c:plotArea><c:barChart><c:ser><c:val><c:numCache><c:pt idx="0"><c:v>1</c:v></c:pt></c:numCache></c:val></c:ser><c:axId val="0"/><c:axId val="1"/></c:barChart>${Array.from({ length: count }, (_, i) => `<c:valAx><c:axId val="${i}"/><c:axPos val="${i % 2 ? 'r' : 'l'}"/>${titled ? `<c:title><c:tx><c:rich><a:p><a:r><a:t>Axis ${i}</a:t></a:r></a:p></c:rich></c:tx></c:title>` : ''}</c:valAx>`).join('')}</c:plotArea></c:chart></c:chartSpace>`;
+    const manyAxes = await heapBudget('pptx: a chart of 100,000 axes is read', () => parseQuiet(pptxOf({ 'ppt/charts/chart1.xml': axesChart(100000, false) }), 'pptx', { extractAttachments: true })) as Awaited<ReturnType<typeof parseQuiet>>;
+    const axesData = manyAxes.ast?.attachments.find(a => a.chartData)?.chartData;
+    check('pptx: a chart of 100,000 axes keeps 64', axesData?.axes?.length === 64, `${axesData?.axes?.length}`);
+    await linear('pptx: a chart of 20,000 titled axes is read and written', async () => {
+        const read = await parseQuiet(pptxOf({ 'ppt/charts/chart1.xml': axesChart(n(20000)) }), 'pptx', { extractAttachments: true });
+        return read.ast && OfficeGenerator.generate({ ...read.ast, content: [{ type: 'chart', metadata: { attachmentName: 'chart1.xml' } }] } as any, 'html', { onWarning: () => {} } as any);
+    });
+    // A bubble series' X values and sizes are read, each list within a budget of its own, and its table and
+    // drawing are written in proportion. (A list of a million points is past the part's element budget,
+    // maxXmlElements, before the chart is read.)
+    const bubbleList = (tag: string, points: number) => `<c:${tag}><c:numRef><c:numCache><c:ptCount val="${points}"/>${Array.from({ length: points }, (_, i) => `<c:pt idx="${i}"><c:v>${i}</c:v></c:pt>`).join('')}</c:numCache></c:numRef></c:${tag}>`;
+    const bubbleChart = (points: number) => `<?xml version="1.0"?><c:chartSpace ${pns}><c:chart><c:plotArea><c:bubbleChart><c:ser>${bubbleList('xVal', points)}${bubbleList('yVal', points)}${bubbleList('bubbleSize', points)}</c:ser></c:bubbleChart></c:plotArea></c:chart></c:chartSpace>`;
+    const bubbles = await heapBudget('pptx: a bubble series of 60,000 points is read', () => parseQuiet(pptxOf({ 'ppt/charts/chart1.xml': bubbleChart(60000) }), 'pptx', { extractAttachments: true })) as Awaited<ReturnType<typeof parseQuiet>>;
+    const bubbleData = bubbles.ast?.attachments.find(a => a.chartData)?.chartData?.dataSets[0];
+    check('pptx: a bubble series keeps its X values and sizes', bubbleData?.xValues?.length === 60000 && bubbleData?.bubbleSizes?.length === 60000, `${bubbleData?.xValues?.length} ${bubbleData?.bubbleSizes?.length}`);
+    // Values, X values and sizes each have a budget of MAX_CHART_VALUES: 600,000 of each are all kept, and
+    // the labels (the X values) with them. (A chart part read alone: past the element budget as a file.)
+    const bareList = (tag: string) => `<c:${tag}><c:numLit>${'<c:v>1</c:v>'.repeat(600000)}</c:numLit></c:${tag}>`;
+    const bareChart = (kind: string, sizes: boolean) => Buffer.from(`<?xml version="1.0"?><c:chartSpace ${pns}><c:chart><c:plotArea><c:${kind}Chart><c:ser>${bareList('xVal')}${bareList('yVal')}${sizes ? bareList('bubbleSize') : ''}</c:ser></c:${kind}Chart></c:plotArea></c:chart></c:chartSpace>`);
+    const bareScatter = extractChartData(bareChart('scatter', false));
+    check('a scatter series of 600,000 points keeps its values, X values and labels', bareScatter.dataSets[0]?.values.length === 600000 && bareScatter.dataSets[0]?.xValues?.length === 600000 && bareScatter.labels.length === 600000, `${bareScatter.dataSets[0]?.values.length} ${bareScatter.dataSets[0]?.xValues?.length} ${bareScatter.labels.length}`);
+    const bareBubble = extractChartData(bareChart('bubble', true));
+    check('a bubble series of 600,000 points keeps its sizes', bareBubble.dataSets[0]?.bubbleSizes?.length === 600000 && bareBubble.dataSets[0]?.values.length === 600000, `${bareBubble.dataSets[0]?.bubbleSizes?.length} ${bareBubble.dataSets[0]?.values.length}`);
+    await linear('pptx: a bubble series of 20,000 points is read and written', async () => {
+        const read = await parseQuiet(pptxOf({ 'ppt/charts/chart1.xml': bubbleChart(n(20000)) }), 'pptx', { extractAttachments: true });
+        const ast = read.ast && { ...read.ast, content: [{ type: 'chart', metadata: { attachmentName: 'chart1.xml' } }] } as any;
+        return ast && Promise.all((['docx', 'html', 'pdf'] as const).map(format => OfficeGenerator.generate(ast, format, { onWarning: () => {}, pdfConfig: { engine: 'native' } } as any)));
+    });
     const sharedComments = await heapBudget('pptx: one comments part named 2,000 times is read', () => parseQuiet(pptxOf({
         'ppt/slides/_rels/slide1.xml.rels': `<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${Array.from({ length: 2000 }, (_, i) => `<Relationship Id="rId${i}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments" Target="../comments/comment1.xml"/>`).join('')}</Relationships>`,
         'ppt/comments/comment1.xml': `<?xml version="1.0"?><p:cmLst ${pns}>${'<p:cm authorId="0"><p:text>c</p:text></p:cm>'.repeat(20000)}</p:cmLst>`,
@@ -6439,6 +6482,9 @@ async function main() {
     await styleFlagWeightTests();
     await latexHighlightSizeTests();
     await templateTextBoundTests();
+    await wordRtfContentHardeningTests(check);
+    await chartWritersHardeningTests(check);
+    await picturesHardeningTests(check);
 
     console.log(`\n${failed === 0 ? '✓' : '✗'} Sanitization tests: ${passed} passed, ${failed} failed`);
     if (failed > 0) process.exit(1);

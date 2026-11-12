@@ -1,16 +1,30 @@
 import { ChartData, OfficeAttachment, OfficeIssue, ConversionResult, FullGeneratorConfig, GeneratorConfig, ImageMode, OfficeContentNode, OfficeMetadata, OfficeParserAST, OfficeWarningType, StructuredStyleMapping, UniversalGeneratorFormat } from '../types.js';
-import { resolveGeneratorConfig } from '../utils/configUtils.js';
+import { isFullGeneratorConfig, resolveGeneratorConfig } from '../utils/configUtils.js';
 import { checkAbortSignal, getWarningMessage } from '../utils/errorUtils.js';
-import { forgetFurniture, isPlaceholderNode, resolveImageMode } from '../utils/officeGenUtils.js';
+import { forgetFurniture, isPlaceholderNode, mathPictureOf, resolveImageMode } from '../utils/officeGenUtils.js';
 import { StyleMapper } from '../utils/styleMapper.js';
 import { isSourceComment } from '../utils/commentUtils.js';
 import { gridPositionsFor } from '../utils/sheetGridUtils.js';
 import { MAX_LAYOUT_COLUMNS } from '../utils/tableLayout.js';
-import { atPosition, chartPositions } from '../utils/chartUtils.js';
+import { atPosition, chartPositions, chartReferenceText, isXyChart, outerLevelRows, shownOr, xyPositions } from '../utils/chartUtils.js';
 import { NoteMarks } from '../utils/noteMarks.js';
+import { REPEAT_ALLOWANCE, repeatedContentOfAst, repeatPreview, utf8Length } from '../utils/repeatUtils.js';
 
 /** The most cells one chart's data table holds in DOCX, ODT and LaTeX output (see BaseGenerator.chartTable). */
 const MAX_CHART_TABLE_CELLS = 100_000;
+
+/**
+ * A chart's table as an output wrote it first, the cells it holds and what one copy of it weighs (see
+ * BaseGenerator.chartTable, BaseGenerator.chartTableWritten).
+ */
+type ChartTableRecord = { table: OfficeContentNode; cells: number; weight: number };
+
+/**
+ * What a writer wrote for a chart (see BaseGenerator.chartTableWritten): `text` where the chart stands; `weight`, UTF-8
+ * bytes of all it wrote (a table it hoisted elsewhere too); `undo`, taking back what it wrote elsewhere, called when
+ * the copy is not kept.
+ */
+export type ChartWritten = { text: string; weight: number; undo?: () => void };
 
 /** The most picture bytes one document writes inline in all (see BaseGenerator.inlineWithinBudget). */
 export const MAX_INLINED_IMAGE_BYTES = 128 * 1024 * 1024;
@@ -33,41 +47,329 @@ export abstract class BaseGenerator<D extends UniversalGeneratorFormat = Univers
     private gridLimitWarned = false;
     /** Point indexes of each chart's data, found once however many chart nodes show it. */
     private readonly chartPositionsOf = new Map<ChartData, number[] | undefined>();
+    /** What each chart's title weighs as this writer writes it, recorded where it is first written (see chartTitle); its tables: see chartTables. */
+    private readonly chartTitleWeights = new Map<ChartData, number>();
+    /**
+     * What chart text this output may still write again (see chartCopy): the parse's repeat budget,
+     * `decompressionLimits.maxRepeatedContent` plus 16 characters per byte of the document (repeatedContentOfAst).
+     */
+    private chartRepeatsLeft: number;
+    /** The chart-copy budget this output started with, for the warning's message. */
+    private readonly chartRepeatLimit: number;
+    private chartRepeatsWarned = false;
+
+    /**
+     * `text` as a copy writes it, of chart text this output wrote before (a title at another chart node showing the
+     * same data, an axis title over another series' columns): whole when it weighs REPEAT_ALLOWANCE or less, or while
+     * the budget lasts, each copy costing its `weight` past REPEAT_ALLOWANCE (what the writer writes of it, in UTF-8
+     * bytes: see chartTextWeight); past it, its start (repeatPreview), reported once (REPEATED_CONTENT_LIMIT_EXCEEDED).
+     * The original is whole where it was first written. A small chart part whose axis title stood over each of 499
+     * series' columns made 400 MB of output.
+     */
+    private chartCopy(text: string, weight = this.chartTextWeight(text)): string {
+        const cost = weight - REPEAT_ALLOWANCE;
+        if (cost <= 0) return text;
+        if (cost <= this.chartRepeatsLeft) { this.chartRepeatsLeft -= cost; return text; }
+        this.warnChartRepeats();
+        return repeatPreview(text);
+    }
+
+    /** Reports, once per output, that chart text written again passed the chart-copy budget (see chartCopy). */
+    private warnChartRepeats(): void {
+        if (this.chartRepeatsWarned) return;
+        this.chartRepeatsWarned = true;
+        this.warn(OfficeWarningType.REPEATED_CONTENT_LIMIT_EXCEEDED, this.chartRepeatLimit);
+    }
+
+    /** Each chart's table as this output wrote it first (per ChartData and caption), and what one copy of it weighs. */
+    private readonly chartTables = new Map<ChartData, { caption?: ChartTableRecord; plain?: ChartTableRecord }>();
+
+    /**
+     * What one cell of a chart's table weighs beyond its text: a cell's markup for each column it spans, as a deck or
+     * workbook writer writes it (a PPTX `a:tc` with its text body, an XLSX `c` with its inline string; see chartTable).
+     * Measured per writer (testChartTableCopies checks it holds).
+     */
+    protected chartCellWeight = 16;
+
+    /**
+     * What `text` weighs as this writer writes it in a chart's caption or table cell, in UTF-8 bytes: its escaped form,
+     * the heaviest the writer has (a line break, a tab and an escaped character as the writer writes each). Charged for
+     * a title or an axis title written again (see chartTitle, chartCopy) and, by deck and workbook writers, for each
+     * cell of a table copy (see chartTable). The default: the text as it is.
+     */
+    protected chartTextWeight(text: string): number {
+        return utf8Length(text);
+    }
+
+    /**
+     * What a writer writes for a copy of a chart's table past the budgets (see chartTable): `[Chart: <title>]`, the
+     * title cut to its start (repeatPreview), else `[Chart: <attachment name>]`, the form a chart with no data takes
+     * (see chartReferenceText).
+     */
+    protected chartReference(data: ChartData, name: string | undefined): string {
+        return chartReferenceText(data, name);
+    }
+
+    /**
+     * A chart's table (see chartTable) for a writer that places a table where a chart stands (a deck's slide, a
+     * workbook's sheet): past the budgets, a table of one cell holding the chart's reference (see chartReference).
+     */
+    protected chartTableOrReference(data: ChartData, name: string | undefined, cellOf: (text: string) => OfficeContentNode, caption = false): OfficeContentNode {
+        return this.chartTable(data, cellOf, caption)
+            ?? { type: 'table', children: [{ type: 'row', children: [cellOf(this.chartReference(data, name))] }] } as OfficeContentNode;
+    }
+
+    /**
+     * What a chart's title weighs as this writer writes it beside or in its table (see chartTitle), in UTF-8 bytes: by
+     * default as a cell's text (chartTextWeight); a writer whose caption writes it otherwise says so.
+     */
+    protected chartTitleWeight(title: string): number {
+        return this.chartTextWeight(title);
+    }
+
+    /**
+     * A chart's title as the writer writes it beside or in its table: '' for none, whole at the first chart node showing
+     * the data, a copy (see chartCopy) at each later one, charged what the first weighed (measured once a chart).
+     */
+    protected chartTitle(data: ChartData): string {
+        if (typeof data.title !== 'string' || !data.title) return '';
+        const weight = this.chartTitleWeights.get(data);
+        if (weight === undefined) { this.chartTitleWeights.set(data, this.chartTitleWeight(data.title)); return data.title; }
+        return this.chartCopy(data.title, weight);
+    }
+
+    /** What each chart's text weighs as written in a line (see chartLineWritten), the most a copy of it wrote; present once the first is written. */
+    private readonly chartLineWeights = new Map<ChartData | string, number>();
+
+    /**
+     * A chart's text as written in place (a chart standing in a line in DOCX, ODT and LaTeX; a chart without its data in every
+     * flow writer): `write` of its node's text (its data's lines), else its reference (see chartReferenceText) for a chart
+     * of no text where charts are written, at the first such chart node of its chart (its data, else its attachment's
+     * name); at a later one the same, while
+     * the chart-copy budget (see chartCopy) holds what it writes (UTF-8 bytes, decided on the most a copy has weighed,
+     * charged what this one wrote); past it `write` of the chart's reference (see chartReference), reported once
+     * (REPEATED_CONTENT_LIMIT_EXCEEDED). A 64 KB DOCX of 1,000 paragraphs each holding a chart of 20,000 values made
+     * 358 MB of DOCX XML: the parse charged the text's characters, the writer wrote 30 bytes a line.
+     */
+    protected chartLineWritten(node: OfficeContentNode, write: (text: string) => string): string {
+        const name = (node.metadata as { attachmentName?: string } | undefined)?.attachmentName;
+        const data = this.getAttachment(name)?.chartData;
+        const own = this.getNodeText(node);
+        // A chart of no text (a DOCX or PPTX chart parsed without extractAttachments): its reference, as it is written past
+        // the budget. In a line it wrote nothing. (Not where charts are left out: includeCharts false keeps what it wrote.)
+        const text = (own.trim() || this.config.includeCharts === false) ? own : chartReferenceText(data, name);
+        const key = data ?? name;
+        if (!key) return write(text);
+        const recorded = this.chartLineWeights.get(key);
+        if (recorded === undefined) {
+            const first = write(text);
+            this.chartLineWeights.set(key, utf8Length(first));
+            return first;
+        }
+        if (recorded <= this.chartRepeatsLeft) {
+            const copy = write(text);
+            const weight = utf8Length(copy);
+            if (weight > recorded) this.chartLineWeights.set(key, weight);
+            if (weight <= this.chartRepeatsLeft) {
+                this.chartRepeatsLeft -= weight;
+                return copy;
+            }
+        }
+        this.warnChartRepeats();
+        return write(chartReferenceText(data, name));
+    }
+
+    /** `text` as written in place, weighed (see ChartWritten). */
+    protected chartWritten(text: string): ChartWritten {
+        return { text, weight: utf8Length(text) };
+    }
+
+    /**
+     * A chart's table as a flow writer writes it (DOCX, ODT, LaTeX, HTML, Markdown, RTF), through `write`: at the first chart
+     * node showing `data`, built (as chartTable builds one, without a title row) and written whole, and what it wrote
+     * recorded; at a later one, the same table written again while the chart-copy budget (see chartCopy) and the grid
+     * budget hold what the copy weighs: decided before writing on the most a copy of it has weighed, then charged what this
+     * copy wrote (UTF-8 bytes, markup and escapes included). A copy that does not fit is taken back (`undo`), and the
+     * recorded weight raised to it, so it is written at most once per chart. Past either budget: undefined, reported once
+     * (REPEATED_CONTENT_LIMIT_EXCEEDED), and the writer writes the chart's reference (see chartReference). An 89 KB PPTX
+     * whose chart's labels were `^` wrote 18 times its charge in LaTeX and ran a 2 GB heap out.
+     */
+    protected async chartTableWritten(data: ChartData, cellOf: (text: string) => OfficeContentNode, write: (table: OfficeContentNode) => Promise<ChartWritten>): Promise<string | undefined> {
+        let records = this.chartTables.get(data);
+        const recorded = records?.plain;
+        if (!recorded) {
+            let cells = 0;
+            const counted = (text: string) => { cells++; return cellOf(text); };
+            const table = isXyChart(data) ? this.chartXyTable(data, counted, false) : this.chartGridTable(data, counted, false);
+            const first = await write(table);
+            if (!records) this.chartTables.set(data, records = {});
+            records.plain = { table, cells, weight: first.weight };
+            return first.text;
+        }
+        if (recorded.cells > this.paddingCellsLeft || recorded.weight > this.chartRepeatsLeft) {
+            this.warnChartRepeats();
+            return undefined;
+        }
+        const copy = await write(recorded.table);
+        recorded.weight = Math.max(recorded.weight, copy.weight);
+        if (copy.weight > this.chartRepeatsLeft) {
+            copy.undo?.();
+            this.warnChartRepeats();
+            return undefined;
+        }
+        this.paddingCellsLeft -= recorded.cells;
+        this.chartRepeatsLeft -= copy.weight;
+        return copy.text;
+    }
 
     /**
      * A chart's data as DOCX, ODT and LaTeX write it: a header of series names, then a row per label, or a
-     * row per point index when the chart's lists give them (see chartPositions).
+     * row per point index when the chart's lists give them (see chartPositions). Each label and value is
+     * written as the chart shows it (`shownLabels`, `shownValues`) where the chart keeps that text. A chart
+     * of several category levels (`labelLevels`) has a column for each outer level, outermost first, before
+     * its labels: an outer label in the row of the point it starts at, blank below until the next.
      * The table is labels x series, which a 9.6 KB PPTX made nine million cells (the process ran out of
      * memory), and it is written at every chart showing the data; so it is built within the grid budget
      * (see padWithinBudget) and at most MAX_CHART_TABLE_CELLS cells: at most MAX_LAYOUT_COLUMNS - 1 series,
-     * and the rows those hold. What is left out is reported (CONTENT_NOT_REPRESENTABLE).
+     * and the rows those hold. What is left out is reported (CONTENT_NOT_REPRESENTABLE). A scatter or bubble
+     * chart's table is its series side by side instead (see chartXyTable).
+     *
+     * A chart node after the first showing the same data (and `caption`) gets the first table's node again, its copy
+     * charged to the chart-copy budget (see chartCopy) and its cells to the grid budget: 1,000 frames of one 20,000-value
+     * chart in 65 KB of DOCX made 348 MB of RTF. A copy weighs an estimate from the writer's escape and markup, measured
+     * per writer: chartCellWeight for each column a cell spans and chartTextWeight of its text (a deck or workbook
+     * writer writes the table long after this; a flow writer measures what it writes, see chartTableWritten). Past
+     * either budget it is undefined, reported once (REPEATED_CONTENT_LIMIT_EXCEEDED), and the writer writes the chart's
+     * reference (see chartReference); its data is whole where it was first written.
      */
-    protected chartTable(data: ChartData, cellOf: (text: string) => OfficeContentNode, caption = false): OfficeContentNode {
+    protected chartTable(data: ChartData, cellOf: (text: string) => OfficeContentNode, caption = false): OfficeContentNode | undefined {
+        const key = caption ? 'caption' : 'plain';
+        let records = this.chartTables.get(data);
+        const recorded = records?.[key];
+        if (recorded) {
+            if (recorded.cells <= this.paddingCellsLeft && recorded.weight <= this.chartRepeatsLeft) {
+                this.paddingCellsLeft -= recorded.cells;
+                this.chartRepeatsLeft -= recorded.weight;
+                return recorded.table;
+            }
+            this.warnChartRepeats();
+            return undefined;
+        }
+        const made: OfficeContentNode[] = [];
+        let textWeight = 0;
+        const counted = (text: string) => { const cell = cellOf(text); made.push(cell); textWeight += this.chartTextWeight(text); return cell; };
+        const table = isXyChart(data) ? this.chartXyTable(data, counted, caption) : this.chartGridTable(data, counted, caption);
+        // A cell spanning columns (the title's row, an XY series' name) is written as a cell a column (PPTX hMerge, XLSX merges).
+        let positions = 0;
+        for (const cell of made) positions += Math.max(1, Math.floor(Number((cell.metadata as { colSpan?: unknown } | undefined)?.colSpan)) || 1);
+        if (!records) this.chartTables.set(data, records = {});
+        records[key] = { table, cells: made.length, weight: positions * this.chartCellWeight + textWeight };
+        return table;
+    }
+
+    /** A chart's data of labels and series as a table, the first time it is written (see chartTable). */
+    private chartGridTable(data: ChartData, cellOf: (text: string) => OfficeContentNode, caption: boolean): OfficeContentNode {
         const dataSets = Array.isArray(data.dataSets) ? data.dataSets : [];
         const labels = Array.isArray(data.labels) ? data.labels : [];
-        const series = dataSets.slice(0, MAX_LAYOUT_COLUMNS - 1);
-        const width = series.length + 1;
+        const levelColumns = Array.isArray(data.labelLevels) && data.labelLevels.length > 1 ? data.labelLevels.length - 1 : 0;
+        const series = dataSets.slice(0, MAX_LAYOUT_COLUMNS - 1 - levelColumns);
+        const width = levelColumns + series.length + 1;
         if (!this.chartPositionsOf.has(data)) this.chartPositionsOf.set(data, chartPositions(data));
         const positions = this.chartPositionsOf.get(data);
         const rowCount = positions ? positions.length : labels.length;
-        const labelAt = (i: number) => positions ? atPosition(labels, data.labelIndexes, positions[i]) : labels[i];
-        const valueAt = (d: ChartData['dataSets'][number] | undefined, i: number) => positions ? atPosition(d?.values, d?.valueIndexes, positions[i]) : d?.values?.[i];
+        const shownLabels = shownOr(data.shownLabels, labels);
+        const labelAt = (i: number) => positions ? atPosition(shownLabels, data.labelIndexes, positions[i]) : shownLabels[i];
+        const valueAt = (d: ChartData['dataSets'][number] | undefined, i: number) => {
+            const values = shownOr(d?.shownValues, d?.values);
+            return positions ? atPosition(values, d?.valueIndexes, positions[i]) : values[i];
+        };
         const allowed = Math.min(rowCount + 1, Math.floor(Math.min(this.paddingCellsLeft, MAX_CHART_TABLE_CELLS) / width));
         this.paddingCellsLeft -= allowed * width;
+        // (An outer label at a point no row has, or past the rows, has no row: it is reported, as the table limit's
+        // report where the limit cut the table, else as a category label with no point.)
+        const outer = levelColumns ? outerLevelRows(data, Math.max(0, allowed - 1), positions) : { levels: [], whole: true };
         if (series.length < dataSets.length || allowed < rowCount + 1) {
             this.warn(OfficeWarningType.CONTENT_NOT_REPRESENTABLE, { feature: 'chart data past the table limit', format: this.destination });
+        } else if (!outer.whole) {
+            this.warn(OfficeWarningType.CONTENT_NOT_REPRESENTABLE, { feature: 'chart category label with no point', format: this.destination });
         }
         const rows: OfficeContentNode[] = [];
         // Its title, where asked (a writer that writes no title of its own beside the table): a row across it.
-        const title = caption && typeof data.title === 'string' ? data.title.trim() : '';
+        const title = caption ? this.chartTitle(data).trim() : '';
         if (title) {
             const cell = cellOf(title);
             cell.metadata = { ...(cell.metadata ?? {}), colSpan: width, style: 'header' } as OfficeContentNode['metadata'];
             rows.push({ type: 'row', children: [cell] } as OfficeContentNode);
         }
-        if (allowed > 0) rows.push({ type: 'row', children: [cellOf(''), ...series.map(d => cellOf(d?.name || ''))] } as OfficeContentNode);
+        if (allowed > 0) rows.push({ type: 'row', children: [...outer.levels.map(() => cellOf('')), cellOf(''), ...series.map(d => cellOf(d?.name || ''))] } as OfficeContentNode);
         for (let i = 0; i < allowed - 1; i++) {
-            rows.push({ type: 'row', children: [cellOf(String(labelAt(i) ?? '')), ...series.map(d => cellOf(String(valueAt(d, i) ?? '')))] } as OfficeContentNode);
+            rows.push({ type: 'row', children: [...outer.levels.map(level => cellOf(level[i])), cellOf(String(labelAt(i) ?? '')), ...series.map(d => cellOf(String(valueAt(d, i) ?? '')))] } as OfficeContentNode);
+        }
+        return { type: 'table', children: rows } as OfficeContentNode;
+    }
+
+    /** Point indexes of each scatter or bubble chart's data, found once however many chart nodes show it. */
+    private readonly xyPositionsOf = new Map<ChartData, number[] | undefined>();
+
+    /**
+     * A scatter or bubble chart's data as a table (its series hold X values of their own, `xValues`): no label
+     * column, but for each series its X column, its value column and, for a bubble series, its size column; a
+     * first header row of series names across their columns and a second of what each column holds (the
+     * series' axis titles where the chart has them, else X and Y, and Size); a row per point index (see
+     * xyPositions), else per place. Values as the chart shows them (`shownValues`). Within the same budgets as
+     * chartTable: the series that fit MAX_LAYOUT_COLUMNS columns, and what is left out reported.
+     */
+    private chartXyTable(data: ChartData, cellOf: (text: string) => OfficeContentNode, caption: boolean): OfficeContentNode {
+        const dataSets = Array.isArray(data.dataSets) ? data.dataSets : [];
+        const axisById = new Map((Array.isArray(data.axes) ? data.axes : []).map(axis => [axis?.id, axis] as const));
+        const titleOf = (set: ChartData['dataSets'][number], which: 0 | 1, chartTitle: string | undefined, fallback: string) =>
+            (Array.isArray(set?.axisIds) ? axisById.get(set.axisIds[which])?.title : undefined) || chartTitle || fallback;
+        type Column = { list: unknown[]; indexes: unknown; heading: string };
+        const groups: { name: string; columns: Column[] }[] = [];
+        let width = 0;
+        for (const set of dataSets) {
+            const columns: Column[] = [
+                { list: Array.isArray(set?.xValues) ? set.xValues : [], indexes: set?.xValueIndexes, heading: titleOf(set, 0, data.xAxisTitle, 'X') },
+                { list: shownOr(set?.shownValues, set?.values), indexes: set?.valueIndexes, heading: titleOf(set, 1, data.yAxisTitle, 'Y') },
+                ...(Array.isArray(set?.bubbleSizes) && set.bubbleSizes.length ? [{ list: set.bubbleSizes, indexes: set.bubbleSizeIndexes, heading: 'Size' }] : []),
+            ];
+            if (width + columns.length > MAX_LAYOUT_COLUMNS) break;
+            width += columns.length;
+            groups.push({ name: set?.name || '', columns });
+        }
+        if (!this.xyPositionsOf.has(data)) this.xyPositionsOf.set(data, xyPositions(data));
+        const positions = this.xyPositionsOf.get(data);
+        const rowCount = positions ? positions.length : groups.reduce((most, group) => group.columns.reduce((m, column) => Math.max(m, column.list.length), most), 0);
+        const allowed = width ? Math.min(rowCount + 2, Math.floor(Math.min(this.paddingCellsLeft, MAX_CHART_TABLE_CELLS) / width)) : 0;
+        this.paddingCellsLeft -= allowed * width;
+        if (groups.length < dataSets.length || allowed < rowCount + 2) {
+            this.warn(OfficeWarningType.CONTENT_NOT_REPRESENTABLE, { feature: 'chart data past the table limit', format: this.destination });
+        }
+        const rows: OfficeContentNode[] = [];
+        const spanning = (text: string, colSpan: number, style?: string) => {
+            const cell = cellOf(text);
+            if (colSpan > 1 || style) cell.metadata = { ...(cell.metadata ?? {}), ...(colSpan > 1 && { colSpan }), ...(style && { style }) } as OfficeContentNode['metadata'];
+            return cell;
+        };
+        const title = caption && width ? this.chartTitle(data).trim() : '';
+        if (title) rows.push({ type: 'row', children: [spanning(title, width, 'header')] } as OfficeContentNode);
+        if (allowed > 0) rows.push({ type: 'row', children: groups.map(group => spanning(group.name, group.columns.length)) } as OfficeContentNode);
+        // Each column's heading is the title of the axis it is drawn on: the series of a group share their axes, so a
+        // title stands over two columns a series. The first of each is whole, the others copies (see chartCopy), each
+        // charged what the first weighed (measured once a heading; at most MAX_LAYOUT_COLUMNS of them).
+        const headings = new Map<string, number>();
+        const headingOf = (heading: string) => {
+            const weight = headings.get(heading);
+            if (weight !== undefined) return this.chartCopy(heading, weight);
+            headings.set(heading, this.chartTextWeight(heading));
+            return heading;
+        };
+        if (allowed > 1) rows.push({ type: 'row', children: groups.flatMap(group => group.columns.map(column => cellOf(headingOf(column.heading)))) } as OfficeContentNode);
+        for (let i = 0; i < allowed - 2; i++) {
+            rows.push({
+                type: 'row',
+                children: groups.flatMap(group => group.columns.map(column => cellOf(String((positions ? atPosition(column.list, column.indexes, positions[i]) : column.list[i]) ?? '')))),
+            } as OfficeContentNode);
         }
         return { type: 'table', children: rows } as OfficeContentNode;
     }
@@ -151,14 +453,24 @@ export abstract class BaseGenerator<D extends UniversalGeneratorFormat = Univers
     /** Lazily-built `name -> attachment` index for {@link getAttachment}. */
     private attachmentIndex?: Map<string, OfficeAttachment>;
 
-    constructor(protected destination: D, ast: OfficeParserAST, config?: GeneratorConfig<D> | FullGeneratorConfig) {
-        // Problems with the configuration itself are among the result's messages too.
-        this.config = resolveGeneratorConfig(destination, ast.config, config, issue => this.messages.push(issue));
+    /**
+     * @param destination - The format this writer writes.
+     * @param ast - The document written.
+     * @param config - The generator configuration, resolved here with the AST's (`ast.config`).
+     * @param configResolved - `config` is one a writer already resolved (EPUB and the browser-printed PDF write their HTML
+     *   with theirs): it holds the AST's config, and its problems were reported. Taken as it is, it is not checked again.
+     */
+    constructor(protected destination: D, ast: OfficeParserAST, config?: GeneratorConfig<D> | FullGeneratorConfig, configResolved = false) {
+        // Problems with the configuration itself are among the result's messages too. A configuration a writer already
+        // resolved holds the AST's config and was checked: resolved again with it, an option it did not recognize was
+        // reported a second time.
+        this.config = resolveGeneratorConfig(destination, configResolved && isFullGeneratorConfig(config) ? undefined : ast.config, config, issue => this.messages.push(issue));
         this.ast = ast;
         // (A header list edited in place since the last generation is read afresh.)
         forgetFurniture(ast.auxiliary?.headers, ast.auxiliary?.footers);
         this.styleMapper = new StyleMapper(this.config.styleMap, this.config.ignoreDefaultStyleMap, this.config);
         this.paddingCellsLeft = this.paddingLimit = gridPositionsFor(ast);
+        this.chartRepeatsLeft = this.chartRepeatLimit = repeatedContentOfAst(ast);
     }
 
     /**
@@ -192,6 +504,12 @@ export abstract class BaseGenerator<D extends UniversalGeneratorFormat = Univers
             }
         }
         return this.attachmentIndex.get(name);
+    }
+
+    /** The picture `node`, an equation, is written as by a writer that cannot typeset math (see mathPictureOf), or undefined. */
+    protected mathPicture(node: OfficeContentNode): OfficeContentNode | undefined {
+        const name = (node.metadata as { fallbackAttachmentName?: unknown } | undefined)?.fallbackAttachmentName;
+        return mathPictureOf(node, typeof name === 'string' ? this.getAttachment(name) : undefined, this.imageMode());
     }
 
     /**

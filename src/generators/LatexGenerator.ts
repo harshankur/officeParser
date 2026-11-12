@@ -15,6 +15,7 @@ import { escapeLatex, latexComment, latexSourceComment, sanitizeLatexImagePath, 
 import { isSourceComment } from '../utils/commentUtils.js';
 import { contentHash, imageToTextPdf, newDecodeBudget } from '../utils/textPdf.js';
 import { BaseGenerator } from './BaseGenerator.js';
+import { utf8Length } from '../utils/repeatUtils.js';
 import { lookupTable } from '../utils/lookupUtils.js';
 import { appendAll } from '../utils/nodeListUtils.js';
 
@@ -293,6 +294,14 @@ interface TitleBlock {
 }
 
 export class LatexGenerator extends BaseGenerator<'tex'> {
+    /** What `text` weighs in a chart's caption or cell: escaped, a line break as `\hfil\break{}` (see BaseGenerator.chartTextWeight). */
+    protected override chartTextWeight(text: string): number {
+        return utf8Length(escapeLatex(text, LINE_BREAK));
+    }
+    /** What a chart's title weighs in its caption: escaped, a line break as a space (see BaseGenerator.chartTitleWeight). */
+    protected override chartTitleWeight(title: string): number {
+        return utf8Length(escapeLatex(title, ' '));
+    }
     private readonly docClass: Exclude<TexDocumentClass, 'auto'>;
     private readonly beamer: boolean;
     private classSizePt = DEFAULT_CLASS_FONT_SIZE;
@@ -1031,6 +1040,11 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
             }
             case 'image': return this.imageMarkup(node, false);
             case 'break': return this.inlineBreak(node);
+            // A chart in a line: its data's lines, written again within the chart-copy budget (see chartLineWritten).
+            // (One holding nodes, which no reader makes, is written as any other.)
+            case 'chart':
+                if (!node.children?.length) return this.chartLineWritten(node, text => escapeLatex(text, this.ctx.moving ? ' ' : LINE_BREAK));
+            // falls through
             default:
                 return node.children && node.children.length
                     ? this.renderInline(node.children)
@@ -1739,10 +1753,14 @@ export class LatexGenerator extends BaseGenerator<'tex'> {
         if (this.config.includeCharts === false) return '';
         const meta = node.metadata as any;
         const data = this.getAttachment(meta?.attachmentName)?.chartData;
-        if (!data) return escapeLatex(`[Chart: ${meta?.attachmentName || ''}]`);
+        // Without its data (a parse without extractAttachments): its text, as in a line (see chartLineWritten), else
+        // its reference. Its reference alone lost the text the chart holds.
+        if (!data) return this.chartLineWritten(node, text => escapeLatex(text, LINE_BREAK));
         const cell = (text: string): OfficeContentNode => ({ type: 'cell', children: [{ type: 'text', text } as OfficeContentNode] } as OfficeContentNode);
-        const caption = data.title ? `\\textbf{${escapeLatex(data.title, ' ')}}` : '';
-        return [caption, await this.table(this.chartTable(data, cell))].filter(Boolean).join(BLOCK_SEPARATOR);
+        const title = this.chartTitle(data);
+        const caption = title ? `\\textbf{${escapeLatex(title, ' ')}}` : '';
+        const table = await this.chartTableWritten(data, cell, async t => this.chartWritten(await this.table(t)));
+        return [caption, table ?? escapeLatex(this.chartReference(data, meta?.attachmentName))].filter(Boolean).join(BLOCK_SEPARATOR);
     }
 
     // ── images ───────────────────────────────────────────────────────────────────────────────────

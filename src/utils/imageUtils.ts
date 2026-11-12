@@ -33,6 +33,9 @@ export const getMimeFromExtension = (ext: string): string => {
         case 'bmp': return 'image/bmp';
         case 'tiff': return 'image/tiff';
         case 'webp': return 'image/webp';
+        // Windows metafiles, by the names RFC 7903 gives them
+        case 'emf': return 'image/emf';
+        case 'wmf': return 'image/wmf';
         case 'pdf': return 'application/pdf';
         default: return 'application/octet-stream'; // Generic binary MIME type
     }
@@ -91,6 +94,23 @@ export const getMimeFromBytes = (buffer: Buffer): string | undefined => {
         buffer[0] === 0x52 && buffer[1] === 0x49 && buffer[2] === 0x46 && buffer[3] === 0x46 &&
         buffer[8] === 0x57 && buffer[9] === 0x45 && buffer[10] === 0x42 && buffer[11] === 0x50) {
         return 'image/webp';
+    }
+
+    // EMF: an EMR_HEADER record (type 1) whose signature at byte 40 is " EMF"
+    if (buffer.length >= 44 && buffer[0] === 1 && buffer[1] === 0 && buffer[2] === 0 && buffer[3] === 0 &&
+        buffer[40] === 0x20 && buffer[41] === 0x45 && buffer[42] === 0x4D && buffer[43] === 0x46) {
+        return 'image/emf';
+    }
+
+    // WMF: the placeable header's key D7 CD C6 9A, or a METAHEADER with no placeable header (type 1 or 2,
+    // a header of 9 words, version 0x0100 or 0x0300). Six bytes, since this also types arbitrary
+    // embedded files: four bytes alone are too common to mean a metafile.
+    if (buffer[0] === 0xD7 && buffer[1] === 0xCD && buffer[2] === 0xC6 && buffer[3] === 0x9A) {
+        return 'image/wmf';
+    }
+    if (buffer.length >= 6 && (buffer[0] === 1 || buffer[0] === 2) && buffer[1] === 0 && buffer[2] === 9 && buffer[3] === 0 &&
+        buffer[4] === 0 && (buffer[5] === 1 || buffer[5] === 3)) {
+        return 'image/wmf';
     }
 
     return undefined;
@@ -166,7 +186,7 @@ export function crc32(bytes: Uint8Array): number {
 
 /**
  * Points each node in `nodes` (their children, notes and comments too) that names a renamed attachment
- * at its new name: content read from one part (an EPUB chapter, a DOCX chunk) into a document whose
+ * (its `attachmentName`, or an equation's `fallbackAttachmentName`) at its new name: content read from one part (an EPUB chapter, a DOCX chunk) into a document whose
  * attachments already hold some of its names. A node shared along several paths is renamed once.
  */
 export const renameAttachments = (nodes: OfficeContentNode[], renamed: ReadonlyMap<string, string>): void => {
@@ -178,14 +198,47 @@ export const renameAttachments = (nodes: OfficeContentNode[], renamed: ReadonlyM
         const node = pending.pop()!;
         if (!node || typeof node !== 'object' || seen.has(node)) continue;
         seen.add(node);
-        const meta = node.metadata as { attachmentName?: unknown } | undefined;
+        const meta = node.metadata as { attachmentName?: unknown; fallbackAttachmentName?: unknown } | undefined;
         const name = meta && typeof meta.attachmentName === 'string' ? renamed.get(meta.attachmentName) : undefined;
-        if (name !== undefined) (node as { metadata?: unknown }).metadata = { ...meta, attachmentName: name };
+        // (An equation's picture of itself, CodeMetadata.fallbackAttachmentName, too.)
+        const fallback = meta && typeof meta.fallbackAttachmentName === 'string' ? renamed.get(meta.fallbackAttachmentName) : undefined;
+        if (name !== undefined || fallback !== undefined) (node as { metadata?: unknown }).metadata = { ...meta, ...(name !== undefined ? { attachmentName: name } : {}), ...(fallback !== undefined ? { fallbackAttachmentName: fallback } : {}) };
         for (const list of [node.children, node.notes, node.comments]) {
             if (Array.isArray(list)) for (let i = list.length - 1; i >= 0; i--) pending.push(list[i]);
         }
     }
 };
+
+/** A picture format a file's first bytes name (see {@link pictureSignature}). */
+export type PictureSignature = 'PNG' | 'JPEG' | 'GIF' | 'BMP' | 'TIFF' | 'WebP' | 'PDF' | 'EMF' | 'WMF';
+
+/**
+ * A picture's format by its signature alone (PNG, JPEG, GIF, BMP, TIFF, WebP, PDF, EMF, WMF), or undefined when
+ * its first bytes are none of them (an SVG, which is text, has none). A writer that decides how to hold a picture
+ * by this, not by its name or media type, never writes one format's bytes labelled as another's. Reads at most
+ * the first 44 bytes.
+ */
+export function pictureSignature(bytes: Uint8Array): PictureSignature | undefined {
+    const b = bytes, n = bytes.length;
+    if (n < 4) return undefined;
+    if (b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4E && b[3] === 0x47) return 'PNG';
+    if (b[0] === 0xFF && b[1] === 0xD8 && b[2] === 0xFF) return 'JPEG';
+    if (b[0] === 0x47 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x38) return 'GIF';
+    if ((b[0] === 0x49 && b[1] === 0x49 && b[2] === 0x2A && b[3] === 0x00) || (b[0] === 0x4D && b[1] === 0x4D && b[2] === 0x00 && b[3] === 0x2A)) return 'TIFF';
+    if (n >= 12 && b[0] === 0x52 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x46 && b[8] === 0x57 && b[9] === 0x45 && b[10] === 0x42 && b[11] === 0x50) return 'WebP';
+    if (b[0] === 0x25 && b[1] === 0x50 && b[2] === 0x44 && b[3] === 0x46) return 'PDF';
+    // EMF: an EMR_HEADER record (type 1) whose signature at byte 40 is " EMF".
+    if (n >= 44 && b[0] === 1 && b[1] === 0 && b[2] === 0 && b[3] === 0 && b[40] === 0x20 && b[41] === 0x45 && b[42] === 0x4D && b[43] === 0x46) return 'EMF';
+    // WMF: the placeable header's key, or a METAHEADER (type 1 or 2, 9 words, version 0x0100 or 0x0300).
+    if (b[0] === 0xD7 && b[1] === 0xCD && b[2] === 0xC6 && b[3] === 0x9A) return 'WMF';
+    if (n >= 6 && (b[0] === 1 || b[0] === 2) && b[1] === 0 && b[2] === 9 && b[3] === 0 && b[4] === 0 && (b[5] === 1 || b[5] === 3)) return 'WMF';
+    // BMP: "BM" and a DIB header of a size one of its versions has (the two letters alone are common text).
+    if (n >= 18 && b[0] === 0x42 && b[1] === 0x4D) {
+        const header = (b[14] | b[15] << 8 | b[16] << 16 | b[17] << 24) >>> 0;
+        if (header === 12 || header === 16 || header === 40 || header === 52 || header === 56 || header === 64 || header === 108 || header === 124) return 'BMP';
+    }
+    return undefined;
+}
 
 /**
  * What a picture's bytes are, named for a message: its format by its signature (PNG, JPEG, GIF, BMP, TIFF,
@@ -194,12 +247,11 @@ export const renameAttachments = (nodes: OfficeContentNode[], renamed: ReadonlyM
  */
 export function pictureKindOf(bytes: Uint8Array, mimeType?: string, extension?: string): string {
     const ascii = (from: number, to: number) => String.fromCharCode(...bytes.subarray(from, to));
-    const u32 = (at: number) => bytes.length >= at + 4 ? (bytes[at] | bytes[at + 1] << 8 | bytes[at + 2] << 16 | bytes[at + 3] << 24) >>> 0 : -1;
-    // (Read by index alone, so a Uint8Array serves where there is no Buffer.)
+    const signature = pictureSignature(bytes);
+    if (signature) return signature;
+    // (Read by index alone, so a Uint8Array serves where there is no Buffer. A BMP named by its two letters.)
     const mime = getMimeFromBytes(bytes as Buffer);
     if (mime) return mime === 'application/pdf' ? 'PDF' : mime === 'image/webp' ? 'WebP' : mime.slice(6).toUpperCase();
-    if (u32(0) === 1 && ascii(40, 44) === ' EMF') return 'EMF';
-    if (u32(0) === 0x9AC6CDD7 || ((bytes[0] === 1 || bytes[0] === 2) && bytes[1] === 0 && bytes[2] === 9 && bytes[3] === 0)) return 'WMF';
     // (A byte order mark read byte by byte is three characters.)
     const head = ascii(0, Math.min(bytes.length, 512)).replace(/^\xEF\xBB\xBF/, '').trimStart();
     if (/^(<\?xml[^>]*>\s*)?(<!--[\s\S]*?-->\s*)*(<!DOCTYPE[^>]*>\s*)?<svg[\s>]/i.test(head)) return 'SVG';

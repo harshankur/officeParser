@@ -4,6 +4,7 @@ import { BaseGenerator } from './BaseGenerator.js';
 import { HtmlGenerator } from './HtmlGenerator.js';
 import { escapeXml, stripInvalidXmlChars } from '../utils/sanitize.js';
 import { decodeBase64, documentLanguage, MIME_EXT, resolveZipInstant } from '../utils/officeGenUtils.js';
+import { appendAll } from '../utils/nodeListUtils.js';
 
 const VOID_TAGS = ['area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'param', 'source', 'track', 'wbr'];
 
@@ -116,8 +117,8 @@ const withXmlNameIds = (xhtml: string): string => {
  * document fail to open. The conversion:
  *  - strips `<script>` blocks. EpubGenerator renders through HtmlGenerator with
  *    `standalone: false`, which already omits the envelope-level stylesheet and Chart.js/
- *    spreadsheet scripts entirely, but a chart *node* still emits its own inline
- *    `<script>` (chart-init JS) regardless of that flag, since it's content, not envelope.
+ *    spreadsheet scripts entirely, and writes a chart as its data's table (chartsAsTables), but
+ *    a caller's onNode string can still hold a `<script>`, which is content, not envelope.
  *    A reading system can't execute it anyway, and its JS operators can contain raw `&`/`<`
  *    that are illegal as XML character data, so it's stripped here;
  *  - promotes `<p>` tags that contain nested block content (see
@@ -223,7 +224,9 @@ export class EpubGenerator extends BaseGenerator<'epub'> {
             // structured consumers and change the mermaid shape's rendered appearance, neither of
             // which belongs in a packaged EPUB.
             htmlConfig: { ...this.config.htmlConfig, standalone: false, sourceAttributes: false },
-        } as GeneratorConfig<'html'>);
+        // A chart as its data's table under its title: a reading system runs no script, so a Chart.js canvas showed
+        // nothing (its data, in a script, was stripped with it).
+        } as GeneratorConfig<'html'>, { chartsAsTables: true, configResolved: true });
         // Each attachment's picture is a file in the package, which every <img> showing it points at: its
         // data was inlined at every <img> and extracted again, so a small book showing one large
         // picture many times was built as an HTML string past what memory holds.
@@ -248,6 +251,9 @@ export class EpubGenerator extends BaseGenerator<'epub'> {
             return href;
         };
         const htmlResult = await htmlGenerator.generate();
+        // What writing the chapter reported (a chart's copies past the budget, a picture not written) is the book's too:
+        // onWarning heard it, but the result's messages did not hold it.
+        appendAll(this.messages, htmlResult.messages);
         let bodyHtml = typeof htmlResult.value === 'string' ? htmlResult.value : '';
 
         // Extract any other base64 data-URI images (a picture given by a data: URL) into packaged

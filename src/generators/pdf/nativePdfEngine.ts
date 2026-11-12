@@ -19,13 +19,15 @@
 
 import { fillPageNumber } from '../../utils/pageNumbers.js';
 import { clampInt } from '../../utils/numberUtils.js';
-import { EmbedMetadata, FullGeneratorConfig, ImageMode, IndentationMetadata, OfficeContentNode, OfficeErrorType, OfficeMetadata, OfficeParserAST, OfficeWarningType, PageSetup, ParagraphSpacing, SheetMetadata, TextAlignment, TextFormatting, BreakMetadata, ChartData, HeaderFooterMetadata, NodeBounds, ShapeMetadata, SlideMetadata, PageNumberFormat } from '../../types.js';
-import { atPosition, chartPositions } from '../../utils/chartUtils.js';
+import { CodeMetadata, EmbedMetadata, FullGeneratorConfig, ImageMode, IndentationMetadata, OfficeContentNode, OfficeErrorType, OfficeMetadata, OfficeParserAST, OfficeWarningType, PageSetup, ParagraphSpacing, SheetMetadata, TextAlignment, TextFormatting, BreakMetadata, ChartData, HeaderFooterMetadata, NodeBounds, ShapeMetadata, SlideMetadata, PageNumberFormat } from '../../types.js';
+import { atPosition, chartPositions, chartReferenceText, isXyChart, outerLevelRows, shownOr, xyPositions } from '../../utils/chartUtils.js';
+import { utf8Length } from '../../utils/repeatUtils.js';
 import { hasPageSize, onDocumentPage } from '../../utils/pageLimits.js';
-import { getAbortError, getOfficeError } from '../../utils/errorUtils.js';
-import { documentLanguage, embedUrl, isHeaderRow, lengthToPt, paperSizePt, resolveImageMode, sniffImageSize, writableSpacing } from '../../utils/officeGenUtils.js';
-import { decodeBmp, decodeGif, encodePng } from '../../utils/rasterUtils.js';
-import { pictureKindOfBase64, picturesOfKind } from '../../utils/imageUtils.js';
+import { getAbortError, getOfficeError, shownTo80 } from '../../utils/errorUtils.js';
+import { documentLanguage, embedUrl, isHeaderRow, isPlaceholderNode, lengthToPt, mathPictureOf, paperSizePt, resolveImageMode, sniffImageSize, writableSpacing } from '../../utils/officeGenUtils.js';
+import { decodeBmp, decodeGif, encodePng, MAX_RASTER_PIXELS, pngWithinBudget, type BitmapTransparency, type Raster } from '../../utils/rasterUtils.js';
+import { readMetafile } from '../../utils/metafileUtils.js';
+import { pictureKindOf, pictureSignature, picturesOfKind } from '../../utils/imageUtils.js';
 import { sanitizeOfficePackageUrl } from '../../utils/sanitize.js';
 import { cssColorHex } from '../../utils/colorUtils.js';
 import { formatListNumber } from '../../utils/listMarkers.js';
@@ -47,7 +49,19 @@ function maxOf(values: readonly number[], floor: number): number {
  * decompression-bomb image (a few header bytes declaring enormous dimensions) would force a multi-GB,
  * uncatchable allocation. A real image is far below this; a larger one degrades to its alt text.
  */
-const MAX_IMAGE_PIXELS = 40_000_000;
+const MAX_IMAGE_PIXELS = MAX_RASTER_PIXELS;
+
+/** The most of an equation's LaTeX source a warning holds (`details.latex`). */
+const MAX_REPORTED_LATEX = 1000;
+
+/** The picture formats the engine embeds, for a message about one it does not. */
+const EMBEDDED_KINDS = 'PNG, JPEG, GIF, BMP, SVG, and bitmaps in EMF and WMF';
+
+/** The picture formats known by a signature (pictureSignature): a picture named one whose bytes lack it is not one. */
+const SIGNED_KINDS: ReadonlySet<string> = new Set(['PNG', 'JPEG', 'GIF', 'BMP', 'TIFF', 'WebP', 'PDF', 'EMF', 'WMF']);
+
+/** What one line of a chart's text weighs past its characters (see NativeLayout.chartText): about 10 bytes a line drawn, and the time of about nine characters of text. */
+const CHART_LINE_WEIGHT = 16;
 
 /**
  * Code points WinAnsi (CP1252) encodes beyond Latin-1, which the Standard-14 fonts accept (smart
@@ -406,11 +420,25 @@ function toPoints(v: string | number | undefined, fallback: number): number {
     return fallback;
 }
 
-/** Whether a picture's bytes are an SVG: by its type or name, or by its text starting `<svg` or `<?xml`. */
+/** The part of a raster a metafile draws (its crop, inside it): its rows cut to their columns. */
+function cropRaster(raster: Raster, crop: { x: number; y: number; width: number; height: number }): Raster {
+    const rgba = new Uint8Array(crop.width * crop.height * 4);
+    for (let y = 0; y < crop.height; y++) {
+        const from = ((crop.y + y) * raster.width + crop.x) * 4;
+        rgba.set(raster.rgba.subarray(from, from + crop.width * 4), y * crop.width * 4);
+    }
+    return { width: crop.width, height: crop.height, rgba };
+}
+
+/**
+ * Whether a picture's bytes are an SVG: by its type or name, or by its text starting `<svg` (after an XML
+ * declaration, comments and a doctype). Asked only of bytes with no picture signature (see embedBytes): an SVG is
+ * text, so its name may say what its bytes cannot, but a PNG named `.svg` is a PNG.
+ */
 function isSvg(bytes: Uint8Array, attachment: { extension?: string; mimeType?: string }): boolean {
     if (/svg/i.test(attachment.mimeType || '') || /^svg$/i.test(attachment.extension || '')) return true;
     const head = new TextDecoder().decode(bytes.subarray(0, 512)).replace(/^\uFEFF/, '').trimStart();
-    return /^<(?:\?xml[^>]*>\s*)?(?:<!--[\s\S]*?-->\s*)*(?:<!DOCTYPE[^>]*>\s*)?<svg[\s>]/i.test(head);
+    return /^(?:<\?xml[^>]*>\s*)?(?:<!--[\s\S]*?-->\s*)*(?:<!DOCTYPE[^>]*>\s*)?<svg[\s>]/i.test(head);
 }
 
 /** The styles text is drawn in. */
@@ -674,6 +702,8 @@ class NativeLayout {
         private readonly reportWarning: (type: OfficeWarningType, info?: any) => void,
         /** Whether any font was given: the Standard-14 ones are then the last resort, not the only fonts. */
         private readonly customFonts: boolean,
+        /** What a chart's text written again may weigh in all (see chartText): the output's chart-copy budget. */
+        private readonly chartCopyBudget: number,
         /**
          * Each section's pages from its PageSetup (pdfConfig.format 'auto'), the margins the caller left
          * unset taken from it; null when the caller's paper is used throughout.
@@ -685,6 +715,7 @@ class NativeLayout {
         private differentFirstPage?: boolean,
     ) {
         this.imageMode = resolveImageMode(this.config.includeImages);
+        this.chartTextLeft = chartCopyBudget;
         for (const a of this.ast.attachments || []) {
             if (a.name && !this.attachmentsByName.has(a.name)) this.attachmentsByName.set(a.name, a);
         }
@@ -1163,19 +1194,27 @@ class NativeLayout {
         const inner = { left: box.x + insets.left, right: this.pageW - (box.x + box.width - insets.right), top: box.y + insets.top, bottom: 0 };
         if (this.pageW - inner.left - inner.right < 4) { inner.left = box.x; inner.right = this.pageW - box.x - Math.max(4, box.width); }
         const drawAll = async () => { for (const n of nodes) await this.render(n); };
-        // Measured from the top of a box of its width, then drawn from where its anchor sets it: its
-        // first line at the top of the box it is given (a heading adds no space above it there).
-        const height = await this.measured(async () => { this.margin = { ...inner, top: 0 }; this.y = 0; await drawAll(); });
         const room = box.height - insets.top - insets.bottom;
-        const offset = shape?.textAnchor === 'middle' ? (room - height) / 2 : shape?.textAnchor === 'bottom' ? room - height : 0;
-        this.margin = { ...inner, top: inner.top + offset };
-        this.y = inner.top + offset;
-        const rotation = shape?.rotation || 0;
-        if (!rotation && !shape?.flipH && !shape?.flipV) { await drawAll(); return; }
-        const cx = box.x + box.width / 2, cy = this.pageH - box.y - box.height / 2;
-        const angle = -rotation * Math.PI / 180, cos = Math.cos(angle), sin = Math.sin(angle);
-        this.page.pushOperators(this.lib.pushGraphicsState(), this.lib.concatTransformationMatrix(cos, sin, -sin, cos, cx - cos * cx + sin * cy, cy - sin * cx - cos * cy));
-        try { await drawAll(); } finally { this.page.pushOperators(this.lib.popGraphicsState()); }
+        // A chart in the box is drawn within its room (see chartBottom), the same in both passes, so the height
+        // measured is the one drawn: drawn 180 pt high, it ran over what follows the box.
+        const outerChartBottom = this.chartBottom;
+        try {
+            // Measured from the top of a box of its width, then drawn from where its anchor sets it: its
+            // first line at the top of the box it is given (a heading adds no space above it there).
+            const height = await this.measured(async () => { this.margin = { ...inner, top: 0 }; this.y = 0; this.chartBottom = room; await drawAll(); });
+            const offset = shape?.textAnchor === 'middle' ? (room - height) / 2 : shape?.textAnchor === 'bottom' ? room - height : 0;
+            this.margin = { ...inner, top: inner.top + offset };
+            this.y = inner.top + offset;
+            this.chartBottom = inner.top + offset + room;
+            const rotation = shape?.rotation || 0;
+            if (!rotation && !shape?.flipH && !shape?.flipV) { await drawAll(); return; }
+            const cx = box.x + box.width / 2, cy = this.pageH - box.y - box.height / 2;
+            const angle = -rotation * Math.PI / 180, cos = Math.cos(angle), sin = Math.sin(angle);
+            this.page.pushOperators(this.lib.pushGraphicsState(), this.lib.concatTransformationMatrix(cos, sin, -sin, cos, cx - cos * cx + sin * cy, cy - sin * cx - cos * cy));
+            try { await drawAll(); } finally { this.page.pushOperators(this.lib.popGraphicsState()); }
+        } finally {
+            this.chartBottom = outerChartBottom;
+        }
     }
 
     /**
@@ -1460,6 +1499,17 @@ class NativeLayout {
         this.pendingAnchors = [];
     }
 
+    /**
+     * Places anchors held aside while a line was laid out (a heading's, a list item's) where they belong: at its first
+     * line when that line holds a picture (a picture line can move to the next column or page after the room kept for a
+     * line of text), else where they were held (the room kept). In what is measured, or drawn on every page, they stay
+     * pending, as placeAnchors leaves them.
+     */
+    private placeHeldAnchors(held: string[], at: { page: any; top: number }): void {
+        if (this.furniture) { this.pendingAnchors = [...held, ...this.pendingAnchors]; return; }
+        for (const id of held) if (!this.anchors.has(id)) this.anchors.set(id, { page: at.page, top: at.top });
+    }
+
     /** Records a link's box, joined to the box before it when that is the same link on the same line. */
     private addLinkBox(target: string, x: number, bottom: number, width: number, height: number): void {
         const last = this.linkBoxes[this.linkBoxes.length - 1];
@@ -1612,9 +1662,11 @@ class NativeLayout {
         }
         for (const note of notes) {
             let runs: Run[] = [];
+            // (Its pictures in its lines: the room kept for it at a page's foot counts them.)
+            await this.placeLinePictures(note);
             const height = await this.measured(async () => {
                 runs = [{ text: `${this.noteLabels.get(note)} `, fmt: { size: '9pt', superscript: true } } as Run,
-                    ...(await this.collectRuns(note)).map(r => ({ ...r, fmt: { ...r.fmt, size: '9pt' } }))];
+                    ...(await this.collectRuns(note, true)).map(r => ({ ...r, fmt: { ...r.fmt, size: '9pt' } }))];
                 this.drawRuns(runs, this.margin.left, width);
             });
             this.footnoteRuns.set(note, runs);
@@ -1711,6 +1763,50 @@ class NativeLayout {
     private embedWarned = false;
     /** Whether the chart-as-text warning was given (once per document). */
     private chartWarned = false;
+    /** What a chart's text written again may still weigh (see chartText): the chart-copy budget. */
+    private chartTextLeft: number;
+    /** The charts (data, else attachment name) whose text this document has written once. */
+    private readonly chartTextsWritten = new Set<ChartData | string>();
+    /** Each chart node's text as decided once, for every pass that lays it out (measured, then drawn). */
+    private readonly chartTextOf = new WeakMap<OfficeContentNode, string>();
+    private chartCopiesWarned = false;
+
+    /**
+     * The text a chart the engine writes as text shows (a chart it cannot draw, or one in a heading, list item or note):
+     * its node's text at the first such node of its chart; at a later one the same while the chart-copy budget holds it
+     * (its UTF-8 bytes and CHART_LINE_WEIGHT a line); past it the chart's reference, reported once
+     * (REPEATED_CONTENT_LIMIT_EXCEEDED). Decided once a node, so both passes lay out the same text. One paragraph of a
+     * 20,000-value chart framed 200 times took 96 seconds: one-character lines lay out at about 19 microseconds each.
+     */
+    private chartText(node: OfficeContentNode): string {
+        const decided = this.chartTextOf.get(node);
+        if (decided !== undefined) return decided;
+        const name = (node.metadata as { attachmentName?: string } | undefined)?.attachmentName;
+        const data = (name ? this.attachmentsByName.get(name) as { chartData?: ChartData } | undefined : undefined)?.chartData;
+        // A chart of no text (a DOCX or PPTX chart parsed without extractAttachments): its reference, as every flow
+        // writer writes it. It drew nothing.
+        const text = (node.text || '').trim() ? node.text! : chartReferenceText(data, name);
+        const key = data ?? name;
+        let shown = text;
+        if (key && text) {
+            if (!this.chartTextsWritten.has(key)) this.chartTextsWritten.add(key);
+            else {
+                let lines = 1;
+                for (let i = 0; i < text.length; i++) if (text.charCodeAt(i) === 10) lines++;
+                const weight = utf8Length(text) + CHART_LINE_WEIGHT * lines;
+                if (weight <= this.chartTextLeft) this.chartTextLeft -= weight;
+                else {
+                    if (!this.chartCopiesWarned) {
+                        this.chartCopiesWarned = true;
+                        this.reportWarning(OfficeWarningType.REPEATED_CONTENT_LIMIT_EXCEEDED, this.chartCopyBudget);
+                    }
+                    shown = chartReferenceText(data, name);
+                }
+            }
+        }
+        this.chartTextOf.set(node, shown);
+        return shown;
+    }
     /** How many characters no font could draw, and the first few distinct ones. */
     private lostCharacters = 0;
     private readonly lostSample: string[] = [];
@@ -1957,13 +2053,20 @@ class NativeLayout {
      * (and its subtree) and a returned string replaces its text. The root `node` itself is NOT hooked:
      * whoever passes it here (render(), or the table/cell walk) has already applied the hook to it, so
      * hooking it again would fire twice for the same node.
+     *
+     * `ocrAfterPictures`: in 'image+ocr-text', a picture placed in the line is followed by its recognized
+     * text there (a note's runs, drawn later at a page's foot, have no place after them for it).
      */
-    private async collectRuns(node: OfficeContentNode): Promise<Run[]> {
+    private async collectRuns(node: OfficeContentNode, ocrAfterPictures = false): Promise<Run[]> {
         const out: Run[] = [];
         // The runs of the page field being read: a field's result saved in several runs (its digits in two
         // looks) is one number, written once (each run drew the whole number: "Page 11 of 33"), in the runs
         // as a whole (see fillPageNumber).
         let field: { kind: string; format?: PageNumberFormat; runs: Run[] } | undefined;
+        // Whether the walk left out a node drawn apart from this text (see drawnApart). The root's own `.text`
+        // holds that node's text (an equation's LaTeX, a chart's data), so it is not the text of a root whose
+        // children gave no run: a cell's paragraph holding only an equation drawn as its picture wrote its LaTeX.
+        let leftOut = false;
         const endField = () => {
             if (!field) return;
             const value = field.kind === 'page' ? this.fieldPage! : this.fieldPages!;
@@ -1978,7 +2081,7 @@ class NativeLayout {
             let override: string | false | void = undefined;
             // A picture drawn in its cell, or a chart after its table, is no text of the cell's (see table),
             // but for a picture's recognized text where that is drawn too.
-            if (!isRoot && this.drawnApart.has(n)) { const ocr = this.ocrBesidePicture(n); if (ocr) out.push({ text: ocr, fmt: inherited }); return; }
+            if (!isRoot && this.drawnApart.has(this.mathPicture(n) ?? n)) { leftOut = true; const ocr = this.ocrBesidePicture(n); if (ocr) out.push({ text: ocr, fmt: inherited }); return; }
             if (!isRoot) {
                 override = await this.onNodeValue(n);
                 if (override === false) return;
@@ -2013,10 +2116,25 @@ class NativeLayout {
             if (n.type === 'image' && !isRoot) {
                 // A picture in the line, where it is drawn there (see paragraph).
                 const picture = this.inlinePictures.get(n);
-                if (picture && typeof override !== 'string') { out.push({ text: '', fmt, link, picture }); return; }
+                if (picture && typeof override !== 'string') {
+                    out.push({ text: '', fmt, link, picture });
+                    const ocr = ocrAfterPictures ? this.ocrBesidePicture(n) : '';
+                    if (ocr) out.push({ text: ` ${ocr}`, fmt, link });
+                    return;
+                }
                 const alt = this.inlineImageText(n, typeof override === 'string' ? override : undefined);
                 if (alt) out.push({ text: alt, fmt, link });
                 return;
+            }
+            // An equation drawn as its document's own picture, placed in this line (see placeLinePictures): onNode
+            // was asked about the equation (a string for it is its text).
+            // One whose picture could not be embedded is written as its LaTeX, its failure reported by embedPicture alone.
+            let pictureFailed = false;
+            if (!isRoot && n.type === 'code' && typeof override !== 'string') {
+                const math = this.mathPicture(n);
+                const picture = math ? this.inlinePictures.get(math) : undefined;
+                if (picture) { out.push({ text: '', fmt, link, picture }); cite(n, fmt); return; }
+                if (math && this.embedTried.has(math)) pictureFailed = true;
             }
             // A break inside a line (`<br>`, Word's `w:br`, a column break) starts a new line, and a page
             // break inside a paragraph a new page; they were dropped, gluing the lines together.
@@ -2026,6 +2144,17 @@ class NativeLayout {
                 else if (kind !== 'lastRenderedPage' && kind !== 'thematic') out.push({ text: '\n', fmt });
                 return;
             }
+            // A chart in a line the engine lays out as text (a heading's, a list item's, a note's): its data's lines,
+            // on lines of their own, reported; left out with includeCharts: false. Its lines ran on from the word
+            // before it, unreported.
+            if (n.type === 'chart' && !isRoot && typeof override !== 'string') {
+                if (this.config.includeCharts === false) return;
+                const lines = this.lineChartText(n);
+                if (lines) out.push({ text: '\n', fmt }, { text: lines, fmt, link }, { text: '\n', fmt });
+                return;
+            }
+            // An equation written as its LaTeX source (one onNode gave no text for), reported.
+            if (n.type === 'code' && (n.metadata as CodeMetadata | undefined)?.math && typeof override !== 'string' && !pictureFailed) this.mathSource(n);
             if (n.type === 'text' || (!n.children?.length && text)) {
                 if (text) out.push({ text, fmt, link });
                 cite(n, fmt);
@@ -2043,7 +2172,7 @@ class NativeLayout {
         };
         await walk(node, {}, undefined, true);
         endField();
-        if (!out.length && node.text) out.push({ text: node.text, fmt: node.formatting || {} });
+        if (!out.length && !leftOut && node.text) out.push({ text: node.text, fmt: node.formatting || {} });
         return out;
     }
 
@@ -2068,7 +2197,7 @@ class NativeLayout {
                 if (override === false) continue;
                 let t: string;
                 if (typeof override === 'string') t = override;
-                else if (this.drawnApart.has(c)) t = this.ocrBesidePicture(c);
+                else if (this.drawnApart.has(this.mathPicture(c) ?? c)) t = this.ocrBesidePicture(c);
                 else if (c.type === 'image') t = this.cellImageText(c);
                 else t = (await this.collectRuns(c)).map(r => r.note ? this.raisedLabel(r.text) : r.text).join('').replace(/\f/g, '\n');
                 if (t !== '') lines.push(t);
@@ -2077,7 +2206,37 @@ class NativeLayout {
         }
         // A page break inside a cell is a line break there: a cell cannot start a page.
         const flat = (await this.collectRuns(node)).map(r => r.note ? this.raisedLabel(r.text) : r.text).join('').replace(/\f/g, '\n');
-        return flat || node.text || '';
+        // (collectRuns gives the node's own text where its children give none, and nothing where they were drawn apart.)
+        return flat;
+    }
+
+    /**
+     * Reports an equation the engine writes as its LaTeX source, which it cannot typeset: each distinct one once
+     * (the reported set keys on the details), named by its first 80 characters, its source in `details.latex`
+     * (to 1,000 characters; `details.length` its whole length when it is cut there) and its kind in `details.math`. An equation drawn as its document's own picture
+     * (mathPicture) never reaches here: its callers come after the picture's.
+     */
+    private mathSource(node: OfficeContentNode): void {
+        const latex = node.text ?? '';
+        const math = (node.metadata as CodeMetadata | undefined)?.math;
+        this.reportWarning(OfficeWarningType.CONTENT_NOT_REPRESENTABLE, { format: 'pdf', feature: `equation '${shownTo80(latex)}' (drawn as its LaTeX source)`, reason: 'math-as-source', math, latex: latex.slice(0, MAX_REPORTED_LATEX), ...(latex.length > MAX_REPORTED_LATEX ? { length: latex.length } : {}) });
+    }
+
+    private lineChartWarned = false;
+    /**
+     * The text a chart in a line of text is written as (its data's lines, its node's text), warning once that the
+     * native engine writes a chart there as text: a heading, a list item and the note area lay out runs, not blocks.
+     */
+    private lineChartText(node: OfficeContentNode): string {
+        let text = this.chartText(node);
+        let end = text.length;
+        while (end > 0 && text.charCodeAt(end - 1) === 10) end--;
+        text = text.slice(0, end);
+        if (text && !this.lineChartWarned) {
+            this.lineChartWarned = true;
+            this.reportWarning(OfficeWarningType.CONTENT_NOT_REPRESENTABLE, { format: 'pdf', feature: 'chart inside a list item, heading or note (native engine renders its data as text)', reason: 'chart-in-text-line' });
+        }
+        return text;
     }
 
     private inlineImageWarned = false;
@@ -2094,6 +2253,12 @@ class NativeLayout {
         if (text && !this.inlineImageWarned) {
             this.inlineImageWarned = true;
             this.reportWarning(OfficeWarningType.CONTENT_NOT_REPRESENTABLE, { format: 'pdf', feature: 'image inside a list item, heading or note (native engine renders its alt/OCR text)', reason: 'image-in-text-line' });
+        }
+        // Nothing to stand in its place, in a line drawn where pictures are not embedded (a heading in a nested
+        // table's cell), and not tried (a picture tried was reported by embedPicture): it was left out unreported.
+        if (!text && (this.imageMode === 'image-only' || this.imageMode === 'image+ocr-text') && !this.embedTried.has(node)) {
+            const name = String((node.metadata as any)?.attachmentName ?? '');
+            this.reportWarning(OfficeWarningType.CONTENT_NOT_REPRESENTABLE, { format: 'pdf', feature: `picture '${shownTo80(name)}' in a line of text (no alternative text to draw in its place)`, reason: 'image-in-text-line-dropped', name });
         }
         return text;
     }
@@ -2149,7 +2314,8 @@ class NativeLayout {
         const found: OfficeContentNode[] = [];
         const walk = (n: OfficeContentNode, depth: number) => {
             if (found.length >= 16 || depth > 6) return;
-            if (n.type === 'image') { found.push(n); return; }
+            const math = this.mathPicture(n);
+            if (n.type === 'image' || math) { found.push(math ?? n); return; }
             // A nested table's pictures are its own cells'.
             if (n.type === 'table') return;
             for (const c of n.children || []) walk(c, depth + 1);
@@ -2259,9 +2425,13 @@ class NativeLayout {
 
     /**
      * Wraps a set of inline runs into lines within `[left, left+width]` and draws them, paginating as
-     * needed. Returns nothing; advances the cursor to just below the last line.
+     * needed. Returns where its first line is drawn (undefined when it drew none): its page, baseline and top, and the
+     * left edge of the column it is in, after any move to another column or page; advances the cursor to just below
+     * the last line.
      */
-    private drawRuns(runs: Run[], left: number, width: number, mono = false, layout: LineLayout = {}): void {
+    private drawRuns(runs: Run[], left: number, width: number, mono = false, layout: LineLayout = {}): { page: any; baseline: number; top: number; columnLeft: number } | undefined {
+        // Where the first line is drawn (a list item's marker stands on it, a heading's bookmark points at it).
+        let first: { page: any; baseline: number; top: number; columnLeft: number } | undefined;
         // The column's left edge and width the paragraph starts at (see flush).
         let columnLeft = this.margin.left, columnWidth = this.contentWidth;
         // The paragraph's pieces (see piecesOf), read as they are placed: listed first, a word's piece each,
@@ -2359,6 +2529,7 @@ class NativeLayout {
                 if (k < line.length) { leftover = line.slice(k); line = line.slice(0, k); last = false; }
             }
             const baseline = this.pageH - this.y - Math.max(textSize, tallest);
+            first ??= { page: this.page, baseline, top: this.pageH - this.y, columnLeft: this.margin.left };
             // Words and the gaps between them, in reading order, then in the order they are seen.
             const items: { p?: Piece; w: number; dir: 'ltr' | 'rtl' | 'neutral' }[] = [];
             line.forEach((it, i) => {
@@ -2444,6 +2615,7 @@ class NativeLayout {
             place(piece.p, piece.space, piece.p.picture ? piece.p.picture.w : this.widthOf(piece.p.text, piece.p.face, piece.p.size));
         }
         flush(true);
+        return first;
     }
 
     /** Space above a paragraph, as its document sets it: none at the top of a page, as a word processor sets it. */
@@ -2494,11 +2666,37 @@ class NativeLayout {
      */
     /** onNode's verdict on each node, asked once: a node laid out twice (measured, then drawn) is not asked again. */
     private readonly onNodeVerdicts = new WeakMap<OfficeContentNode, false | string | undefined>();
+    /** The pictures equations are drawn as (see mathPicture), each made once, and each such picture's equation. */
+    private readonly mathPictures = new WeakMap<OfficeContentNode, OfficeContentNode | null>();
+    private readonly mathOfPicture = new WeakMap<OfficeContentNode, OfficeContentNode>();
+    /**
+     * The picture an equation is drawn as (mathPictureOf: its document's own picture, its LaTeX the alt text), where the
+     * image mode draws pictures and the attachment holds data; undefined for any other node. One picture node per
+     * equation, so a paragraph measured and then drawn embeds and places it once, and onNode is asked about the
+     * equation in its stead (onNodeValue).
+     */
+    private mathPicture(node: OfficeContentNode | undefined): OfficeContentNode | undefined {
+        if (!node || node.type !== 'code') return undefined;
+        let picture = this.mathPictures.get(node);
+        if (picture === undefined) {
+            const name = (node.metadata as { fallbackAttachmentName?: unknown } | undefined)?.fallbackAttachmentName;
+            picture = mathPictureOf(node, typeof name === 'string' ? this.attachmentsByName.get(name) : undefined, this.imageMode) ?? null;
+            if (picture) this.mathOfPicture.set(picture, node);
+            this.mathPictures.set(node, picture);
+        }
+        return picture ?? undefined;
+    }
     private async onNodeValue(node: OfficeContentNode): Promise<false | string | undefined> {
-        if (!this.config.onNode) return undefined;
+        // An equation drawn as its picture: the verdict is the equation's.
+        node = this.mathOfPicture.get(node) ?? node;
+        // A content control's placeholder prompt is not the document's text (TextMetadata.placeholder),
+        // as BaseGenerator.handleOnNode has it: left out unless includePlaceholderText, the caller's
+        // verdict first.
+        const prompt = !this.config.includePlaceholderText && isPlaceholderNode(node);
+        if (!this.config.onNode) return prompt ? false : undefined;
         if (this.onNodeVerdicts.has(node)) return this.onNodeVerdicts.get(node);
         const override = await this.config.onNode(node);
-        const verdict = override === false ? false : typeof override === 'string' ? override : undefined;
+        const verdict = override === false ? false : typeof override === 'string' ? override : prompt ? false : undefined;
         this.onNodeVerdicts.set(node, verdict);
         return verdict;
     }
@@ -2512,7 +2710,6 @@ class NativeLayout {
      * Returns true when the hook handled the node and default rendering should be skipped.
      */
     private async applyOnNode(node: OfficeContentNode): Promise<boolean> {
-        if (!this.config.onNode) return false;
         const override = await this.onNodeValue(node);
         if (override === false) return true;
         if (typeof override === 'string') {
@@ -2595,7 +2792,13 @@ class NativeLayout {
             case 'list': return this.listItem(node);
             case 'table': await this.belowFloats(() => this.table(node)); return this.table(node);
             case 'image': return this.image(node);
-            case 'code': await this.belowFloats(() => this.code(node)); return this.code(node);
+            case 'code': {
+                // An equation with its document's own picture is that picture.
+                const picture = this.mathPicture(node);
+                if (picture) return this.image(picture);
+                await this.belowFloats(() => this.code(node));
+                return this.code(node);
+            }
             case 'drawing':
                 // A frame floating beside the text, where it stands; any other shape as any other block.
                 if ((node.metadata as ShapeMetadata | undefined)?.float && !this.fixedPage && !this.framesInFlow) return this.floatingFrame(node);
@@ -2623,16 +2826,20 @@ class NativeLayout {
                 // includeCharts: false omits charts in every generator. The native engine cannot draw a
                 // chart, so it otherwise renders the chart's data text (in node.text); skip it when off.
                 if (this.config.includeCharts === false) return;
-                await this.belowFloats(async () => { if (!this.drawChart(node) && node.text) await this.paragraph(node); });
+                // (Its text written again within the chart-copy budget, and a chart of no text as its reference: see chartText.)
+                await this.belowFloats(async () => {
+                    if (this.drawChart(node)) return;
+                    const text = this.chartText(node);
+                    await this.paragraph(text === node.text ? node : { ...node, text });
+                });
                 // Drawn from its data, as HTML output draws it (bars for each label, one colour a series).
                 if (this.drawChart(node)) return;
-                if (node.text) {
-                    if (!this.chartWarned) {
-                        this.chartWarned = true;
-                        this.reportWarning(OfficeWarningType.CONTENT_NOT_REPRESENTABLE, { format: 'pdf', feature: 'chart (native engine renders its data as text)', reason: 'chart' });
-                    }
-                    await this.paragraph(node);
+                if (!this.chartWarned) {
+                    this.chartWarned = true;
+                    this.reportWarning(OfficeWarningType.CONTENT_NOT_REPRESENTABLE, { format: 'pdf', feature: 'chart (native engine renders its data as text)', reason: 'chart' });
                 }
+                const text = this.chartText(node);
+                await this.paragraph(text === node.text ? node : { ...node, text });
                 return;
             default:
                 if (node.children?.length) { for (const c of node.children) await this.render(c); }
@@ -2643,6 +2850,27 @@ class NativeLayout {
 
     /** The height a chart has to be drawn in (its box on a slide), or undefined for a chart in the flow. */
     private chartRoom?: number;
+    /** The lowest a chart in a text box may reach (see drawTextBox), or undefined outside one. */
+    private chartBottom?: number;
+
+    /**
+     * `text` cut to what a line of `width` at `size` can show, encoded: at most ten characters a point of size across
+     * the line (no glyph but a zero-width one is narrower; the content width where the line is narrower, as splitToWidth
+     * gives a line of no width its text), at a code point boundary, then to the width (splitToWidth's first line). A
+     * chart's title or label was encoded and measured whole, and a title drawn far past the page's edge: a chart framed
+     * 200 times with a title of 200,000 characters took 15 seconds.
+     */
+    private chartLine(text: string, face: FaceKey, size: number, width: number): string {
+        const cut = this.cutTo(text, Math.ceil(10 * Math.max(width, this.contentWidth) / size));
+        return splitToWidth(this.enc(cut, face), t => this.widthOf(t, face, size), width)[0] ?? '';
+    }
+
+    /** `text` cut to `most` characters at a code point boundary (a turned axis title's cut, before it is encoded). */
+    private cutTo(text: string, most: number): string {
+        if (text.length <= most) return text;
+        const code = text.charCodeAt(most - 1);
+        return text.slice(0, code >= 0xD800 && code <= 0xDBFF ? most - 1 : most);
+    }
 
     /**
      * Draws a chart from its data (ChartData on its attachment) as a bar chart, as the HTML engine draws
@@ -2654,46 +2882,64 @@ class NativeLayout {
         const name = (node.metadata as { attachmentName?: string } | undefined)?.attachmentName;
         const data = (name ? this.attachmentsByName.get(name) as { chartData?: ChartData } | undefined : undefined)?.chartData;
         if (!data || !Array.isArray(data.dataSets) || !Array.isArray(data.labels)) return false;
-        // Checked before chartPositions sorts the lists: a list of more than 120 entries makes more than 120 groups.
-        if (data.dataSets.length > 12 || maxOf(data.dataSets.map(set => Array.isArray(set?.values) ? set.values.length : 0), data.labels.length) > 120) return false;
+        if (isXyChart(data)) return this.drawXyChart(data);
+        // Checked before chartPositions sorts the lists: a list of more than 120 entries (values, labels or an
+        // outer level's) makes more than 120 groups.
+        const levelLengths = Array.isArray(data.labelLevels) ? data.labelLevels.map(level => Array.isArray(level?.labels) ? level.labels.length : 0) : [];
+        if (data.dataSets.length > 12 || maxOf(data.dataSets.map(set => Array.isArray(set?.values) ? set.values.length : 0), maxOf(levelLengths, data.labels.length)) > 120) return false;
         const positions = chartPositions(data);
         const number = (v: unknown) => { const n = Number(String(v).replace(/,/g, '')); return Number.isFinite(n) ? n : NaN; };
-        const labels = positions ? positions.map(p => atPosition(data.labels, data.labelIndexes, p)) : data.labels;
+        // Each label as the chart shows it (`shownLabels`: Jan-25 for 45658), where the chart keeps that text.
+        const shownLabels = shownOr(data.shownLabels, data.labels);
+        const labels = positions ? positions.map(p => atPosition(shownLabels, data.labelIndexes, p)) : shownLabels;
         const series = data.dataSets.map(set => positions ? positions.map(p => number(atPosition(set?.values, set?.valueIndexes, p))) : (Array.isArray(set?.values) ? set.values : []).map(number));
         const groups = positions ? positions.length : maxOf(series.map(v => v.length), data.labels.length);
         if (!groups || groups > 120 || data.dataSets.length > 12 || !series.some(v => v.some(n => !Number.isNaN(n)))) return false;
         const ink = this.lib.rgb(0.12, 0.12, 0.12), grid = this.lib.rgb(0.85, 0.85, 0.85);
         const palette = [[255, 99, 132], [54, 162, 235], [255, 206, 86], [75, 192, 192], [153, 102, 255], [255, 159, 64]].map(([r, g, b]) => this.lib.rgb(r / 255, g / 255, b / 255));
-        const values = series.flat().filter(n => !Number.isNaN(n));
-        let low = 0, high = 0;
-        for (const v of values) { if (v < low) low = v; if (v > high) high = v; }
-        if (low === high) high = low + 1;
-        // Ticks at a round step: 1, 2 or 5 times a power of ten, about five of them. Values whose range no
-        // number holds, or too small to step through, are written as text (they crashed the conversion).
-        const rough = (high - low) / 5, power = 10 ** Math.floor(Math.log10(rough));
-        const step = [1, 2, 5, 10].map(m => m * power).find(t => t >= rough) ?? rough;
-        if (!(Number.isFinite(rough) && rough > 0 && Number.isFinite(step) && step > 0 && Number.isFinite(low / step) && Number.isFinite(high / step))) return false;
-        low = Math.floor(low / step) * step; high = Math.ceil(high / step) * step;
+        // A series drawn on a value axis at the right (a combo chart's secondary axis: `axisIds`, `axes`) is
+        // scaled to that axis, drawn at the right with its ticks and title; the rest to the axis at the left,
+        // titled (with two) as the first series there that names its axis, else `yAxisTitle` (the primary
+        // axis's, which can be the right one's).
+        const axisById = new Map((Array.isArray(data.axes) ? data.axes : []).map(axis => [axis?.id, axis] as const));
+        const valueAxisOf = (set: ChartData['dataSets'][number] | undefined) => Array.isArray(set?.axisIds) ? axisById.get(set.axisIds[1]) : undefined;
+        const onRight = data.dataSets.map(set => valueAxisOf(set)?.position === 'right');
+        const twoAxes = onRight.some(Boolean) && onRight.some(right => !right);
+        const leftScale = chartScale(series.filter((_, s) => !twoAxes || !onRight[s]).flat());
+        const rightScale = twoAxes ? chartScale(series.filter((_, s) => onRight[s]).flat()) : undefined;
+        if (!leftScale || (twoAxes && !rightScale)) return false;
+        const { low, high, ticks } = leftScale;
         const tickText = (v: number) => this.enc(String(+v.toFixed(6)), 'regular', false);
-        const ticks: number[] = [];
-        for (let v = low; v <= high + step / 2 && ticks.length < 50; v += step) ticks.push(v);
+        const rightTitle = twoAxes ? valueAxisOf(data.dataSets[onRight.indexOf(true)])?.title : undefined;
+        const leftAxis = twoAxes ? data.dataSets.map((set, s) => onRight[s] ? undefined : valueAxisOf(set)).find(Boolean) : undefined;
+        const leftTitle = leftAxis ? leftAxis.title : data.yAxisTitle;
         const legendRows = data.dataSets.length > 1 ? Math.ceil(data.dataSets.length / 4) : 0;
-        const titleH = data.title ? 20 : 0, labelH = 24, legendH = legendRows * 14;
-        // As tall as its box on a slide allows, else 180.
-        const plotH = this.chartRoom !== undefined ? Math.max(40, this.chartRoom - titleH - labelH - legendH - (data.xAxisTitle ? 14 : 0) - 10) : 180;
+        // Categories of several levels (labelLevels): a row of labels for each outer level under the
+        // innermost, the nearest first, each label at the group of the point it starts at.
+        // (An outer label at a point no group has, or past the groups, would not be drawn: the chart is written as its data's text.)
+        const outer = outerLevelRows(data, groups, positions);
+        if (!outer.whole) return false;
+        const outerRows = outer.levels.reverse();
+        const titleH = data.title ? 20 : 0, labelH = 24 + outerRows.length * 10, legendH = legendRows * 14;
+        // As tall as its box on a slide allows, within its text box's room (at most 180), else 180.
+        const fixed = titleH + labelH + legendH + (data.xAxisTitle ? 14 : 0) + 10;
+        const plotH = this.chartRoom !== undefined ? Math.max(40, this.chartRoom - fixed)
+            : this.chartBottom !== undefined ? Math.max(40, Math.min(180, this.chartBottom - this.y - fixed)) : 180;
         const height = titleH + plotH + labelH + legendH + (data.xAxisTitle ? 14 : 0) + 10;
         this.ensureSpace(height);
         if (this.pendingAnchors.length) this.placeAnchors();
         const top = this.pageH - this.y;
         if (data.title) {
-            const title = this.enc(String(data.title), 'bold');
+            const title = this.chartLine(String(data.title), 'bold', 12, this.contentWidth);
             const w = this.widthOf(title, 'bold', 12);
             this.drawText(title, 'bold', this.margin.left + Math.max(0, (this.contentWidth - w) / 2), top - 14, 12, ink);
         }
-        const axisW = maxOf(ticks.map(t => this.widthOf(tickText(t), 'regular', 8)), -Infinity) + 6 + (data.yAxisTitle ? 14 : 0);
-        const left = this.margin.left + axisW, width = this.contentWidth - axisW;
+        const axisW = maxOf(ticks.map(t => this.widthOf(tickText(t), 'regular', 8)), -Infinity) + 6 + (leftTitle ? 14 : 0);
+        const rightW = rightScale ? maxOf(rightScale.ticks.map(t => this.widthOf(tickText(t), 'regular', 8)), -Infinity) + 6 + (rightTitle ? 14 : 0) : 0;
+        const left = this.margin.left + axisW, width = this.contentWidth - axisW - rightW;
         const plotTop = top - titleH, plotBottom = plotTop - plotH;
         const yOf = (v: number) => plotBottom + (v - low) / (high - low) * plotH;
+        const yOfRight = (v: number) => rightScale ? plotBottom + (v - rightScale.low) / (rightScale.high - rightScale.low) * plotH : yOf(v);
         for (const t of ticks) {
             const y = yOf(t);
             this.page.drawLine({ start: { x: left, y }, end: { x: left + width, y }, thickness: 0.4, color: grid });
@@ -2702,29 +2948,55 @@ class NativeLayout {
         }
         this.page.drawLine({ start: { x: left, y: plotBottom }, end: { x: left, y: plotTop }, thickness: 0.6, color: ink });
         this.page.drawLine({ start: { x: left, y: yOf(0) }, end: { x: left + width, y: yOf(0) }, thickness: 0.6, color: ink });
-        if (data.yAxisTitle) {
+        if (leftTitle) {
             this.useFont(this.fonts.regular[0].font);
             // (Drawn by pdf-lib, turned: in the first font, a ballot box only its own font draws being one none does.)
-            const yTitle = this.enc(String(data.yAxisTitle), 'regular', true, false).slice(0, 60);
+            const yTitle = this.enc(this.cutTo(String(leftTitle), 60), 'regular', true, false).slice(0, 60);
             this.page.drawText(yTitle, { x: this.margin.left + 8, y: plotBottom + plotH / 2 - this.widthOf(yTitle, 'regular', 8) / 2, size: 8, color: ink, rotate: this.lib.degrees(90) });
+        }
+        if (rightScale) {
+            const right = left + width;
+            for (const t of rightScale.ticks) this.drawText(tickText(t), 'regular', right + 4, yOfRight(t) - 3, 8, ink);
+            this.page.drawLine({ start: { x: right, y: plotBottom }, end: { x: right, y: plotTop }, thickness: 0.6, color: ink });
+            if (rightTitle) {
+                this.useFont(this.fonts.regular[0].font);
+                const text = this.enc(this.cutTo(String(rightTitle), 60), 'regular', true, false).slice(0, 60);
+                this.page.drawText(text, { x: this.margin.left + this.contentWidth - 2, y: plotBottom + plotH / 2 - this.widthOf(text, 'regular', 8) / 2, size: 8, color: ink, rotate: this.lib.degrees(90) });
+            }
         }
         const groupW = width / groups, barW = groupW * 0.8 / series.length;
         series.forEach((values, s) => values.forEach((v, g) => {
             if (Number.isNaN(v)) return;
             const x = left + g * groupW + groupW * 0.1 + s * barW;
-            const y0 = yOf(0), y1 = yOf(v);
+            const scaled = twoAxes && onRight[s] ? yOfRight : yOf;
+            const y0 = scaled(0), y1 = scaled(v);
             this.page.drawRectangle({ x, y: Math.min(y0, y1), width: Math.max(0.5, barW - 1), height: Math.max(0.5, Math.abs(y1 - y0)), color: palette[s % palette.length], opacity: 0.75, borderColor: palette[s % palette.length], borderWidth: 0.5 });
         }));
         // Each label under its bars, cut to their width; every few, where they are too many to be read.
         const every = Math.max(1, Math.ceil(groups * 18 / width));
         labels.slice(0, groups).forEach((label, g) => {
             if (g % every) return;
-            const text = splitToWidth(this.enc(String(label ?? ''), 'regular'), t => this.widthOf(t, 'regular', 7), groupW * every - 2)[0] ?? '';
+            const text = this.chartLine(String(label ?? ''), 'regular', 7, groupW * every - 2);
             this.drawText(text, 'regular', left + g * groupW + Math.max(0, (groupW - this.widthOf(text, 'regular', 7)) / 2), plotBottom - 10, 7, ink);
+        });
+        // Each outer label centred under the groups it covers (to the next label of its level), with a short
+        // tick between groups.
+        outerRows.forEach((row, level) => {
+            const y = plotBottom - 20 - level * 10;
+            for (let g = 0; g < groups; g++) {
+                if (!row[g]) continue;
+                let end = g + 1;
+                while (end < groups && !row[end]) end++;
+                const spanW = (end - g) * groupW;
+                const text = this.chartLine(row[g], 'regular', 7, spanW - 2);
+                this.drawText(text, 'regular', left + g * groupW + Math.max(0, (spanW - this.widthOf(text, 'regular', 7)) / 2), y, 7, ink);
+                if (g > 0) this.page.drawLine({ start: { x: left + g * groupW, y: y - 2 }, end: { x: left + g * groupW, y: y + 8 }, thickness: 0.4, color: ink });
+                g = end - 1;
+            }
         });
         let below = plotBottom - labelH;
         if (data.xAxisTitle) {
-            const text = this.enc(String(data.xAxisTitle), 'regular');
+            const text = this.chartLine(String(data.xAxisTitle), 'regular', 8, width);
             this.drawText(text, 'regular', left + Math.max(0, (width - this.widthOf(text, 'regular', 8)) / 2), below + 6, 8, ink);
             below -= 14;
         }
@@ -2732,7 +3004,90 @@ class NativeLayout {
             if (!legendRows) return;
             const x = this.margin.left + (s % 4) * (this.contentWidth / 4), y = below - Math.floor(s / 4) * 14;
             this.page.drawRectangle({ x, y, width: 8, height: 8, color: palette[s % palette.length], opacity: 0.75 });
-            const text = splitToWidth(this.enc(set.name || `Series ${s + 1}`, 'regular'), t => this.widthOf(t, 'regular', 8), this.contentWidth / 4 - 14)[0] ?? '';
+            const text = this.chartLine(set.name || `Series ${s + 1}`, 'regular', 8, this.contentWidth / 4 - 14);
+            this.drawText(text, 'regular', x + 11, y + 1, 8, ink);
+        });
+        this.y += height;
+        return true;
+    }
+
+    /**
+     * Draws a scatter or bubble chart (its series hold X values of their own, `xValues`) as points on its X and
+     * Y value axes, each with its ticks and title: a circle a point, a bubble's radius by its size (the largest
+     * 12 pt). Each series' points pair its X values, values and sizes by point index (see xyPositions), else
+     * by place. False, nothing drawn, for more than 12 series or 2,000 points, or none to draw: the chart is
+     * then written as its data's text. It was drawn as bars over the first series' X values.
+     */
+    private drawXyChart(data: ChartData): boolean {
+        if (data.dataSets.length > 12) return false;
+        const total = data.dataSets.reduce((sum, set) => sum + Math.max(Array.isArray(set?.values) ? set.values.length : 0, Array.isArray(set?.xValues) ? set.xValues.length : 0), 0);
+        if (total > 2000) return false;
+        const positions = xyPositions(data);
+        const number = (v: unknown) => { const n = Number(String(v).replace(/,/g, '')); return Number.isFinite(n) ? n : NaN; };
+        const listAt = (list: unknown, indexes: unknown, count: number) => Array.from({ length: count }, (_, i) => number(positions ? atPosition(list, indexes, positions[i]) : Array.isArray(list) ? list[i] : undefined));
+        const points = data.dataSets.map(set => {
+            const count = positions ? positions.length : Math.max(Array.isArray(set?.values) ? set.values.length : 0, Array.isArray(set?.xValues) ? set.xValues.length : 0);
+            const xs = listAt(set?.xValues, set?.xValueIndexes, count), ys = listAt(set?.values, set?.valueIndexes, count), sizes = listAt(set?.bubbleSizes, set?.bubbleSizeIndexes, count);
+            return xs.map((x, i) => ({ x: Number.isNaN(x) && !(Array.isArray(set?.xValues) && set.xValues.length) ? (positions ? positions[i] : i) + 1 : x, y: ys[i], size: sizes[i] })).filter(p => !Number.isNaN(p.x) && !Number.isNaN(p.y));
+        });
+        const xScale = chartScale(points.flat().map(p => p.x)), yScale = chartScale(points.flat().map(p => p.y));
+        if (!xScale || !yScale) return false;
+        const largest = maxOf(points.flat().map(p => Number.isNaN(p.size) ? 0 : Math.abs(p.size)), 0);
+        const ink = this.lib.rgb(0.12, 0.12, 0.12), grid = this.lib.rgb(0.85, 0.85, 0.85);
+        const palette = [[255, 99, 132], [54, 162, 235], [255, 206, 86], [75, 192, 192], [153, 102, 255], [255, 159, 64]].map(([r, g, b]) => this.lib.rgb(r / 255, g / 255, b / 255));
+        const tickText = (v: number) => this.enc(String(+v.toFixed(6)), 'regular', false);
+        const legendRows = data.dataSets.length > 1 ? Math.ceil(data.dataSets.length / 4) : 0;
+        const titleH = data.title ? 20 : 0, tickH = 14, legendH = legendRows * 14;
+        const fixed = titleH + tickH + legendH + (data.xAxisTitle ? 14 : 0) + 10;
+        const plotH = this.chartRoom !== undefined ? Math.max(40, this.chartRoom - fixed)
+            : this.chartBottom !== undefined ? Math.max(40, Math.min(180, this.chartBottom - this.y - fixed)) : 180;
+        const height = titleH + plotH + tickH + legendH + (data.xAxisTitle ? 14 : 0) + 10;
+        this.ensureSpace(height);
+        if (this.pendingAnchors.length) this.placeAnchors();
+        const top = this.pageH - this.y;
+        if (data.title) {
+            const title = this.chartLine(String(data.title), 'bold', 12, this.contentWidth);
+            this.drawText(title, 'bold', this.margin.left + Math.max(0, (this.contentWidth - this.widthOf(title, 'bold', 12)) / 2), top - 14, 12, ink);
+        }
+        const axisW = maxOf(yScale.ticks.map(t => this.widthOf(tickText(t), 'regular', 8)), -Infinity) + 6 + (data.yAxisTitle ? 14 : 0);
+        const left = this.margin.left + axisW, width = this.contentWidth - axisW - 8;
+        const plotTop = top - titleH, plotBottom = plotTop - plotH;
+        const xOf = (v: number) => left + (v - xScale.low) / (xScale.high - xScale.low) * width;
+        const yOf = (v: number) => plotBottom + (v - yScale.low) / (yScale.high - yScale.low) * plotH;
+        for (const t of yScale.ticks) {
+            this.page.drawLine({ start: { x: left, y: yOf(t) }, end: { x: left + width, y: yOf(t) }, thickness: 0.4, color: grid });
+            const text = tickText(t);
+            this.drawText(text, 'regular', left - 4 - this.widthOf(text, 'regular', 8), yOf(t) - 3, 8, ink);
+        }
+        for (const t of xScale.ticks) {
+            this.page.drawLine({ start: { x: xOf(t), y: plotBottom }, end: { x: xOf(t), y: plotTop }, thickness: 0.4, color: grid });
+            const text = tickText(t);
+            this.drawText(text, 'regular', xOf(t) - this.widthOf(text, 'regular', 8) / 2, plotBottom - 10, 8, ink);
+        }
+        this.page.drawLine({ start: { x: left, y: plotBottom }, end: { x: left, y: plotTop }, thickness: 0.6, color: ink });
+        this.page.drawLine({ start: { x: left, y: plotBottom }, end: { x: left + width, y: plotBottom }, thickness: 0.6, color: ink });
+        if (data.yAxisTitle) {
+            this.useFont(this.fonts.regular[0].font);
+            const yTitle = this.enc(this.cutTo(String(data.yAxisTitle), 60), 'regular', true, false).slice(0, 60);
+            this.page.drawText(yTitle, { x: this.margin.left + 8, y: plotBottom + plotH / 2 - this.widthOf(yTitle, 'regular', 8) / 2, size: 8, color: ink, rotate: this.lib.degrees(90) });
+        }
+        points.forEach((list, s) => {
+            for (const p of list) {
+                const radius = largest > 0 && !Number.isNaN(p.size) ? Math.max(1.5, 12 * Math.abs(p.size) / largest) : 2.5;
+                this.page.drawCircle({ x: xOf(p.x), y: yOf(p.y), size: radius, color: palette[s % palette.length], opacity: 0.6, borderColor: palette[s % palette.length], borderWidth: 0.5 });
+            }
+        });
+        let below = plotBottom - tickH - 10;
+        if (data.xAxisTitle) {
+            const text = this.chartLine(String(data.xAxisTitle), 'regular', 8, width);
+            this.drawText(text, 'regular', left + Math.max(0, (width - this.widthOf(text, 'regular', 8)) / 2), below + 6, 8, ink);
+            below -= 14;
+        }
+        data.dataSets.forEach((set, s) => {
+            if (!legendRows) return;
+            const x = this.margin.left + (s % 4) * (this.contentWidth / 4), y = below - Math.floor(s / 4) * 14;
+            this.page.drawCircle({ x: x + 4, y: y + 4, size: 4, color: palette[s % palette.length], opacity: 0.75 });
+            const text = this.chartLine(set.name || `Series ${s + 1}`, 'regular', 8, this.contentWidth / 4 - 14);
             this.drawText(text, 'regular', x + 11, y + 1, 8, ink);
         });
         this.y += height;
@@ -2746,21 +3101,54 @@ class NativeLayout {
         // line plus a couple of body lines, so a heading near the bottom moves to the next page with the
         // text it titles (the HTML engine expresses the same intent with `page-break-after: avoid`).
         // ensureSpace is a no-op at the top margin, so this never inserts a blank page before a heading.
+        // (Its anchors held aside, and placed once its first line is: see placeHeldAnchors.)
+        const held = this.pendingAnchors;
+        this.pendingAnchors = [];
         this.ensureSpace(size * 1.35 + 11 * 1.35 * 2);
+        const reserved = { page: this.page, top: this.pageH - this.y };
         // Space-before, but not when the heading is already at the very top of a page (including one it
         // was just pushed onto by the reservation above): a gap there would float it below the margin.
         const { left, width, layout, spacing } = this.placement(node);
         if (spacing?.before !== undefined) this.spaceAbove(spacing.before);
         else if (this.y > this.margin.top) this.y += size * 0.6;
-        // Bold, at the level's size unless its runs have their own (a slide's title, a style's size).
+        // Bold, at the level's size unless its runs have their own (a slide's title, a style's size). Its
+        // pictures in its line, as a paragraph's (they were their alt text, or left out).
+        const placed = await this.placeLinePictures(node);
         const runs = (await this.collectRuns(node)).map(r => ({ ...r, fmt: { ...r.fmt, bold: true, size: r.fmt.size ?? `${size}pt` } }));
         const title = (runs.length ? runs.map(r => r.text).join('') : node.text || '').replace(/\s+/g, ' ').trim();
-        if (title && !this.furniture) this.outlineEntries.push({ title, level, page: this.page, top: this.pageH - this.y });
-        this.drawRuns(runs.length ? runs : [{ text: node.text || '', fmt: { bold: true, size: `${size}pt` } }], left, width, false, layout);
+        const page0 = this.page, top0 = this.pageH - this.y;
+        const first = this.drawRuns(runs.length ? runs : [{ text: node.text || '', fmt: { bold: true, size: `${size}pt` } }], left, width, false, layout);
+        // Its bookmark and its anchors where its first line is drawn when that holds a picture (which can move the
+        // line on to the next column or page), else where the heading starts.
+        const pictured = runs.some(r => r.picture) && first;
+        if (title && !this.furniture) this.outlineEntries.push({ title, level, page: pictured ? pictured.page : page0, top: pictured ? pictured.top : top0 });
+        this.placeHeldAnchors(held, pictured || reserved);
         this.y += this.spaceBelow(spacing?.after, size * 0.35);
+        // 'image+ocr-text': the pictures' recognized text after the heading, as after a paragraph's.
+        for (const picture of placed) { const ocr = this.ocrBesidePicture(picture); if (ocr) await this.drawOcrText(ocr); }
     }
 
     private async paragraph(node: OfficeContentNode, indentLeft = 0): Promise<void> {
+        // An equation with its document's own picture is that picture, drawn as the paragraph's pictures are.
+        if (node.children?.some(c => this.mathPicture(c))) node = { ...node, children: node.children.map(c => this.mathPicture(c) ?? c) };
+        // A chart standing in the paragraph (where Word and ODF put one) is drawn as a chart, between the
+        // lines of text around it: its data's text was written in the line.
+        if (node.children?.some(child => child.type === 'chart')) {
+            let run: OfficeContentNode[] = [];
+            const flush = async () => {
+                if (run.some(child => child.type !== 'text' || (child.text || '').trim() || child.notes?.length)) {
+                    await this.paragraph({ ...node, text: undefined, children: run }, indentLeft);
+                }
+                run = [];
+            };
+            for (const child of node.children) {
+                if (child.type !== 'chart') { run.push(child); continue; }
+                await flush();
+                await this.render(child);
+            }
+            await flush();
+            return;
+        }
         // A picture in the paragraph (where Word, ODF and Markdown put one) is drawn where it stands,
         // between the lines of text around it: runs carry text only, and it was dropped.
         // A picture among the paragraph's words is drawn in its line, where it can be embedded (it broke
@@ -2814,6 +3202,41 @@ class NativeLayout {
     /** The pictures drawn in their lines (see paragraph), embedded. */
     private readonly inlinePictures = new Map<OfficeContentNode, { img: any; w: number; h: number }>();
 
+    /**
+     * Embeds the pictures of a line the engine draws as runs (a heading, a list item's body, a note's
+     * paragraphs), so collectRuns places each in its line (see inlinePictures): its pictures, and its equations
+     * that are drawn as their document's own pictures (mathPicture). Only where the image mode draws pictures
+     * ('image-only', 'image+ocr-text'). A picture that cannot be embedded stays out of the map and is its
+     * alternative text there (an equation its LaTeX), its failure reported by embedPicture. Its children are
+     * walked (never `notes`, which collectRuns does not walk), each node once, past tables, what `skip` names
+     * and what is drawn apart (a picture in its cell). Returns the pictures embedded.
+     */
+    private async placeLinePictures(node: OfficeContentNode, skip?: (child: OfficeContentNode) => boolean): Promise<OfficeContentNode[]> {
+        if (this.imageMode !== 'image-only' && this.imageMode !== 'image+ocr-text') return [];
+        const placed: OfficeContentNode[] = [];
+        const seen = new Set<OfficeContentNode>();
+        const pending: OfficeContentNode[] = [];
+        for (let i = (node.children?.length ?? 0) - 1; i >= 0; i--) pending.push(node.children![i]);
+        while (pending.length) {
+            const n = pending.pop()!;
+            if (!n || seen.has(n)) continue;
+            seen.add(n);
+            const math = this.mathPicture(n);
+            if (n.type === 'table' || skip?.(n) || this.drawnApart.has(math ?? n)) continue;
+            const picture = n.type === 'image' ? n : math;
+            if (picture) {
+                if (!this.inlinePictures.has(picture)) {
+                    const embedded = await this.embedPicture(picture);
+                    if (embedded) this.inlinePictures.set(picture, embedded);
+                }
+                if (this.inlinePictures.has(picture)) placed.push(picture);
+                continue;
+            }
+            for (let i = (n.children?.length ?? 0) - 1; i >= 0; i--) pending.push(n.children![i]);
+        }
+        return placed;
+    }
+
     /** Draws one already-known plain string as a paragraph (an image's alt text, a note marker). */
     private plainParagraph(text: string): void {
         if (!text) return;
@@ -2828,15 +3251,23 @@ class NativeLayout {
         const ordered = meta?.listType === 'ordered';
         // The document's own marker (`a)`, `iv.`, `◦`), or the item's number and a dot, or a bullet.
         const marker = typeof meta?.marker === 'string' ? meta.marker : ordered ? `${(meta?.itemIndex ?? 0) + 1}.` : '•';
-        // Body: the item's own text runs (its non-list children); nested list children render after.
+        // Body: the item's own text runs (its non-list children), its pictures in its lines; nested list children render after.
+        // (Its own list children are drawn after it; a list inside its paragraph is part of its line, pictures and all.)
+        const nested = new Set<OfficeContentNode>((node.children || []).filter(c => c.type === 'list'));
+        const placed = await this.placeLinePictures(node, c => nested.has(c));
         const bodyRuns = await this.collectRuns({ ...node, children: (node.children || []).filter(c => c.type !== 'list') });
+        const pictured = bodyRuns.some(r => r.picture);
         // Size the marker to the body text so their baselines line up (a body larger than the old fixed
         // 11pt would otherwise sit below its own marker), and reserve one line's height BEFORE drawing
         // the marker so a body that has to break to the next page carries its marker along instead of
         // orphaning it on this page.
         const bodySize = bodyRuns.length ? maxOf(bodyRuns.map(r => parseFontSize(r.fmt.size) ?? 11), -Infinity) : 11;
         const size = bodySize > 0 ? bodySize : 11;
+        // (Its anchors, and those its body holds, held aside and placed once its first line is: see placeHeldAnchors.)
+        const held = this.pendingAnchors;
+        this.pendingAnchors = [];
         this.ensureSpace(size * 1.35);
+        const reserved = { page: this.page, top: this.pageH - this.y };
         // Draw the marker, then the item body hanging-indented past it. Space is already reserved, so
         // drawRuns' first line stays on this page and draws at the same baseline as the marker.
         const markerX = this.margin.left + indent - 14;
@@ -2844,15 +3275,34 @@ class NativeLayout {
         // In its text's colour (white bullets on a dark slide were drawn dark); an invisible item's invisibly, as its text is.
         const ink = this.color(bodyRuns.find(r => r.text.trim())?.fmt.color) ?? this.lib.rgb(0.12, 0.12, 0.12);
         const invisibleItem = bodyRuns.some(r => r.text.trim()) && bodyRuns.every(r => !r.text.trim() || r.fmt.invisible);
-        if (marker && (invisibleItem || !this.drawBulletShape(marker, markerX, baseline, size, ink))) this.drawText(this.enc(marker), 'regular', markerX, baseline, size, ink, invisibleItem);
+        const drawMarker = (at: number, x = markerX) => {
+            if (marker && (invisibleItem || !this.drawBulletShape(marker, x, at, size, ink))) this.drawText(this.enc(marker), 'regular', x, at, size, ink, invisibleItem);
+        };
+        // (A body holding a picture: the marker on its first line's baseline, drawn once the line is placed, as a
+        // tall picture lowers it and a line that moves to the next page takes the marker along.)
+        if (!pictured) drawMarker(baseline);
         // The body starts past a marker wider than the usual gap (`1.1.1.`, `(iii)`), as a tab stop
         // past it would set it.
         const markerWidth = marker ? this.widthOf(this.enc(marker, 'regular', false), 'regular', size) : 0;
         const bodyIndent = Math.min(Math.max(indent, indent - 14 + markerWidth + 4), this.contentWidth / 2);
         // Advance for the marker line unless the body has real text to draw: a whitespace-only body
         // makes drawRuns place nothing and never advance `this.y`, so the next item would overprint.
-        if (bodyRuns.some(r => r.text && r.text.trim())) this.drawRuns(bodyRuns, this.margin.left + bodyIndent, this.contentWidth - bodyIndent);
-        else this.y += size * 1.35;
+        let first: ReturnType<typeof this.drawRuns>;
+        if (bodyRuns.some(r => (r.text && r.text.trim()) || r.picture)) {
+            first = this.drawRuns(bodyRuns, this.margin.left + bodyIndent, this.contentWidth - bodyIndent);
+            if (pictured && first) {
+                // (In the column its first line is drawn in: a picture line can move to the next.)
+                const page = this.page;
+                this.page = first.page;
+                try { drawMarker(first.baseline, first.columnLeft + indent - 14); } finally { this.page = page; }
+            } else if (pictured) drawMarker(baseline);
+        } else {
+            if (pictured) drawMarker(baseline);
+            this.y += size * 1.35;
+        }
+        this.placeHeldAnchors(held, (pictured && first) || reserved);
+        // 'image+ocr-text': the pictures' recognized text after the item's body.
+        for (const picture of placed) { const ocr = this.ocrBesidePicture(picture); if (ocr) await this.drawOcrText(ocr); }
         // Route nested list items through render() (not listItem() directly) so the onNode hook and the
         // abort check see them like every other node.
         for (const c of (node.children || []).filter(c => c.type === 'list')) await this.render(c);
@@ -2893,6 +3343,7 @@ class NativeLayout {
     }
 
     private code(node: OfficeContentNode): void {
+        if ((node.metadata as CodeMetadata | undefined)?.math) this.mathSource(node);
         this.y += 2;
         this.drawMonospace(String(node.text || ''));
         this.y += 6;
@@ -2930,8 +3381,9 @@ class NativeLayout {
 
     private async note(node: OfficeContentNode): Promise<void> {
         const label = this.noteLabels.get(node);
+        await this.placeLinePictures(node);
         const runs = [...(label ? [{ text: `${label} `, fmt: { size: '9pt', superscript: true } } as Run] : []),
-            ...(await this.collectRuns(node)).map(r => ({ ...r, fmt: { ...r.fmt, size: '9pt' } }))];
+            ...(await this.collectRuns(node, true)).map(r => ({ ...r, fmt: { ...r.fmt, size: '9pt' } }))];
         if (runs.length) this.drawRuns(runs, this.margin.left + 12, this.contentWidth - 12);
         this.y += 4;
     }
@@ -3033,7 +3485,8 @@ class NativeLayout {
                 lib: this.lib, page: scratch,
                 text: (text, face, x, y, size, color) => this.drawText(this.enc(text, face as FaceKey), face as FaceKey, x, y, size, color),
                 width: (text, face, size) => this.widthOf(this.enc(text, face as FaceKey, false), face as FaceKey, size),
-                image: async (data, kind) => { try { return kind === 'png' ? await this.pdf.embedPng(data) : await this.pdf.embedJpg(data); } catch { return undefined; } },
+                // (Within the pixel budget, as every picture the engine embeds: one past it is among those that could not be read.)
+                image: async (data, kind) => { try { const img = await this.embedRaster(data, kind === 'png' ? 'PNG' : 'JPEG'); return typeof img === 'string' ? undefined : img; } catch { return undefined; } },
             });
         } finally {
             this.page = savedPage;
@@ -3042,7 +3495,11 @@ class NativeLayout {
         return await this.pdf.embedPage(scratch);
     }
 
+    /** The pictures embedPicture was asked to embed: each one that failed it reported. */
+    private readonly embedTried = new WeakSet<OfficeContentNode>();
+
     private async embedPicture(node: OfficeContentNode): Promise<{ img: any; w: number; h: number } | null> {
+        this.embedTried.add(node);
         const meta = node.metadata as any;
         const name = meta?.attachmentName;
         const attachment = name ? this.attachmentsByName.get(name) : undefined;
@@ -3056,26 +3513,10 @@ class NativeLayout {
             let embedded = this.embeddedImages.get(attachment);
             if (!embedded) {
                 embedded = (async () => {
-                    const bytes = base64ToBytes(attachment.data);
-                    // Reject an image whose declared dimensions are absurd BEFORE decoding it: embedPng/embedJpg
-                    // allocate the full bitmap, so a decompression bomb would OOM the process uncatchably.
-                    const dim = sniffImageSize(bytes);
-                    if (dim && dim.w * dim.h > MAX_IMAGE_PIXELS) return `image is too large to embed (${dim.w}x${dim.h} pixels)`;
-                    // An SVG drawn as vector graphics, on a page embedded as a form (see svgDrawing).
-                    if (isSvg(bytes, attachment)) return await this.svgPicture(bytes);
-                    const isJpg = /jpe?g/i.test(attachment.extension || '') || attachment.mimeType === 'image/jpeg';
-                    if (isJpg) return await this.pdf.embedJpg(bytes);
-                    // A GIF (its first frame) or an uncompressed BMP, which a PDF cannot hold, as a PNG: both
-                    // were dropped. Decoded within the same pixel budget, checked before allocating.
-                    const isGif = bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46;
-                    const isBmp = bytes[0] === 0x42 && bytes[1] === 0x4D;
-                    if (isGif || isBmp) {
-                        const raster = isGif ? decodeGif(bytes, MAX_IMAGE_PIXELS) : decodeBmp(bytes, MAX_IMAGE_PIXELS);
-                        const png = raster ? encodePng(raster) : null;
-                        if (!png) return `its ${isGif ? 'GIF' : 'BMP'} data could not be read`;
-                        return await this.pdf.embedPng(png);
-                    }
-                    return await this.pdf.embedPng(bytes);
+                    let bytes: Uint8Array;
+                    // (In a browser, data that is not base64 throws; Node's decoder skips what it cannot read.)
+                    try { bytes = base64ToBytes(attachment.data); } catch { return 'its data could not be decoded'; }
+                    return await this.embedBytes(bytes, attachment);
                 })();
                 this.embeddedImages.set(attachment, embedded);
             }
@@ -3084,9 +3525,10 @@ class NativeLayout {
                 this.reportWarning(OfficeWarningType.IMAGE_PROCESSING_FAILED, { name, reason: img });
                 return null;
             }
-            // Its size in CSS pixels: a raster picture's pixels, an SVG's page (in points) as pixels.
+            // Its size in CSS pixels: a raster picture's pixels, an SVG's page (in points) as pixels, a metafile's frame.
             const svgPage = img instanceof this.lib.PDFEmbeddedPage;
-            const pxW = svgPage ? img.width / 0.75 : img.width, pxH = svgPage ? img.height / 0.75 : img.height;
+            const frame = this.pictureFrames.get(img);
+            const pxW = frame ? frame.width : svgPage ? img.width / 0.75 : img.width, pxH = frame ? frame.height : svgPage ? img.height / 0.75 : img.height;
             const ratio = pxW ? pxH / pxW : 1;
             const pctOf = (v: any): number | null => (typeof v === 'string' && /^\s*[\d.]+\s*%\s*$/.test(v)) ? parseFloat(v) / 100 : null;
             let w: number, h: number;
@@ -3103,15 +3545,119 @@ class NativeLayout {
             }
             return { img, w: Math.max(1, w), h: Math.max(1, h) };
         } catch {
-            // pdf-lib embeds PNG and JPEG (and a GIF or BMP is turned into PNG), so an EMF, WMF, TIFF or WebP
-            // attachment lands here, and one whose data is no picture or is damaged: named by its bytes.
-            const kind = pictureKindOfBase64(attachment.data, attachment.mimeType, attachment.extension);
-            const reason = kind === 'XML' ? 'its data is XML, not a picture'
-                : ['PNG', 'JPEG', 'GIF', 'BMP', 'SVG'].includes(kind) ? `its ${kind} data could not be read`
-                : `the native PDF engine does not embed ${picturesOfKind(kind)} (it embeds PNG, JPEG, GIF, BMP and SVG)`;
-            this.reportWarning(OfficeWarningType.IMAGE_PROCESSING_FAILED, { name, reason });
+            // (embedBytes turns every refusal of the picture's data into a reason; this is anything else.)
+            this.reportWarning(OfficeWarningType.IMAGE_PROCESSING_FAILED, { name, reason: 'its data could not be read' });
             return null;
         }
+    }
+
+    /**
+     * A picture's bytes embedded by what they are, its signature (pictureSignature), whatever its name or media
+     * type says: a JPEG named `.png` was handed to the PNG decoder and left out. Only an SVG, which is text and has
+     * no signature, is known by its type or name as well as its text. Returns the embedded picture, or why it is
+     * not embedded: a format the engine does not embed, data its format's decoder refuses, or no picture at all. A
+     * metafile's bitmap comes with the part of it drawn (`crop`) and how it is drawn when not opaque (`transparency`,
+     * applied to a BMP's pixels).
+     */
+    private async embedBytes(bytes: Uint8Array, attachment: { name?: string; extension?: string; mimeType?: string }, inMetafile = false, crop?: { x: number; y: number; width: number; height: number }, transparency?: BitmapTransparency): Promise<any> {
+        const kind = pictureSignature(bytes) ?? (isSvg(bytes, attachment) ? 'SVG' : undefined);
+        const unreadable = `its ${kind} data could not be read`;
+        // Reject a picture whose declared dimensions are absurd BEFORE decoding it (an attachment's, or a bitmap a
+        // metafile holds): pdf-lib allocates the full bitmap, so a decompression bomb would OOM the process uncatchably.
+        const dim = sniffImageSize(bytes);
+        if (dim && dim.w * dim.h > MAX_IMAGE_PIXELS) return `image is too large to embed (${dim.w}x${dim.h} pixels)`;
+        try {
+            switch (kind) {
+                case 'JPEG': return await this.embedRaster(bytes, 'JPEG');
+                case 'PNG': return await this.embedRaster(bytes, 'PNG');
+                case 'GIF':
+                case 'BMP': {
+                    // A GIF (its first frame) or an uncompressed BMP, which a PDF cannot hold, as a PNG, decoded
+                    // within the pixel budget, checked before allocating; cut to the part a metafile draws of it.
+                    // (A TIFF is not drawn: it is refused below.)
+                    const raster = kind === 'GIF' ? decodeGif(bytes, MAX_IMAGE_PIXELS) : decodeBmp(bytes, MAX_IMAGE_PIXELS, transparency);
+                    const png = raster ? encodePng(crop ? cropRaster(raster, crop) : raster) : null;
+                    if (!png) return unreadable;
+                    return await this.embedRaster(png, 'PNG');
+                }
+                case 'EMF':
+                case 'WMF':
+                    // (Drawn from the bitmap it holds; a metafile inside a metafile is not looked into.)
+                    if (!inMetafile) return await this.metafilePicture(bytes, kind, attachment.name ?? '');
+                    return `the native PDF engine does not embed ${picturesOfKind(kind)} (only ${EMBEDDED_KINDS})`;
+                // An SVG drawn as vector graphics, on a page embedded as a form (see svgDrawing).
+                case 'SVG': return await this.svgPicture(bytes);
+                case undefined: {
+                    if (pictureKindOf(bytes) === 'XML') return 'its data is XML, not a picture';
+                    // Named a format its bytes would show (a PNG with no PNG signature): not that format. Named one
+                    // with no signature to read, or none: a kind the engine does not embed (an SVM picture).
+                    const named = pictureKindOf(new Uint8Array(0), attachment.mimeType, attachment.extension);
+                    return SIGNED_KINDS.has(named) ? `its data is not a picture of a format the native PDF engine knows (its type or name says ${named})`
+                        : `the native PDF engine does not embed ${picturesOfKind(named)} (only ${EMBEDDED_KINDS})`;
+                }
+                default: return `the native PDF engine does not embed ${picturesOfKind(kind)} (only ${EMBEDDED_KINDS})`;
+            }
+        } catch {
+            return unreadable;
+        }
+    }
+
+    /**
+     * A PNG or JPEG embedded within the pixel budget (MAX_IMAGE_PIXELS), its size read from the header pdf-lib reads,
+     * before pdf-lib decodes it: every raster the engine embeds comes through here, whatever it came from (an
+     * attachment, a bitmap a metafile holds, a GIF or BMP turned into a PNG, a picture inside an SVG). Returns the
+     * embedded image, or why it is not embedded.
+     */
+    private async embedRaster(bytes: Uint8Array, kind: 'PNG' | 'JPEG'): Promise<any | string> {
+        const unreadable = `its ${kind} data could not be read`;
+        if (kind === 'PNG') {
+            const refused = pngWithinBudget(bytes, MAX_IMAGE_PIXELS);
+            if (refused) return refused;
+            try { return await this.pdf.embedPng(bytes); } catch { return unreadable; }
+        }
+        // A JPEG is not decoded here, but a reader of the PDF decodes it: its frame's size as pdf-lib reads it (the
+        // first of its frame markers, which sniffImageSize reads otherwise), or sniffImageSize's where pdf-lib's
+        // reader is not exported.
+        let size: { w: number; h: number } | null;
+        try {
+            const reader = this.lib.JpegEmbedder;
+            if (typeof reader?.for === 'function') { const header = await reader.for(bytes); size = { w: header.width, h: header.height }; }
+            else size = sniffImageSize(bytes);
+        } catch { return unreadable; }
+        if (size && size.w * size.h > MAX_IMAGE_PIXELS) return `image is too large to embed (${size.w}x${size.h} pixels)`;
+        try { return await this.pdf.embedJpg(bytes); } catch { return unreadable; }
+    }
+
+    /** The size in CSS pixels a picture embedded from a metafile is drawn at: the metafile's frame. */
+    private readonly pictureFrames = new WeakMap<object, { width: number; height: number }>();
+
+    /**
+     * An EMF or WMF picture drawn from the bitmap it holds (readMetafile: the one drawn over the largest area, cut to
+     * the part it draws, a BMP with the transparency it is drawn with), at the metafile's frame's size; what else it
+     * draws (lines, shapes, text, other bitmaps), and what of how it draws the bitmap is not applied, reported. Why
+     * not, when it holds no bitmap the engine draws.
+     */
+    private async metafilePicture(bytes: Uint8Array, kind: 'EMF' | 'WMF', name: string): Promise<any> {
+        const reading = readMetafile(bytes, kind);
+        const drawnWith = (words: string[]) => words.length < 2 ? words.join('') : `${words.slice(0, -1).join(', ')} and ${words[words.length - 1]}`;
+        if (!reading.bitmap) return reading.reason ?? `the native PDF engine draws ${kind === 'EMF' ? 'an' : 'a'} ${kind} picture only from a bitmap it holds, and this one holds none (it is drawn with ${reading.alsoDraws.length ? drawnWith(reading.alsoDraws) : 'lines, shapes or text'})`;
+        // A part of a PNG or JPEG is not cut out (its pixels are not decoded here): drawn whole, and said so.
+        let crop = reading.bitmap.crop;
+        const wholeOfPart = !!crop && (reading.bitmap.format === 'PNG' || reading.bitmap.format === 'JPEG');
+        if (wholeOfPart) crop = undefined;
+        // How it is drawn when not opaque is applied to a BMP's pixels; a picture file's own (a PNG's alpha serves for
+        // per-pixel alpha) is drawn as it is, and a constant alpha or a transparent colour over it said so.
+        const transparency = reading.bitmap.transparency;
+        const opaqueAsDrawn = reading.bitmap.format !== 'BMP' && !!transparency && ((transparency.constantAlpha ?? 255) < 255 || !!transparency.transparentColor);
+        // (Named by the metafile's name.)
+        const img = await this.embedBytes(reading.bitmap.bytes, { name }, true, crop, transparency);
+        if (typeof img === 'string') return `the bitmap it holds cannot be drawn: ${img}`;
+        if (reading.alsoDraws.length || wholeOfPart || opaqueAsDrawn) {
+            const lost = [reading.alsoDraws.length ? `its ${drawnWith(reading.alsoDraws)}` : '', wholeOfPart ? 'the part of its bitmap outside the picture' : '', opaqueAsDrawn ? 'the transparency it is drawn with' : ''].filter(Boolean).join(', and ');
+            this.reportWarning(OfficeWarningType.CONTENT_NOT_REPRESENTABLE, { format: 'pdf', feature: `${kind} picture '${shownTo80(name)}': ${lost} (the native engine draws only the bitmap it holds)`, reason: 'metafile-vector', name });
+        }
+        if (reading.frame) this.pictureFrames.set(img, reading.frame);
+        return img;
     }
 
     /**
@@ -3517,6 +4063,25 @@ function clustersOf(text: string): Iterable<string> {
     return { *[Symbol.iterator]() { for (const { segment } of segments) yield segment; } };
 }
 
+/**
+ * A chart's value axis: its range from the values (and 0) to round ticks at a step of 1, 2 or 5 times a power
+ * of ten, about five of them. Undefined for values whose range no number holds, or too small to step through
+ * (they crashed the conversion), or for no values: the chart is then written as text.
+ */
+function chartScale(numbers: number[]): { low: number; high: number; ticks: number[] } | undefined {
+    let low = 0, high = 0, any = false;
+    for (const v of numbers) { if (Number.isNaN(v)) continue; any = true; if (v < low) low = v; if (v > high) high = v; }
+    if (!any) return undefined;
+    if (low === high) high = low + 1;
+    const rough = (high - low) / 5, power = 10 ** Math.floor(Math.log10(rough));
+    const step = [1, 2, 5, 10].map(m => m * power).find(t => t >= rough) ?? rough;
+    if (!(Number.isFinite(rough) && rough > 0 && Number.isFinite(step) && step > 0 && Number.isFinite(low / step) && Number.isFinite(high / step))) return undefined;
+    low = Math.floor(low / step) * step; high = Math.ceil(high / step) * step;
+    const ticks: number[] = [];
+    for (let v = low; v <= high + step / 2 && ticks.length < 50; v += step) ticks.push(v);
+    return { low, high, ticks };
+}
+
 function splitToWidth(text: string, measure: (text: string) => number, width: number): string[] {
     return [...chunksToWidth(text, measure, width)];
 }
@@ -3815,7 +4380,7 @@ function writeOutline(pdf: any, lib: any, entries: OutlineEntry[]): void {
  *
  * @returns the PDF as bytes.
  */
-export async function renderNativePdf(ast: OfficeParserAST, config: FullGeneratorConfig, metadata: OfficeMetadata, report: (type: OfficeWarningType, info?: any) => void): Promise<Uint8Array> {
+export async function renderNativePdf(ast: OfficeParserAST, config: FullGeneratorConfig, metadata: OfficeMetadata, report: (type: OfficeWarningType, info?: any) => void, chartCopyBudget: number): Promise<Uint8Array> {
     // Each warning once: what is laid out twice (a balanced section, measured, then drawn) met the same
     // problem twice.
     const reported = new Set<string>();
@@ -3837,14 +4402,14 @@ export async function renderNativePdf(ast: OfficeParserAST, config: FullGenerato
     const { fonts, custom: customFonts } = await embedFonts(pdf, lib, pc, ast.config, reportWarning);
     const returnGeneratorRuntime = customFonts ? borrowGeneratorRuntime() : () => { /* nothing lent */ };
     try {
-        return await drawDocument(pdf, lib, fonts, customFonts, ast, config, reportWarning);
+        return await drawDocument(pdf, lib, fonts, customFonts, ast, config, reportWarning, chartCopyBudget);
     } finally {
         returnGeneratorRuntime();
     }
 }
 
 /** Lays the document out on the pages of `pdf` and returns its bytes. */
-async function drawDocument(pdf: any, lib: any, fonts: Fonts, customFonts: boolean, ast: OfficeParserAST, config: FullGeneratorConfig, reportWarning: (type: OfficeWarningType, info?: any) => void): Promise<Uint8Array> {
+async function drawDocument(pdf: any, lib: any, fonts: Fonts, customFonts: boolean, ast: OfficeParserAST, config: FullGeneratorConfig, reportWarning: (type: OfficeWarningType, info?: any) => void, chartCopyBudget: number): Promise<Uint8Array> {
     const pc = config.pdfConfig;
     // 'auto' (the default): the document's own pages, each section's, where it sets them; else A4. A
     // width or height given is the caller's paper.
@@ -3888,7 +4453,7 @@ async function drawDocument(pdf: any, lib: any, fonts: Fonts, customFonts: boole
     const first = auto ? ast.metadata?.pageSetup : undefined;
     const firstPage = first ? sectionPage(first) : { w, h, margin: marginFor(undefined) };
 
-    const layout = new NativeLayout(pdf, lib, fonts, firstPage.w, firstPage.h, firstPage.margin, config, ast, reportWarning, customFonts,
+    const layout = new NativeLayout(pdf, lib, fonts, firstPage.w, firstPage.h, firstPage.margin, config, ast, reportWarning, customFonts, chartCopyBudget,
         auto ? sectionPage : null, first?.headerDistance, first?.footerDistance, ast.metadata?.pageSetup?.differentFirstPage);
     // Gather footnote/endnote bodies from the whole content tree first (they attach to text runs, deep
     // in the tree, so a render()-level sweep would miss them), then render the body, then draw them.

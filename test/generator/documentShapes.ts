@@ -980,11 +980,11 @@ export async function testMarkdownDisclosureInItemsAndCells(): Promise<void> {
 }
 
 /**
- * Round 10's findings, each read and written back. Markdown: no line after a closed quote's blank line
+ * Each of these read and written back. Markdown: no line after a closed quote's blank line
  * and an empty list item is lost, nor after a leading blank line, an indented first line or anchors
- * before an item (S2); an anchor before a disclosure stays on it (L2). A list item or table cell written
+ * before an item; an anchor before a disclosure stays on it. A list item or table cell written
  * as HTML keeps a definition list, an admonition (its kind and title), a disclosure's id, a stray summary,
- * an embed and a paragraph holding a figure apart and whole (S3, M1, L3, L5).
+ * an embed and a paragraph holding a figure apart and whole.
  */
 export async function testMarkdownDisclosureRound10Findings(): Promise<void> {
     const wordsIn = (s: string): string[] => s.match(/(?<![A-Za-z0-9])w\d+(?![0-9])/g) ?? [];
@@ -1775,7 +1775,7 @@ export async function testMarkdownItemLineSeparators(): Promise<void> {
  * Generated captioned pictures in every image mode, 17 line and block containers and 7 positions, written as
  * HTML and EPUB and read back four times: no joined or lost words. Round trips settle by pass 3, list items
  * included (a caption in an item was read as a paragraph on pass 3), except cells' headings, which settle at
- * pass 4 as they did before (next-release ledger).
+ * pass 4.
  */
 export async function testHtmlPictureMatrixGenerated(): Promise<void> {
     for (const [label, count, seed] of [['fast', 300, 13], ['full', 3000, 1313]] as const) {
@@ -1986,7 +1986,7 @@ export async function testHtmlSourceCommentBesideCaptionedPicture(): Promise<voi
  * Generated HTML with named anchors (five forms) and element ids in every position around every element kind,
  * disclosures in every summary shape: no id lost by pass 3 in HTML, EPUB or Markdown, none read onto a
  * summary, no word lost. Markdown's ids of cells and headings in a table holding a nested table in a list
- * item, lost the same way by 8.6.0 (next-release ledger), are counted apart.
+ * item, lost the same way as before, are counted apart.
  */
 export async function testAnchorPositionsGenerated(): Promise<void> {
     for (const [label, count, seed] of [['fast', 300, 13], ['full', 3000, 2026]] as const) {
@@ -2005,7 +2005,7 @@ export async function testAnchorPositionsGenerated(): Promise<void> {
  * The HTML picture matrix with a source comment at the start of each picture's line, right before or after
  * the picture or at its end, written with comments and under sourceAttributes: no joined or lost words, no
  * line break after a line's start or another break with only hidden markup between, and round trips settled
- * by pass 3 (list items included) except cells' headings (next-release ledger).
+ * by pass 3 (list items included) except cells' headings.
  */
 export async function testHtmlPictureCommentMatrixGenerated(): Promise<void> {
     for (const [label, count, seed] of [['fast', 300, 13], ['full', 2000, 1414]] as const) {

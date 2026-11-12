@@ -6,6 +6,13 @@
 import { zlibSync } from 'fflate';
 import { crc32 } from './imageUtils.js';
 
+/**
+ * The most pixels a picture is decoded to (the native PDF engine, and RTF output turning a GIF or BMP into a
+ * PNG). A decoder allocates the whole bitmap, so a few header bytes declaring an enormous picture would force a
+ * multi-gigabyte allocation; a real picture is far below this, and a larger one is its alt text.
+ */
+export const MAX_RASTER_PIXELS = 40_000_000;
+
 /** A picture as RGBA pixels, row by row, four bytes each. */
 export interface Raster { width: number; height: number; rgba: Uint8Array }
 
@@ -36,6 +43,37 @@ export function encodePng(raster: Raster): Uint8Array | null {
     let at = 0;
     for (const p of parts) { png.set(p, at); at += p.length; }
     return png;
+}
+
+/**
+ * Why a PNG is not decoded, or undefined when it may be: read from its chunks as pdf-lib's decoder reads them, before
+ * anything is decoded. A PNG has one IHDR, first; its pixels (width x height) at most `maxPixels`; an animated PNG
+ * (more than one fcTL) is refused, as pdf-lib refuses one after decoding every frame; at most one acTL (each makes the
+ * decoder allocate the file's length again), and no frame larger than the picture. The chunks are walked once, to IEND,
+ * each by its length; nothing is allocated.
+ */
+export function pngWithinBudget(bytes: Uint8Array, maxPixels: number): string | undefined {
+    const unreadable = 'its PNG data could not be read';
+    const u32 = (at: number) => (bytes[at] << 24 | bytes[at + 1] << 16 | bytes[at + 2] << 8 | bytes[at + 3]) >>> 0;
+    let width = -1, height = -1, controls = 0, frames = 0;
+    for (let at = 8; at + 8 <= bytes.length;) {
+        const length = u32(at), type = String.fromCharCode(bytes[at + 4], bytes[at + 5], bytes[at + 6], bytes[at + 7]);
+        if (type === 'IHDR') {
+            // (pdf-lib's decoder takes the last IHDR it meets: a second one could declare any size.)
+            if (at !== 8 || width >= 0 || at + 16 > bytes.length) return unreadable;
+            width = u32(at + 8);
+            height = u32(at + 12);
+            if (width * height > maxPixels) return `image is too large to embed (${width}x${height} pixels)`;
+        } else if (type === 'acTL') {
+            if (++controls > 1) return unreadable;
+        } else if (type === 'fcTL') {
+            if (++frames > 1) return 'its PNG picture is animated, which the native PDF engine does not embed';
+            // (A frame's width and height follow its sequence number.)
+            if (at + 20 > bytes.length || u32(at + 12) > width || u32(at + 16) > height) return unreadable;
+        } else if (type === 'IEND') break;
+        at += 12 + length;
+    }
+    return width < 0 ? unreadable : undefined;
 }
 
 /**
@@ -163,11 +201,18 @@ function lzwDecode(data: Uint8Array, minCodeSize: number, count: number): Uint8A
 }
 
 /**
+ * How a bitmap is drawn over what is under it, when not opaque: EMR_ALPHABLEND's per-pixel alpha (its 32-bit
+ * pixels premultiplied, AC_SRC_ALPHA) and constant alpha (0 to 255), EMR_TRANSPARENTBLT's colour drawn transparent.
+ */
+export interface BitmapTransparency { pixelAlpha?: boolean; constantAlpha?: number; transparentColor?: readonly [number, number, number] }
+
+/**
  * An uncompressed BMP (1, 4, 8, 24 or 32 bits a pixel; 32-bit with or without bit fields), or null when
  * it is another kind or holds more than `maxPixels`. Rows are stored bottom up unless the height is
- * negative.
+ * negative. Its pixels are opaque, unless `transparency` (how a metafile draws it) says otherwise: a 32-bit
+ * pixel's own alpha, its colour premultiplied by it; a constant alpha over all; a colour drawn transparent.
  */
-export function decodeBmp(bytes: Uint8Array, maxPixels: number): Raster | null {
+export function decodeBmp(bytes: Uint8Array, maxPixels: number, transparency?: BitmapTransparency): Raster | null {
     if (bytes.length < 54 || bytes[0] !== 0x42 || bytes[1] !== 0x4D) return null;
     const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
     const dataAt = view.getUint32(10, true), headerSize = view.getUint32(14, true);
@@ -188,21 +233,67 @@ export function decodeBmp(bytes: Uint8Array, maxPixels: number): Raster | null {
         palette = bytes.subarray(paletteAt, paletteAt + colors * 4);
     }
     const rgba = new Uint8Array(width * height * 4);
+    const pixelAlpha = !!transparency?.pixelAlpha && bpp === 32, constantAlpha = transparency?.constantAlpha, key = transparency?.transparentColor;
     for (let y = 0; y < height; y++) {
         const row = dataAt + (topDown ? y : height - 1 - y) * stride;
         for (let x = 0; x < width; x++) {
             const o = (y * width + x) * 4;
+            let r: number, g: number, b: number, a = 255;
             if (bpp === 24 || bpp === 32) {
                 const p = row + x * (bpp / 8);
-                rgba[o] = bytes[p + 2]; rgba[o + 1] = bytes[p + 1]; rgba[o + 2] = bytes[p]; rgba[o + 3] = 255;
+                r = bytes[p + 2]; g = bytes[p + 1]; b = bytes[p];
+                if (pixelAlpha) {
+                    a = bytes[p + 3];
+                    // (Premultiplied: the colour taken back to what it is at full alpha.)
+                    if (a > 0 && a < 255) { r = Math.min(255, Math.round(r * 255 / a)); g = Math.min(255, Math.round(g * 255 / a)); b = Math.min(255, Math.round(b * 255 / a)); }
+                }
             } else {
                 const bit = x * bpp;
                 const index = (bytes[row + (bit >> 3)] >> (8 - bpp - (bit & 7))) & ((1 << bpp) - 1);
                 const p = index * 4;
                 if (!palette || p + 2 >= palette.length) continue;
-                rgba[o] = palette[p + 2]; rgba[o + 1] = palette[p + 1]; rgba[o + 2] = palette[p]; rgba[o + 3] = 255;
+                r = palette[p + 2]; g = palette[p + 1]; b = palette[p];
             }
+            if (constantAlpha !== undefined) a = Math.round(a * constantAlpha / 255);
+            if (key && r === key[0] && g === key[1] && b === key[2]) a = 0;
+            rgba[o] = r; rgba[o + 1] = g; rgba[o + 2] = b; rgba[o + 3] = a;
         }
     }
     return { width, height, rgba };
+}
+
+/** The TIFF tags tiffSize reads. */
+const TIFF_TAG = { width: 256, height: 257, orientation: 274 } as const;
+
+/** A TIFF field's type's size in bytes (1 BYTE ... 13 IFD), 0 for a type not read. */
+const TIFF_TYPE_SIZE = [0, 1, 1, 2, 4, 8, 1, 1, 2, 4, 8, 4, 8, 4];
+
+/**
+ * A TIFF's first page's size as it is shown (its Orientation 5 to 8 swaps width and height), read from its first IFD
+ * alone; undefined when the header cannot be read.
+ */
+export function tiffSize(bytes: Uint8Array): { width: number; height: number } | undefined {
+    if (bytes.length < 8) return undefined;
+    const little = bytes[0] === 0x49 && bytes[1] === 0x49;
+    if (!little && !(bytes[0] === 0x4D && bytes[1] === 0x4D)) return undefined;
+    const u16 = (at: number) => little ? bytes[at] | bytes[at + 1] << 8 : bytes[at] << 8 | bytes[at + 1];
+    const u32 = (at: number) => (little ? bytes[at] | bytes[at + 1] << 8 | bytes[at + 2] << 16 | bytes[at + 3] << 24 : bytes[at] << 24 | bytes[at + 1] << 16 | bytes[at + 2] << 8 | bytes[at + 3]) >>> 0;
+    if (u16(2) !== 42) return undefined;
+    const first = u32(4);
+    if (first < 8 || first + 2 > bytes.length) return undefined;
+    const entries = u16(first);
+    if (first + 2 + entries * 12 + 4 > bytes.length) return undefined;
+    // Each tag's first entry of a type read, its first value where it is inside the file.
+    const fields = new Map<number, number | undefined>();
+    for (let i = 0; i < entries; i++) {
+        const entry = first + 2 + i * 12, tag = u16(entry);
+        if (tag !== TIFF_TAG.width && tag !== TIFF_TAG.height && tag !== TIFF_TAG.orientation) continue;
+        const type = u16(entry + 2), count = u32(entry + 4), size = TIFF_TYPE_SIZE[type] ?? 0;
+        if (!size || fields.has(tag)) continue;
+        const at = size * count <= 4 ? entry + 8 : u32(entry + 8);
+        fields.set(tag, count && at + size <= bytes.length ? (size === 1 ? bytes[at] : size === 2 ? u16(at) : size === 4 ? u32(at) : u32(at) / (u32(at + 4) || 1)) : undefined);
+    }
+    const width = fields.get(TIFF_TAG.width) ?? 0, height = fields.get(TIFF_TAG.height) ?? 0, orientation = fields.get(TIFF_TAG.orientation) ?? 1;
+    if (!(width > 0 && height > 0)) return undefined;
+    return orientation >= 5 && orientation <= 8 ? { width: height, height: width } : { width, height };
 }

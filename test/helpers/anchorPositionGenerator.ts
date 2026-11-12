@@ -15,7 +15,7 @@
  * the first read holds must still be held after pass 3, and every word kept. No id may be read onto a
  * disclosure's summary, which takes none.
  *
- * One shape is counted apart (`excludedLost`), as it was lost the same way by 8.6.0 (next-release ledger):
+ * One shape is counted apart (`excludedLost`), as it was always lost the same way:
  * in Markdown, the ids of cells and headings in a table that holds a nested table, inside a list item, which
  * Markdown writes as HTML.
  *

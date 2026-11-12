@@ -3,9 +3,10 @@ import { ConversionResult, GeneratorConfig, OfficeAttachment, OfficeContentNode,
 import { escapeXml, stripInvalidXmlChars } from '../utils/sanitize.js';
 import { checkAbortSignal } from '../utils/errorUtils.js';
 import { DRAWINGML_PRESETS } from '../utils/shapeNames.js';
-import { decodeBase64, encUrl, hexColor, ooxmlCustomPropertiesXml, resolveZipInstant, sniffImageSize, toW3CDTF } from '../utils/officeGenUtils.js';
+import { decodedPictureBytes, encUrl, hexColor, ooxmlCustomPropertiesXml, resolveZipInstant, sniffImageSize, toW3CDTF } from '../utils/officeGenUtils.js';
 import { pictureKindOf, picturesOfKind } from '../utils/imageUtils.js';
 import { BaseGenerator } from './BaseGenerator.js';
+import { utf8Length } from '../utils/repeatUtils.js';
 import { buildDeck, bulletMargin, Box, DeckItem, DeckParagraph, DeckRun, DeckSlide, unseenTable } from './slides/deck.js';
 
 /** Escapes text content for an XML part after stripping XML-illegal characters. */
@@ -54,6 +55,12 @@ function themeXml(name: string): string {
  * hold (a chart, an SVG picture) is reported.
  */
 export class PptxGenerator extends BaseGenerator<'pptx'> {
+    /** What one cell of a chart's table weighs as this writer writes it, beyond its text: an `a:tc` with its text body and properties (see BaseGenerator.chartTable). */
+    protected chartCellWeight = 600;
+    /** What `text` weighs in a chart's table cell: escaped (see BaseGenerator.chartTextWeight). */
+    protected override chartTextWeight(text: string): number {
+        return utf8Length(xmlText(text));
+    }
     constructor(ast: OfficeParserAST, config?: GeneratorConfig<'pptx'>) {
         super('pptx', ast, config);
     }
@@ -61,6 +68,8 @@ export class PptxGenerator extends BaseGenerator<'pptx'> {
     private readonly media: { path: string; bytes: Uint8Array; ext: string }[] = [];
     private readonly mediaByAttachment = new Map<string, number>();
     private readonly attachmentsByName = new Map<string, OfficeAttachment>();
+    /** Each attachment's bytes, decoded once at the first picture showing it; null when its data is not base64. */
+    private readonly pictureBytes = new Map<string, Uint8Array | null>();
 
     async generate(): Promise<ConversionResult<'pptx'>> {
         // onNode is asked once for each node, however often the deck consults it.
@@ -75,10 +84,12 @@ export class PptxGenerator extends BaseGenerator<'pptx'> {
             keep: async node => { checkAbortSignal(this.config.abortSignal); const v = await this.handleOnNode(node); return v === false ? false : typeof v === 'string' ? v : true; },
             includeCharts: this.config.includeCharts !== false,
             imageMode: this.imageMode(),
+            mathPicture: node => this.mathPicture(node),
             includeFormatting: this.config.includeFormatting !== false,
             chartTable: node => {
-                const data = this.attachmentsByName.get((node.metadata as { attachmentName?: string } | undefined)?.attachmentName ?? '')?.chartData;
-                return data ? this.chartTable(data, text => ({ type: 'cell', text, children: [{ type: 'text', text }] } as OfficeContentNode), true) : undefined;
+                const name = (node.metadata as { attachmentName?: string } | undefined)?.attachmentName;
+                const data = this.attachmentsByName.get(name ?? '')?.chartData;
+                return data ? this.chartTableOrReference(data, name, text => ({ type: 'cell', text, children: [{ type: 'text', text }] } as OfficeContentNode), true) : undefined;
             },
         }, { backgrounds: this.config.pptxConfig.backgrounds ?? undefined });
         for (const feature of deck.unrepresentable) this.warn(OfficeWarningType.CONTENT_NOT_REPRESENTABLE, { feature, format: 'pptx' });
@@ -215,16 +226,16 @@ export class PptxGenerator extends BaseGenerator<'pptx'> {
         }
         if (item.kind === 'picture') {
             const a = this.attachmentsByName.get(item.attachment);
-            const bytes = a?.data ? decodeBase64(a.data) : undefined;
-            const target = this.mediaFor(item.attachment, bytes ?? undefined, a?.mimeType);
+            const bytes = a?.data ? decodedPictureBytes(this.pictureBytes, item.attachment, a.data) : undefined;
+            const target = bytes === null ? undefined : this.mediaFor(item.attachment, bytes, a?.mimeType);
             if (!target) {
                 // (An SVG picture PowerPoint shows only beside a PNG copy, which is not made here; another kind PPTX
-                // holds none of. Its alternative text in its place.)
+                // holds none of; data that is not base64. Its alternative text in its place.)
                 const svg = /svg/i.test(a?.mimeType ?? '') || /\.svg$/i.test(item.attachment);
                 const kind = bytes?.length ? pictureKindOf(bytes, a?.mimeType, a?.extension) : '';
                 this.warn(OfficeWarningType.IMAGE_PROCESSING_FAILED, {
                     name: item.attachment,
-                    reason: !a ? 'missing attachment' : !kind ? 'attachment has no data' : svg ? 'an SVG picture (PPTX output holds one only with a PNG copy of it)'
+                    reason: !a ? 'missing attachment' : bytes === null ? 'its data could not be decoded' : !kind ? 'attachment has no data' : svg ? 'an SVG picture (PPTX output holds one only with a PNG copy of it)'
                         : kind === 'XML' ? 'its data is XML, not a picture' : `PPTX output does not take ${picturesOfKind(kind)} (it takes PNG, JPEG, GIF, BMP, TIFF, EMF and WMF)`,
                 });
                 return item.alt ? this.itemXml({ kind: 'text', box: item.box, paragraphs: [{ runs: [{ text: item.alt }] }] }, next, rel) : '';

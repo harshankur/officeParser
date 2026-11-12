@@ -4,6 +4,7 @@ import { BlobLike, CanonicalFormat, ConversionResult, GeneratorConfig, OfficeCon
 import { PROTOTYPE_POLLUTION_KEYS, RECOGNIZED_GENERATOR_KEYS, RECOGNIZED_PARSER_KEYS } from './utils/configUtils.js';
 import { logWarning } from './utils/errorUtils.js';
 import { resolveImageMode } from './utils/officeGenUtils.js';
+import { isWorkbookChartsNotRead } from './parsers/ExcelParser.js';
 
 /** The keys `convert()` itself reads; parser and generator options go inside the first two. */
 const CONVERTER_KEYS = new Set(['parseConfig', 'generatorConfig', 'onWarning']);
@@ -82,9 +83,14 @@ export class OfficeConverter {
     ): Promise<ConversionResult<CanonicalFormat<D>>> {
         // 1. Prepare Parser Configuration
         // We prioritize the top-level onWarning if provided.
+        // A conversion that leaves charts out (includeCharts: false) has no chart in its output: a workbook's charts not read
+        // (a parse without attachments, see isWorkbookChartsNotRead) are not reported.
+        const chartsWanted = config?.generatorConfig?.includeCharts !== false;
+        const reported = (issue: OfficeIssue) => chartsWanted || !isWorkbookChartsNotRead(issue);
+        const parseOnWarning = config?.onWarning || config?.parseConfig?.onWarning;
         const parserConfig: OfficeParserConfig = {
             ...config?.parseConfig,
-            onWarning: config?.onWarning || config?.parseConfig?.onWarning,
+            onWarning: parseOnWarning && ((issue: OfficeIssue) => { if (reported(issue)) parseOnWarning(issue); }),
         };
 
         // Whether the caller pinned `extractAttachments` explicitly (true OR false); an explicit value
@@ -124,7 +130,7 @@ export class OfficeConverter {
         const ast = await OfficeParser.parseOffice(file, parserConfig);
         // The parse's own warnings, taken now: the AST goes on collecting the generator's too, which
         // the generation result already lists.
-        const parseWarnings = [...(ast.warnings || [])];
+        const parseWarnings = (ast.warnings || []).filter(reported);
 
         // 3. Generate the destination document from the AST
         const generatorConfig = {

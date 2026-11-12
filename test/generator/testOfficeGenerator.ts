@@ -1043,7 +1043,7 @@ async function testGeneratorConfigs(
                 }
             });
 
-            // G2: No Formatting — output should be shorter than default (less markup)
+            // No Formatting: output should be shorter than default (less markup)
             if (ct.id === 'G2' && (destFmt === 'html' || destFmt === 'md')) {
                 const defaultResult = await OfficeGenerator.generate(ast as any, destFmt as any, {} as any);
                 const actualLen = typeof result.value === 'string' ? result.value.length : 0;
@@ -1059,7 +1059,7 @@ async function testGeneratorConfigs(
                 });
             }
 
-            // G6: HTML Non-Standalone (standalone:false) — bare fragment: no DOCTYPE, no <style>,
+            // HTML Non-Standalone (standalone:false): bare fragment: no DOCTYPE, no <style>,
             // no envelope-level <script> (Chart.js CDN loader / spreadsheet interactivity), but
             // still has the content container div. Note a per-chart *inline* init script (which
             // contains "new Chart(") is content, not envelope, and is intentionally NOT gated by
@@ -1090,7 +1090,7 @@ async function testGeneratorConfigs(
                 });
             }
 
-            // G15: standalone:{document:false} — still a fragment (no DOCTYPE), but styled
+            // standalone:{document:false}: still a fragment (no DOCTYPE), but styled
             // (styles defaults to 'full' when omitted from the object).
             if (ct.id === 'G15' && destFmt === 'html') {
                 const htmlVal = typeof result.value === 'string' ? result.value : '';
@@ -1106,7 +1106,7 @@ async function testGeneratorConfigs(
                 });
             }
 
-            // G16: standalone:{document:false, styles:'scoped'} — CSS wrapped in @scope, and
+            // standalone:{document:false, styles:'scoped'}: CSS wrapped in @scope, and
             // the leak-prone :root/body selectors must not appear unscoped.
             if (ct.id === 'G16' && destFmt === 'html') {
                 const htmlVal = typeof result.value === 'string' ? result.value : '';
@@ -1123,7 +1123,7 @@ async function testGeneratorConfigs(
                 });
             }
 
-            // G17: standalone:{document:false, bodyInjections:true} + injections — body
+            // standalone:{document:false, bodyInjections:true} + injections: body
             // injections must apply even to a bare content fragment (they wrap body content,
             // not the document shell).
             if (ct.id === 'G17' && destFmt === 'html') {
@@ -1139,7 +1139,7 @@ async function testGeneratorConfigs(
                 });
             }
 
-            // G18: standalone:true (explicit) — full document, must contain DOCTYPE.
+            // standalone:true (explicit): full document, must contain DOCTYPE.
             if (ct.id === 'G18' && destFmt === 'html') {
                 const htmlVal = typeof result.value === 'string' ? result.value : '';
                 const hasDoctype = htmlVal.includes('<!DOCTYPE');
@@ -1219,7 +1219,7 @@ async function testGeneratorConfigs(
                 });
             }
 
-            // G3: Metadata rendered — output should contain metadata block
+            // Metadata rendered: output should contain metadata block
             if (ct.id === 'G3' && typeof result.value === 'string') {
                 const output = result.value;
                 const outputLower = output.toLowerCase();
@@ -2018,7 +2018,7 @@ async function runWhitespaceFidelityTests(): Promise<GenFeatureTest[]> {
 }
 
 // ============================================================================
-// PRE-MERGE REVIEW REGRESSIONS (v8.0.0)
+// REGRESSIONS
 // ============================================================================
 
 /** Concatenated text of a node's whole subtree, for asserting on a re-parsed document. */
@@ -3238,6 +3238,33 @@ async function runDegradeFidelityTests(): Promise<GenFeatureTest[]> {
  * same pages, LaTeX sets the landscape ones in a `landscape` environment, and the native engine and
  * the slide writers keep a page (or slide) for each.
  */
+/**
+ * PDF output's 'html' engine lists what its HTML reported: onWarning heard it, the result's messages did not hold it.
+ * A chart with no chart script to draw it (htmlConfig.chartJsSrc '') is written as its table and reported, at each
+ * chart node, in both.
+ */
+async function runPdfHtmlMessagesTests(): Promise<GenFeatureTest[]> {
+    const mk = (exp: any, act: any, ok: boolean, details: string): GenFeatureTest => ({
+        category: 'PDF Messages', feature: 'PDF (html engine) lists the HTML writer\'s warnings', sourceFormat: 'ast', destFormat: 'pdf',
+        result: { status: ok ? 'PASS' : 'FAIL', expected: exp, actual: act, details, duration: 0 }
+    });
+    const chartData = { title: 'Sales', labels: ['Q1', 'Q2'], dataSets: [{ name: 'Units', values: ['10', '20'] }], rawTexts: [] };
+    const ast = {
+        type: 'docx', metadata: {},
+        content: [0, 1, 2].map(() => ({ type: 'chart', text: '', metadata: { attachmentName: 'c' } })),
+        attachments: [{ type: 'chart', name: 'c', mimeType: 'application/xml', extension: 'xml', data: '', chartData }],
+    } as any as OfficeParserAST;
+    const isChart = (w: any) => w.code === 'CONTENT_NOT_REPRESENTABLE' && w.details?.reason === 'chart';
+    try {
+        const heard: any[] = [];
+        const out = await OfficeGenerator.generate(ast, 'pdf' as any, { pdfConfig: { engine: 'html' }, htmlConfig: { chartJsSrc: '' }, onWarning: (w: any) => heard.push(w) } as any);
+        const listed = out.messages.filter(isChart).length, said = heard.filter(isChart).length;
+        return [mk('3 listed, 3 heard', `${listed} listed, ${said} heard`, listed === 3 && said === 3, 'a chart written as its table is reported at each of its three nodes, in onWarning and in messages')];
+    } catch (e: any) {
+        return [mk('3 listed, 3 heard', e?.message || String(e), false, 'PDF generation failed')];
+    }
+}
+
 async function runPdfSectionTests(): Promise<GenFeatureTest[]> {
     const results: GenFeatureTest[] = [];
     const category = 'PDF Sections';
@@ -3377,6 +3404,11 @@ async function runAllTests(): Promise<void> {
 
     // A PDF's pages of other sizes as sections, through every writer that lays out pages (PDF: not in fast mode)
     if (!FAST_MODE) {
+        process.stdout.write('  pdf html messages...');
+        const pdfMessageResults = await runPdfHtmlMessagesTests();
+        allResults.push(...pdfMessageResults);
+        console.log(pdfMessageResults.filter(r => r.result.status === 'FAIL').length > 0 ? ' \u2717' : ' \u2713');
+
         process.stdout.write('  pdf sections...');
         const pdfSectionResults = await runPdfSectionTests();
         allResults.push(...pdfSectionResults);

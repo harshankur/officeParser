@@ -93,10 +93,33 @@
                 <td><code>boolean</code></td>
                 <td><code>true</code></td>
                 <td><strong>Visuals</strong>: Whether to include charts. HTML draws an interactive Chart.js canvas (or, with no
-                    <code>chartJsSrc</code>, the chart's data as a table); DOCX, ODT and LaTeX write the chart's data as a
-                    table, PPTX and ODP a table of its data in the chart's place; plain text and the native PDF engine write
-                    its data as text; Markdown and RTF write nothing for a chart, and XLSX and ODS, whose cells cannot hold
-                    one, report it (<code>CONTENT_NOT_REPRESENTABLE</code>). <code>false</code> omits charts in every generator.</td>
+                    <code>chartJsSrc</code>, the chart's data as a table); DOCX, ODT, LaTeX, Markdown, RTF and EPUB write the
+                    chart's data as a table under its title (a chart in a line of text: DOCX, ODT and LaTeX its data's lines,
+                    Markdown and RTF a table between the text around it); PPTX and ODP a table of its data in the chart's
+                    place, XLSX and ODS a sheet of its data; the native PDF engine draws it (in a heading, list item or note,
+                    its data as text, reported); plain text writes its data as text. CSV writes sheets and tables, and reports
+                    the charts it leaves out (not those <code>onNode</code> leaves out), once
+                    (<code>CONTENT_NOT_REPRESENTABLE</code>, <code>details.reason: 'chart'</code>).
+                    A chart without its data is written as its text, else as its reference (<code>[Chart: chart1.xml]</code>),
+                    by HTML, EPUB, DOCX, ODT, LaTeX, Markdown, RTF, plain text, chunk and native PDF output; PPTX, ODP, XLSX,
+                    ODS and CSV output report it with <code>CONTENT_NOT_REPRESENTABLE</code>. A parse without
+                    <code>extractAttachments</code> reads no chart's data: an ODF chart (ODT, ODS, ODP) has its text, a DOCX
+                    or PPTX chart none, and an XLSX chart is not read, which the parse reports
+                    (<code>CONTENT_PART_NOT_READ</code>). A chart shown at several places has its
+                    table, title and text (in a line, or without its data) written again, charged what each writer writes (UTF-8 bytes, escapes
+                    included), within <code>decompressionLimits.maxRepeatedContent</code>, then a
+                    reference to it (<code>[Chart: Sales]</code>, <code>REPEATED_CONTENT_LIMIT_EXCEEDED</code>).
+                    <code>false</code> omits charts in every generator, unreported.</td>
+            </tr>
+            <tr>
+                <td><code>includePlaceholderText</code></td>
+                <td><code>boolean</code></td>
+                <td><code>false</code></td>
+                <td><strong>Content</strong>: Write the prompt of a DOCX content control that still shows its placeholder
+                    ("Click or tap here to enter text."). The parser keeps the prompt in the AST, marked
+                    <code>TextMetadata.placeholder</code>, and leaves it out of the paragraph's <code>text</code>; every
+                    generator, the native PDF engine included, leaves it out unless this is <code>true</code>. A caller's
+                    <code>onNode</code> is asked first.</td>
             </tr>
             <tr>
                 <td><code>ignoreInternalLinks</code></td>
@@ -1031,13 +1054,17 @@ const { value: zip } = await ast.to('tex', { texConfig: { bundle: true } });  //
                 <td><code>sheets</code></td>
                 <td><code>string</code></td>
                 <td><code>''</code></td>
-                <td>Range of sheets to export (e.g., "1,3-5").</td>
+                <td>Range of sheets to export (e.g., "1,3-5"; 1-based), counting the sheets and tables. Charts are not
+                    written: those in the sheets written (and, with no range, those outside any) are reported once
+                    (<code>CONTENT_NOT_REPRESENTABLE</code>).</td>
             </tr>
             <tr>
                 <td><code>mergeSheets</code></td>
                 <td><code>boolean</code></td>
                 <td><code>true</code></td>
-                <td>Merges all sheets into one file. If false, returns a ZIP.</td>
+                <td>Merges all sheets into one file. If false, returns a ZIP of one CSV a sheet; two names that make the
+                    same file name (<code>A/B</code> and <code>A_B</code>, or alike but for case) are numbered:
+                    <code>A_B.csv</code>, <code>A_B-2.csv</code>, never with a name another sheet has.</td>
             </tr>
             <tr>
                 <td><code>columnDelimiter</code></td>

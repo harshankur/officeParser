@@ -70,6 +70,7 @@ import { checkAbortSignal, getOfficeError, logWarning } from '../utils/errorUtil
 import { createAttachment, renameAttachments } from '../utils/imageUtils.js';
 import { extractChartData } from '../utils/chartUtils.js';
 import { isEmptyMath, ommlToLatex } from '../utils/mathUtils.js';
+import { embeddedObjectKind, embeddedObjectPart, progIdOf } from '../utils/oleUtils.js';
 import { ocrDuringParse } from '../utils/ocrUtils.js';
 import { getAllElementsByTagName, getChildElements, getDirectChildren, getElementsByTagName, getOutermostElements, getFirstElementByTagName, getRawContent, isElement, parseOfficeMetadata, parseOOXMLAppProperties, parseOOXMLCustomProperties, parseXmlString, takeNodes, takeXmlElements, countByte } from '../utils/xmlUtils.js';
 import { bulletCharacter, formatListNumber, wordNumberFormat } from '../utils/listMarkers.js';
@@ -562,18 +563,57 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
             const name = placeholder ? getDirectChildren(placeholder, "w:docPart")[0]?.getAttribute("w:val") : undefined;
             const content = getDirectChildren(sdt, "w:sdtContent")[0];
             prompt = !!name && !!content && showsPlaceholder(sdt) && name in placeholderPrompts
-                && promptText(content) === placeholderPrompts[name];
+                && promptTextWithin(content, placeholderPrompts[name]) === placeholderPrompts[name];
             promptControls.set(sdt, prompt);
         }
         return prompt;
     };
 
-    /** Whether `element` lies inside a content control that holds its placeholder prompt. */
-    const inPromptControl = (element: Element): boolean => {
-        for (let node = element.parentNode; node; node = node.parentNode) {
-            if (isElement(node) && node.nodeName === 'w:sdt' && isPromptControl(node)) return true;
+    /**
+     * {@link promptText} of a control's content, read only as far as telling it from `prompt`: undefined
+     * when the content holds more than 256 nodes, or more text than the prompt's length and a character
+     * (and 1,024 of white space a prompt's runs may hold between its words). Such a control is not its
+     * prompt, and is read as text. Bounded, a control is compared in constant time, however much it holds
+     * or however many controls are nested in it: read whole, each of 20,000 nested controls read all
+     * those inside it.
+     */
+    const MAX_PROMPT_NODES = 256;
+    const promptTextWithin = (content: Element, prompt: string): string | undefined => {
+        let nodes = 0, characters = 0;
+        const limit = prompt.length + 1 + 1024;
+        // (A walk by child index, so a node of many children is not listed whole before the count stops it.)
+        const stack: { node: Node; next: number }[] = [{ node: content, next: 0 }];
+        while (stack.length) {
+            const top = stack[stack.length - 1];
+            const child = top.node.childNodes[top.next++];
+            if (!child) { stack.pop(); continue; }
+            if (++nodes > MAX_PROMPT_NODES) return undefined;
+            if (isElement(child)) stack.push({ node: child, next: 0 });
+            else if ((characters += (child.nodeValue ?? '').length) > limit) return undefined;
         }
-        return false;
+        // (Read as the glossary's prompt is, over these few nodes.)
+        const text = promptText(content);
+        return text.length > prompt.length + 1 ? undefined : text;
+    };
+
+    /**
+     * Whether `element` lies inside a content control that holds its placeholder prompt. Each ancestor is
+     * answered once: a walk goes up only to the nearest element already answered, and every element it
+     * passes takes the answer (walked to the root from each run, 20,000 nested controls took a walk
+     * 20,000 long for each).
+     */
+    const inPrompt = new Map<Node, boolean>();
+    const inPromptControl = (element: Element): boolean => {
+        const passed: Node[] = [];
+        let answer = false;
+        for (let node = element.parentNode; node; node = node.parentNode) {
+            const known = inPrompt.get(node);
+            if (known !== undefined) { answer = known; break; }
+            passed.push(node);
+            if (isElement(node) && node.nodeName === 'w:sdt' && isPromptControl(node)) { answer = true; break; }
+        }
+        for (const node of passed) inPrompt.set(node, answer);
+        return answer;
     };
 
     /**
@@ -644,10 +684,22 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
     findRequiredPart(files, path => !!path.match(documentFileRegex), config,
         { fileType: 'docx', part: 'word/document.xml' });
 
-    // Each placeholder building block's prompt, for telling a control's prompt from text put in it.
+    // Each placeholder building block's prompt, for telling a control's prompt from text put in it. The glossary is read
+    // only for that: one that is not XML is no glossary (its controls' prompts read as text), reported. Its elements are
+    // the document's (DOCUMENT_BUDGETS: past the limit, or aborted, the parse ends).
     const glossaryFile = files.find(f => f.path.match(glossaryFileRegex));
     if (glossaryFile) {
-        for (const docPart of getElementsByTagName(parseXmlString(glossaryFile.content.toString(), { config }), "w:docPart")) {
+        let glossary: Document | undefined;
+        try {
+            glossary = parseXmlString(glossaryFile.content.toString(), { config });
+        } catch (error: any) {
+            if (error?.name === 'AbortError' || DOCUMENT_BUDGETS.has(error?.officeIssue?.code)) throw error;
+            logWarning(OfficeWarningType.CONTENT_PART_NOT_READ, config, {
+                part: `the glossary, ${glossaryFile.path}`,
+                reason: `it is not well-formed XML (${String(error?.message ?? error).slice(0, 200)}), so content controls' placeholder prompts are read as text`,
+            });
+        }
+        if (glossary) for (const docPart of getElementsByTagName(glossary, "w:docPart")) {
             const docPartPr = getDirectChildren(docPart, "w:docPartPr")[0];
             const name = docPartPr ? getDirectChildren(docPartPr, "w:name")[0]?.getAttribute("w:val") : undefined;
             const body = getDirectChildren(docPart, "w:docPartBody")[0];
@@ -700,6 +752,75 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
         const chartNode: OfficeContentNode = { type: 'chart', text: '', metadata: { attachmentName } as ChartMetadata };
         if (config.includeRawContent) chartNode.rawContent = getRawContent(drawing, documentContent, config);
         return chartNode;
+    };
+
+    /**
+     * The picture a drawing shows (a DrawingML blip or a VML image), or an embedded object's preview
+     * picture: an image node, of its alt text alone where the package does not hold its data; undefined
+     * for a drawing that shows neither (a text box, SmartArt, a plain shape). An embedded object (OLE: an
+     * Excel sheet, an equation) is `w:object`, or a drawing holding `o:OLEObject`, as older producers
+     * write one in `w:pict`: its alt text names its kind, and one with no preview is reported. (A
+     * function of its own: read in the run's walk, its locals made every level of nested text boxes
+     * deeper on the stack.)
+     */
+    const pictureNodeOf = (imgNode: Element, documentContent: string): OfficeContentNode | undefined => {
+        const blip = ownFirst(imgNode, "a:blip");
+        const imagedata = blip ? undefined : ownFirst(imgNode, "v:imagedata");
+        const oleObject = ownFirst(imgNode, "o:OLEObject");
+        const objectEmbed = oleObject ? undefined : ownFirst(imgNode, "w:objectEmbed") ?? ownFirst(imgNode, "w:objectLink");
+        // An ActiveX control (`w:control`) is not an embedded object: it is the picture it shows, as one in `w:pict` is, or nothing.
+        const control = !oleObject && !objectEmbed && !!ownFirst(imgNode, "w:control");
+        const isObject = !control && (imgNode.nodeName === 'w:object' || imgNode.nodeName === 'object' || !!oleObject);
+        if (!blip && !imagedata && !isObject) return undefined;
+        const progId = isObject ? progIdOf(oleObject?.getAttribute("ProgID") || objectEmbed?.getAttribute("w:progId") || undefined) : undefined;
+        // Extract Alt Text
+        let altText = '';
+        const docPr = ownFirst(imgNode, "wp:docPr");
+        if (docPr) {
+            altText = docPr.getAttribute("descr") || docPr.getAttribute("title") || '';
+        }
+        if (isObject && !altText) altText = ownFirst(imgNode, "v:shape")?.getAttribute("alt") || embeddedObjectKind(progId) || '';
+        // A picture that is a link itself (Insert > Link on a picture writes it on docPr).
+        const pictureLinkRid = docPr ? getFirstElementByTagName(docPr, "a:hlinkClick")?.getAttribute("r:id") : null;
+        const pictureLink = pictureLinkRid && partRels[pictureLinkRid] ? { link: partRels[pictureLinkRid], linkType: 'external' as const } : {};
+
+        // Extract Relationship ID
+        const rId = (blip ? blip.getAttribute("r:embed") : imagedata?.getAttribute("r:id")) || '';
+
+        if (rId && partRels[rId]) {
+            const filename = partRels[rId].split('/').pop();
+            if (!filename) return undefined;
+            const imageNode: OfficeContentNode = {
+                type: 'image',
+                text: '',
+                metadata: { attachmentName: filename, altText: altText, ...pictureLink } as ImageMetadata
+            };
+            if (config.includeRawContent) {
+                imageNode.rawContent = getRawContent(imgNode, documentContent, config);
+            }
+            return imageNode;
+        }
+        // A picture whose data the package does not hold: its alt text, where it has one.
+        const imageNode: OfficeContentNode = {
+            type: 'image',
+            text: '',
+            ...(altText ? { metadata: { altText } as ImageMetadata } : {}),
+        };
+        if (config.includeRawContent) {
+            imageNode.rawContent = getRawContent(imgNode, documentContent, config);
+        }
+        // An object with no picture of it shows nothing of what it holds.
+        if (isObject) {
+            const objectRid = (oleObject ?? objectEmbed)?.getAttribute("r:id");
+            const target = objectRid ? partRels[objectRid] : undefined;
+            logWarning(OfficeWarningType.CONTENT_PART_NOT_READ, config, {
+                part: embeddedObjectPart(progId),
+                reason: 'it has no preview picture, and the object itself is not read',
+                ...(progId ? { progId } : {}),
+                ...(target ? { target } : {}),
+            });
+        }
+        return imageNode;
     };
 
     // The parts alternative-format chunks are read from, inflated second and only those an aFChunk
@@ -1481,7 +1602,8 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
                 while (pendingDrawing.length) {
                     const item = pendingDrawing.pop()!;
                     if (!isElement(item) || TEXT_BOX.has(item.nodeName)) continue;
-                    if (item.nodeName === 'w:drawing' || item.nodeName === 'drawing' || item.nodeName === 'w:pict' || item.nodeName === 'pict') runDrawings.push(item);
+                    // (An embedded object, `w:object`, too: its preview picture is what it shows.)
+                    if (item.nodeName === 'w:drawing' || item.nodeName === 'drawing' || item.nodeName === 'w:pict' || item.nodeName === 'pict' || item.nodeName === 'w:object' || item.nodeName === 'object') runDrawings.push(item);
                     else if (isAlternateContent(item)) pushNodes(resolveAlternateContent(item));
                     else pushNodes(item.childNodes);
                 }
@@ -1496,48 +1618,8 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
                         continue;
                     }
                     if (!config.extractAttachments) continue;
-                    const blip = ownFirst(imgNode, "a:blip");
-                    const imagedata = blip ? undefined : ownFirst(imgNode, "v:imagedata");
-                    if (!blip && !imagedata) continue;
-                    // Extract Alt Text
-                    let altText = '';
-                    const docPr = ownFirst(imgNode, "wp:docPr");
-                    if (docPr) {
-                        altText = docPr.getAttribute("descr") || docPr.getAttribute("title") || '';
-                    }
-                    // A picture that is a link itself (Insert > Link on a picture writes it on docPr).
-                    const pictureLinkRid = docPr ? getFirstElementByTagName(docPr, "a:hlinkClick")?.getAttribute("r:id") : null;
-                    const pictureLink = pictureLinkRid && partRels[pictureLinkRid] ? { link: partRels[pictureLinkRid], linkType: 'external' as const } : {};
-
-                    // Extract Relationship ID
-                    const rId = (blip ? blip.getAttribute("r:embed") : imagedata!.getAttribute("r:id")) || '';
-
-                    if (rId && partRels[rId]) {
-                        const target = partRels[rId];
-                        const filename = target.split('/').pop();
-                        if (filename) {
-                            const imageNode: OfficeContentNode = {
-                                type: 'image',
-                                text: '',
-                                metadata: { attachmentName: filename, altText: altText, ...pictureLink } as ImageMetadata
-                            };
-                            if (config.includeRawContent) {
-                                imageNode.rawContent = getRawContent(imgNode, documentContent, config);
-                            }
-                            children.push(imageNode);
-                        }
-                    } else {
-                        // A picture whose data the package does not hold: its alt text, where it has one.
-                        const imageNode: OfficeContentNode = {
-                            type: 'image',
-                            text: '',
-                            ...(altText ? { metadata: { altText } as ImageMetadata } : {}),
-                        };
-                        if (config.includeRawContent) {
-                            imageNode.rawContent = getRawContent(imgNode, documentContent, config);
-                        }
-                        children.push(imageNode);
-                    }
+                    const imageNode = pictureNodeOf(imgNode, documentContent);
+                    if (imageNode) children.push(imageNode);
                 }
 
                 // What the run's drawings hold that a paragraph cannot: SmartArt (a list, as a slide's

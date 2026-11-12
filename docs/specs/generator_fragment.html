@@ -46,7 +46,10 @@ const { value: csv } = await OfficeGenerator.generate(ast, 'csv');</code></pre>
         <strong>EPUB generation with images</strong> requires <code>extractAttachments: true</code> on the
         parse step that produced the AST; otherwise there are no image bytes for the EPUB generator to
         package. <code>OfficeConverter.convert()</code> sets this automatically. So do pictures and charts in
-        <strong>PPTX and ODP</strong> output: a chart is written as a table of its data, which is in its attachment.
+        <strong>PPTX and ODP</strong> output, and charts in EPUB output: a chart is written as a table of its data,
+        which is in its attachment. Parsed without it, a chart has no data: an ODF chart (ODT, ODS, ODP) is written
+        as its text and a DOCX or PPTX chart as its reference (<code>[Chart: chart1.xml]</code>) by the flowing
+        outputs, PPTX, ODP, XLSX, ODS and CSV output report it, and an XLSX chart is not read (reported).
     </blockquote>
 
     <h2>ast.to(): Shorthand</h2>

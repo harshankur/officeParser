@@ -128,6 +128,37 @@ const partLocator = (partPaths: Iterable<string>, relationships: Iterable<{ sour
     };
 };
 
+/** Why a workbook's charts are reported not read (CONTENT_PART_NOT_READ) by a parse without extractAttachments. */
+export const WORKBOOK_CHARTS_NOT_READ = "a workbook's charts are read only with extractAttachments: true";
+
+/** Whether `issue` is the report that a workbook's charts were not read (a parse without extractAttachments). */
+export const isWorkbookChartsNotRead = (issue: { code?: string; details?: unknown }): boolean =>
+    issue.code === OfficeWarningType.CONTENT_PART_NOT_READ && (issue.details as { reason?: unknown } | undefined)?.reason === WORKBOOK_CHARTS_NOT_READ;
+
+/**
+ * The chart parts in `xl/charts/` a drawing in `xl/drawings/` names (a chart relationship of its relationships part, by
+ * the target's file name, ignoring case, as partLocator finds a chart by its name in xl/charts/ failing an exact match):
+ * the charts a parse with attachments places, not a part no drawing names nor a copy in another folder. A target of a
+ * scheme (`https:`) names no part. An external relationship of a relative target is counted: the parse with attachments
+ * looks it up by the path it resolves to, and places the chart there. A drawing's relationships that cannot be read
+ * name every chart part there.
+ */
+const chartsDrawingsName = <F extends { path: string }>(chartFiles: F[], drawingRels: F[], relationshipsOf: (file: F) => PartRelationship[]): F[] => {
+    const inChartsFolder = chartFiles.filter(f => /^xl\/charts\/chart\d+\.xml$/.test(f.path));
+    const named = new Set<string>();
+    for (const rels of drawingRels) {
+        if (!/^xl\/drawings\/_rels\/drawing\d+\.xml\.rels$/.test(rels.path)) continue;
+        let relationships: PartRelationship[];
+        try { relationships = relationshipsOf(rels); } catch { return inChartsFolder; }
+        for (const rel of relationships) {
+            const target = rel.Target ?? '';
+            if (!rel.Type?.includes('chart') || !target || /^[a-z][a-z\d+.-]*:/i.test(target)) continue;
+            named.add(target.slice(target.lastIndexOf('/') + 1).toLowerCase());
+        }
+    }
+    return inChartsFolder.filter(f => named.has(f.path.slice(f.path.lastIndexOf('/') + 1).toLowerCase()));
+};
+
 /** The folder a workbook relationship's kind of sheet lives in (`xl/worksheets/` for a worksheet), if it names a sheet. */
 const sheetFolderOf = (type: string | null): string | undefined => {
     const kind = /\/(worksheet|chartsheet|dialogsheet|xlMacrosheet)$/.exec(type ?? '')?.[1];
@@ -679,7 +710,9 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
                 !!x.match(corePropsFileRegex) ||
                 !!x.match(customPropsFileRegex) ||
                 !!x.match(appPropsFileRegex) ||
-                (!!config.extractAttachments && (!!x.match(mediaFileRegex) || !!x.match(drawingRelsRegex) || chartSheetsRegex.test(x) || chartSheetRelsRegex.test(x))) ||
+                // A drawing's relationships: read without attachments too, for the charts the drawings name (see the report below).
+                !!x.match(drawingRelsRegex) ||
+                (!!config.extractAttachments && (!!x.match(mediaFileRegex) || chartSheetsRegex.test(x) || chartSheetRelsRegex.test(x))) ||
                 !!x.match(relsRegex);
         },
         config.decompressionLimits,
@@ -994,6 +1027,23 @@ export const parseExcel = async (buffer: Buffer, config: FullOfficeParserConfig)
     const drawingsPlaced = new Set<string>();
     const mediaFiles = files.filter(f => f.path.match(/xl\/media\/.*/));
     const chartFiles = files.filter(f => f.path.match(chartsRegex));
+    // A workbook's charts are placed (in their sheet's drawing, or a chart sheet's) only with their attachments: without
+    // extractAttachments no chart node is read, and every output left them out with no word. Reported once, counting the
+    // charts its drawings name (a chart part no drawing names is shown by no sheet with its attachments either), naming
+    // the first by its number (`chart1.xml`, the name its attachment and reference take).
+    const placeable = config.extractAttachments || !chartFiles.length ? [] : chartsDrawingsName(chartFiles, files.filter(f => f.path.match(drawingRelsRegex)), relationshipsOf);
+    if (placeable.length) {
+        const numberOf = (path: string) => Number(/chart(\d+)\.xml$/.exec(path)?.[1] ?? Infinity);
+        let first = placeable[0].path;
+        for (const chart of placeable) if (numberOf(chart.path) < numberOf(first)) first = chart.path;
+        const count = placeable.length;
+        logWarning(OfficeWarningType.CONTENT_PART_NOT_READ, config, {
+            part: count === 1 ? `a chart, ${first}` : `${count} charts, the first ${first}`,
+            reason: WORKBOOK_CHARTS_NOT_READ,
+            count,
+            name: first.slice(first.lastIndexOf('/') + 1),
+        });
+    }
 
     // Map to store image details by drawing file path and relationship ID
     // Null-prototype: keyed by document-derived drawing paths / rel ids, so a plain object would let a

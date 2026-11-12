@@ -9,6 +9,7 @@ import { isSourceComment } from '../utils/commentUtils.js';
 import { base64ByteLength, resolveEmbed } from '../utils/officeGenUtils.js';
 import { clampInt, clampRepeat } from '../utils/numberUtils.js';
 import { BaseGenerator } from './BaseGenerator.js';
+import { utf8Length } from '../utils/repeatUtils.js';
 import { checkAbortSignal } from '../utils/errorUtils.js';
 import { TextBuilder, trimAsciiWhitespace, trimEndChars, trimStartChars } from '../utils/textUtils.js';
 import { appendAll } from '../utils/nodeListUtils.js';
@@ -181,13 +182,19 @@ const withoutTrailingLineEnds = (text: string): string => {
  * HtmlGenerator writes one: each run of inline content a paragraph, each block on its own. The first part
  * takes the paragraph's ids, notes and comments (a block first, its ids joined to its own). Written whole in
  * an HTML cell or item, the `<p>` closed at the block and the `</p>` after it read back as an empty paragraph,
- * one more on every save in a disclosure.
+ * one more on every save in a disclosure. A heading is split at its charts alone (whatever `isBlock` is), where
+ * `chartsInHeadings` (charts are written): each part a heading of its level, the chart's table between them, not
+ * joined into the heading's line.
+ *
+ * `partOf` is told of each object made: a part (origin null), and the copy of a block taking the line's anchors (origin
+ * the block).
  */
-const paragraphsSplitAtBlocks = (nodes: OfficeContentNode[]): OfficeContentNode[] => {
+const paragraphsSplitAtBlocks = (nodes: OfficeContentNode[], isBlock: (child: OfficeContentNode) => boolean, chartsInHeadings: boolean, partOf: (part: OfficeContentNode, origin: OfficeContentNode | null) => void): OfficeContentNode[] => {
     let out: OfficeContentNode[] | undefined;
     for (let i = 0; i < nodes.length; i++) {
         const node = nodes[i];
-        if (node.type !== 'paragraph' || !node.children?.some(isBlockInParagraph)) { out?.push(node); continue; }
+        if (!splitsAtBlocks(node, isBlock, chartsInHeadings)) { out?.push(node); continue; }
+        const blockOf = node.type === 'heading' ? isChart : isBlock;
         out ??= nodes.slice(0, i);
         const anchorIds = (node.metadata as { anchorIds?: string[] } | undefined)?.anchorIds;
         const later = { ...node, metadata: node.metadata ? { ...(node.metadata as object), anchorIds: undefined } as any : undefined, notes: undefined, comments: undefined };
@@ -195,17 +202,22 @@ const paragraphsSplitAtBlocks = (nodes: OfficeContentNode[]): OfficeContentNode[
         let run: OfficeContentNode[] = [];
         const flush = () => {
             if (run.some(c => c.type !== 'text' || trimAsciiWhitespace(c.text ?? '') || c.notes?.length)) {
-                out!.push({ ...(first ? node : later), children: run });
+                // (Its text its own runs': the line's `.text` is all of it, and a heading's id is made from its text.)
+                const part = { ...(first ? node : later), text: undefined, children: run };
+                partOf(part, null);
+                out!.push(part);
                 first = false;
             }
             run = [];
         };
-        for (const child of node.children) {
-            if (!isBlockInParagraph(child)) { run.push(child); continue; }
+        for (const child of node.children ?? []) {
+            if (!blockOf(child)) { run.push(child); continue; }
             flush();
             if (first && anchorIds?.length) {
                 const own = (child.metadata as { anchorIds?: string[] } | undefined)?.anchorIds ?? [];
-                out.push({ ...child, metadata: { ...(child.metadata as object), anchorIds: [...anchorIds, ...own] } as any });
+                const anchored = { ...child, metadata: { ...(child.metadata as object), anchorIds: [...anchorIds, ...own] } as any };
+                partOf(anchored, child);
+                out.push(anchored);
             } else out.push(child);
             first = false;
         }
@@ -213,6 +225,29 @@ const paragraphsSplitAtBlocks = (nodes: OfficeContentNode[]): OfficeContentNode[
     }
     return out ?? nodes;
 };
+
+/** Whether paragraphsSplitAtBlocks writes `node` as its parts: a paragraph holding a block, or (`chartsInHeadings`) a heading holding a chart. */
+const splitsAtBlocks = (node: OfficeContentNode | undefined, isBlock: (child: OfficeContentNode) => boolean, chartsInHeadings: boolean): boolean =>
+    !!node && (node.type === 'paragraph' || (node.type === 'heading' && chartsInHeadings)) && !!node.children?.some(node.type === 'heading' ? isChart : isBlock);
+
+/**
+ * What `node` is written as first, for what stands before it to see (see MarkdownGenerator.atItsTurn): a line
+ * paragraphsSplitAtBlocks splits, starting with a block (no text before it but blank runs), that block; else `node`.
+ * A footnote or endnote it splits out is passed over, as a container passes over one standing in it.
+ */
+const writtenFirst = (node: OfficeContentNode | undefined, isBlock: (child: OfficeContentNode) => boolean, chartsInHeadings: boolean): OfficeContentNode | undefined => {
+    if (!node || !splitsAtBlocks(node, isBlock, chartsInHeadings)) return node;
+    const blockOf = node.type === 'heading' ? isChart : isBlock;
+    for (const child of node.children!) {
+        // (As paragraphsSplitAtBlocks writes a run before a block: a part where it holds anything but blank text.)
+        if (blockOf(child)) { if (isStandingNote(child)) continue; return child; }
+        if (child.type !== 'text' || trimAsciiWhitespace(child.text ?? '') || child.notes?.length) return node;
+    }
+    return node;
+};
+
+/** A chart, which stands in a paragraph where Word and ODF put one, and is written as a table of its own. */
+const isChart = (node: OfficeContentNode): boolean => node.type === 'chart';
 
 /**
  * A paragraph's or heading's children without the line breaks (and blank runs among them) that end it
@@ -453,6 +488,13 @@ function resolveFallbackToHtml(fallbackToHtml: boolean | FallbackToHtmlConfig | 
  *    emphasis markers, tables). See `resolveDialect()` and `MARKDOWN_DIALECT_PRESETS` above.
  */
 export class MarkdownGenerator extends BaseGenerator<'md'> {
+    /**
+     * What `text` weighs in a chart's caption or cell: the heavier of its pipe-cell form (escaped, a line as `<br>`, a
+     * pipe as `\|`) and its HTML form (see BaseGenerator.chartTextWeight).
+     */
+    protected override chartTextWeight(text: string): number {
+        return Math.max(utf8Length(joinLines(markdownEscapeInline(text), '<br>').replace(/\|/g, '\\|')), utf8Length(this.escapeInHtmlBlock(text)));
+    }
     private isInsideTable = false;
     /**
      * Set while rendering the children of a heading, or the cells of a table's header row.
@@ -500,6 +542,8 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
     private inHtmlTable = 0;
     /** Whether each node asked holds a disclosure (see holdsDisclosure). */
     private disclosureHolders = new WeakMap<OfficeContentNode, boolean>();
+    /** Whether each node asked holds a chart (see holdsChart). */
+    private chartHolders = new WeakMap<OfficeContentNode, boolean>();
     /** The summaries of the disclosures being written (each its first child): any other summary node is a block of its own (see htmlCellNode). */
     private disclosureSummaries = new WeakSet<OfficeContentNode>();
     /** List items written as HTML lists (see assignListDepths, writesItemAsHtml). */
@@ -1400,6 +1444,8 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                 }
 
                 case 'definitionList':
+                    // Holding a chart, HTML (see definitionListAsHtml).
+                    if (this.writesDefinitionsAsHtml(node)) return await this.definitionListAsHtml(node);
                     // In a list item, cell or definition (one line of Markdown) it is its lines (see below).
                     if (this.inOneLine) return `${this.deferAnchors(node.metadata)}${childrenOutput}\n`;
                     return `${this.anchorsBefore(node.metadata)}${childrenOutput}\n`;
@@ -1431,7 +1477,38 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                     if (!node.children?.length && node.text) return `${markdownEscapeInline(node.text, this.atLineStart)}\n\n`;
                     return childrenOutput;
 
-                case 'chart':
+                case 'chart': {
+                    // Its data's table (see BaseGenerator.chartTable), a pipe table or, where its header
+                    // spans columns, HTML, under its title. It was left out with no word.
+                    if (this.config.includeCharts === false) return '';
+                    const meta = node.metadata as { attachmentName?: string } | undefined;
+                    const data = this.getAttachment(meta?.attachmentName)?.chartData;
+                    const anchors = this.renderAnchors(node.metadata);
+                    // Without its data: its text, else its reference, written again within the chart-copy budget (see
+                    // chartLineWritten).
+                    if (!data) return `${anchors}${this.chartLineWritten(node, text => markdownEscapeInline(text, true))}\n\n`;
+                    const cell = (text: string): OfficeContentNode => ({ type: 'cell', children: [{ type: 'text', text } as OfficeContentNode] } as OfficeContentNode);
+                    const title = this.chartTitle(data).trim();
+                    // In one line of Markdown (a list item or definition) where no HTML table is written: the table
+                    // after the document, as a pipe cell's, its title and a reference to it in the line. (A pipe
+                    // cell's table may be hoisted too, see renderMarkdownTable: what is hoisted is weighed with it,
+                    // and taken back with its number when the copy is not kept.)
+                    const hoisting = this.inOneLine && !this.isInsideTable;
+                    const table = await this.chartTableWritten(data, cell, async t => {
+                        const mark = this.hoistedContent.length;
+                        const text = hoisting ? await this.hoistTable(t, processor, this.inListItem > 0 ? 'a list item' : 'a definition') : await this.renderMarkdownTable(t, processor);
+                        let weight = utf8Length(text);
+                        for (let i = mark; i < this.hoistedContent.length; i++) weight += utf8Length(this.hoistedContent[i]);
+                        return { text, weight, undo: () => { this.hoistedContent.length = mark; } };
+                    });
+                    if (hoisting) {
+                        const reference = table ?? markdownEscapeInline(this.chartReference(data, meta?.attachmentName));
+                        return `${anchors}${title ? `**${markdownEscapeInline(title)}** ` : ''}${reference}`;
+                    }
+                    const caption = title ? `**${markdownEscapeInline(title)}**\n\n` : '';
+                    if (table === undefined) return `${anchors}${caption}${markdownEscapeInline(this.chartReference(data, meta?.attachmentName), true)}\n\n`;
+                    return `${anchors}${caption}${table}`;
+                }
                 case 'drawing':
                 case 'header':
                 case 'footer':
@@ -1445,37 +1522,43 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
         const body = new TextBuilder();
         body.append(output);
         for (let i = 0; i < optimizedContent.length; i++) {
-            const node = optimizedContent[i];
+            const listed = optimizedContent[i];
 
             // A top-level footnote/endnote note is an orphan definition (unreferenced `[^id]: ...`
             // the MarkdownParser recovered). Collect it so it's emitted with the other definitions
             // at the document end rather than inline before them.
-            if (isStandingNote(node)) {
-                this.collectedNotes.push(node);
+            if (isStandingNote(listed)) {
+                this.collectedNotes.push(listed);
                 continue;
             }
             let following = i + 1;
             while (following < optimizedContent.length && isStandingNote(optimizedContent[following])) following++;
-            const nextNode = optimizedContent[following];
+            const after = writtenFirst(optimizedContent[following], isChart, this.writesCharts);
+            // (A paragraph or heading holding a chart as its parts, the chart a table between them, at its turn.)
+            const written = await this.atItsTurn(listed, isChart, this.writesCharts);
+            for (let k = 0; k < written.length; k++) {
+                const node = written[k];
+                const nextNode = written[k + 1] ?? after;
 
-            this.atLineStart = body.isEmpty() || body.endsWith('\n');
-            this.previousOutputChar = '';
-            this.nextSibling = undefined;
-            let result = await this.processNodeRecursive(node, processor);
+                this.atLineStart = body.isEmpty() || body.endsWith('\n');
+                this.previousOutputChar = '';
+                this.nextSibling = undefined;
+                let result = await this.processNodeRecursive(node, processor);
 
-            // Ensure lists and other block elements are separated from non-similar content by a blank line
-            if (nextNode) {
-                const isBothLists = node.type === 'list' && nextNode.type === 'list';
-                if (!isBothLists) {
-                    if (!result.endsWith('\n\n')) {
-                        if (result.endsWith('\n')) result += '\n';
-                        else result += '\n\n';
+                // Ensure lists and other block elements are separated from non-similar content by a blank line
+                if (nextNode) {
+                    const isBothLists = node.type === 'list' && nextNode.type === 'list';
+                    if (!isBothLists) {
+                        if (!result.endsWith('\n\n')) {
+                            if (result.endsWith('\n')) result += '\n';
+                            else result += '\n\n';
+                        }
                     }
                 }
-            }
-            result = this.joinQuote(node, nextNode, result);
+                result = this.joinQuote(node, nextNode, result);
 
-            appendBlock(body, node, result);
+                appendBlock(body, node, result);
+            }
         }
         // Anchors no block took (an empty paragraph ending the document) are written at its end.
         if (this.pendingAnchorIds.length > 0) output = `${trimEndChars(body.toString(), '\n')}\n\n${this.renderAnchors({})}\n`;
@@ -1531,6 +1614,43 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
         };
     }
 
+    /** Objects atItsTurn made from a line (its parts: null) or a node (the anchored copy of a chart: that node), which onNode is not asked about as themselves. */
+    private readonly splitParts = new WeakMap<OfficeContentNode, OfficeContentNode | null>();
+    /** onNode's verdict on a line atItsTurn asked about and left whole, handed to processNodeRecursive once. */
+    private readonly linesAsked = new WeakMap<OfficeContentNode, string | false | void>();
+
+    /**
+     * `node`, a node of a container's list, as it is written at its turn (in document order, as every writer asks): a
+     * paragraph (and, where charts are written, a heading) holding a block is asked about first, as any node (see
+     * handleOnNode); left alone, it is written as its parts (see paragraphsSplitAtBlocks), made then from the line as
+     * the hook left it, the parts not asked about; `false` or a string stand for the whole line. Any other node: itself.
+     */
+    private async atItsTurn(node: OfficeContentNode, isBlock: (child: OfficeContentNode) => boolean, chartsInHeadings: boolean): Promise<OfficeContentNode[]> {
+        if (!splitsAtBlocks(node, isBlock, chartsInHeadings)) return [node];
+        const verdict = await this.handleOnNode(node);
+        const written = verdict === undefined ? paragraphsSplitAtBlocks([node], isBlock, chartsInHeadings, (part, origin) => this.splitParts.set(part, origin)) : [node];
+        // (Whole, by a verdict or as the hook changed it: the verdict handed to processNodeRecursive, not asked again.)
+        if (written.length === 1 && written[0] === node) this.linesAsked.set(node, verdict);
+        return written;
+    }
+
+    /**
+     * onNode's verdict on `node`: for an object atItsTurn made, its origin's (the anchored copy of a chart: the chart's;
+     * a part: none, its line was asked); for a line it asked about and left whole, that verdict, once; else the hook's.
+     */
+    protected override async handleOnNode(node: OfficeContentNode): Promise<string | false | void> {
+        if (this.splitParts.has(node)) {
+            const origin = this.splitParts.get(node);
+            return origin ? await super.handleOnNode(origin) : undefined;
+        }
+        if (this.linesAsked.has(node)) {
+            const verdict = this.linesAsked.get(node);
+            this.linesAsked.delete(node);
+            return verdict;
+        }
+        return await super.handleOnNode(node);
+    }
+
     /**
      * Recursively processes nodes and builds output.
      * Overridden to provide AST optimization (merging adjacent text nodes).
@@ -1553,7 +1673,7 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
             return override;
         }
 
-        const walkedByProcessor = node.type === 'table' || node.type === 'sheet' || this.writesItemAsHtml(node);
+        const walkedByProcessor = node.type === 'table' || node.type === 'sheet' || this.writesItemAsHtml(node) || this.writesDefinitionsAsHtml(node);
         if (node.type === 'disclosure') { const summary = summaryOf(node); if (summary) this.disclosureSummaries.add(summary); }
         // Anchors waiting (see pendingAnchorIds) as a disclosure is reached are written before it, not taken by
         // its summary's line inside it, which a plain summary writes as text (they were lost): set aside while
@@ -1565,8 +1685,10 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
         if (!walkedByProcessor && node.children && node.children.length > 0) {
             // Optimization: Merge adjacent text nodes with identical formatting
             let optimizedChildren = this.optimizeNodes(node.type === 'paragraph' || node.type === 'heading' ? withoutBreaksAtBlocks(node.children) : node.children);
-            // (In an HTML cell or item, a container's paragraphs holding blocks as their parts: see paragraphsSplitAtBlocks.)
-            if (this.inHtmlTable > 0 && node.type !== 'paragraph' && node.type !== 'heading') optimizedChildren = paragraphsSplitAtBlocks(optimizedChildren);
+            // A container's paragraphs and headings holding a chart as their parts, the chart a table between them (in an
+            // HTML cell or item, its paragraphs holding any block), each at its turn (see atItsTurn).
+            const splitsLines = node.type !== 'paragraph' && node.type !== 'heading';
+            const isBlock = this.inHtmlTable > 0 ? isBlockInParagraph : isChart;
             this.assignListDepths(optimizedChildren);
             // What a paragraph, list item or definition holds starts a line, where a block marker at
             // its start must be escaped (`- # x` is an item holding a heading); a heading or cell holds
@@ -1582,31 +1704,43 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
             if (definition) this.inDefinition++;
             const children = new TextBuilder();
             for (let i = 0; i < optimizedChildren.length; i++) {
-                const child = optimizedChildren[i];
+                const listed = optimizedChildren[i];
                 // A footnote or endnote standing in a container (a page's endnote no text refers to) is
                 // an unreferenced definition: written with the others at the end, as at the top level.
-                if (isStandingNote(child)) {
-                    this.collectedNotes.push(child);
+                if (isStandingNote(listed)) {
+                    this.collectedNotes.push(listed);
                     continue;
                 }
-                // A paragraph's lines stay lines; every other container puts its content after a
-                // marker on one line (a heading, list item or cell), so nothing in it starts one. A
-                // pipe-table cell holds inline content only, so nothing in it begins a block either.
-                this.atLineStart = startsLines && (children.isEmpty() || children.endsWith('\n'));
-                this.previousOutputChar = children.lastChar();
                 let following = i + 1;
                 while (following < optimizedChildren.length && isStandingNote(optimizedChildren[following])) following++;
-                const next = this.nextSibling = optimizedChildren[following];
-                let childOutput = await this.processNodeRecursive(child, processor);
-                // Blocks in a container (a page, a slide, a cell) stand apart as top-level blocks do:
-                // one blank line where a block ends or begins, except between a list's items. A heading
-                // after a picture would otherwise share its line and read back as text, and a paragraph
-                // on the line after a list item as part of the item. Runs of inline content stay joined.
-                if (next && childOutput && (isBlockNode(child) || isBlockNode(next)) && !(child.type === 'list' && next.type === 'list') && !childOutput.endsWith('\n\n')) {
-                    childOutput += childOutput.endsWith('\n') ? '\n' : '\n\n';
+                const after = splitsLines ? writtenFirst(optimizedChildren[following], isBlock, this.writesCharts) : optimizedChildren[following];
+                const written = splitsLines ? await this.atItsTurn(listed, isBlock, this.writesCharts) : [listed];
+                for (let k = 0; k < written.length; k++) {
+                    const child = written[k];
+                    // (So is one a line held as a block, in an HTML cell or item, standing in the container once the line is split.)
+                    if (isStandingNote(child)) {
+                        this.collectedNotes.push(child);
+                        continue;
+                    }
+                    // A paragraph's lines stay lines; every other container puts its content after a
+                    // marker on one line (a heading, list item or cell), so nothing in it starts one. A
+                    // pipe-table cell holds inline content only, so nothing in it begins a block either.
+                    this.atLineStart = startsLines && (children.isEmpty() || children.endsWith('\n'));
+                    this.previousOutputChar = children.lastChar();
+                    let nextPart = k + 1;
+                    while (nextPart < written.length && isStandingNote(written[nextPart])) nextPart++;
+                    const next = this.nextSibling = written[nextPart] ?? after;
+                    let childOutput = await this.processNodeRecursive(child, processor);
+                    // Blocks in a container (a page, a slide, a cell) stand apart as top-level blocks do:
+                    // one blank line where a block ends or begins, except between a list's items. A heading
+                    // after a picture would otherwise share its line and read back as text, and a paragraph
+                    // on the line after a list item as part of the item. Runs of inline content stay joined.
+                    if (next && childOutput && (isBlockNode(child) || isBlockNode(next)) && !(child.type === 'list' && next.type === 'list') && !childOutput.endsWith('\n\n')) {
+                        childOutput += childOutput.endsWith('\n') ? '\n' : '\n\n';
+                    }
+                    childOutput = this.joinQuote(child, next, childOutput);
+                    appendBlock(children, child, childOutput);
                 }
-                childOutput = this.joinQuote(child, next, childOutput);
-                appendBlock(children, child, childOutput);
             }
             childrenOutput = children.toString();
             if (holdsLine) this.lineDepth--;
@@ -1686,7 +1820,7 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                 const depth = Math.min(clampRepeat((node.metadata as ListMetadata | undefined)?.indentation || 0, 64), previous + 1);
                 this.listDepths.set(node, depth);
                 previous = depth;
-                previousHtml = this.holdsDisclosure(node) || (depth > 0 && previousHtml);
+                previousHtml = this.holdsDisclosure(node) || this.holdsWrittenChart(node) || (depth > 0 && previousHtml);
                 if (previousHtml) this.htmlItems.add(node);
             } else if (!isStandingNote(node)) {
                 previous = -1;
@@ -1796,20 +1930,27 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
         }
 
         // Handle nested tables in pure Markdown by hoisting them out
-        if (this.isInsideTable && !this.resolvedFallbackToHtml.tables) {
-            const wasInside = this.isInsideTable;
-            this.isInsideTable = false; // Reset to allow rendering the hoisted table correctly
-            const hoistedId = this.hoistedContent.length + 1;
-            const tableOutput = await this.renderMarkdownTableInternal(node, processor);
-            this.hoistedContent.push(`**Table ${hoistedId} (Hoisted from cell content):**\n${tableOutput}`);
-            this.isInsideTable = wasInside;
-            return `*(See Table ${hoistedId} below)*`;
-        }
+        if (this.isInsideTable && !this.resolvedFallbackToHtml.tables) return await this.hoistTable(node, processor, 'cell content');
 
         this.isInsideTable = true;
         const result = await this.renderMarkdownTableInternal(node, processor);
         this.isInsideTable = false;
         return result;
+    }
+
+    /**
+     * A table written after the document (hoistedContent), headed `**Table N (Hoisted from <from>):**`, where its
+     * place (a pipe-table cell, one line of Markdown) holds no table and no HTML table is written: its place gets
+     * `*(See Table N below)*`.
+     */
+    private async hoistTable(node: OfficeContentNode, processor: any, from: string): Promise<string> {
+        const wasInside = this.isInsideTable;
+        this.isInsideTable = false; // Reset to allow rendering the hoisted table correctly
+        const hoistedId = this.hoistedContent.length + 1;
+        const tableOutput = await this.renderMarkdownTableInternal(node, processor);
+        this.isInsideTable = wasInside;
+        this.hoistedContent.push(`**Table ${hoistedId} (Hoisted from ${from}):**\n${tableOutput}`);
+        return `*(See Table ${hoistedId} below)*`;
     }
 
     private collectNotesFrom(node: OfficeContentNode) {
@@ -1948,6 +2089,59 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
         return `\n${tableOutput}\n`;
     }
 
+    /** Whether this output writes charts (`includeCharts` is not false). */
+    private get writesCharts(): boolean {
+        return this.config.includeCharts !== false;
+    }
+
+    /** Whether this output writes a table HTML would hold as HTML (the `html` table dialect, or `fallbackToHtml.tables`). */
+    private get writesHtmlTables(): boolean {
+        return this.resolvedDialect.tables === 'html' || this.resolvedFallbackToHtml.tables;
+    }
+
+    /** Whether a chart stands among a node's descendants (not its notes), each node asked once. */
+    private holdsChart(node: OfficeContentNode, depth = 0): boolean {
+        let known = this.chartHolders.get(node);
+        if (known === undefined) {
+            known = false;
+            for (const child of node.children ?? []) {
+                if (child.type === 'chart' || (depth < MAX_DISCLOSURE_SEARCH_DEPTH && this.holdsChart(child, depth + 1))) { known = true; break; }
+            }
+            this.chartHolders.set(node, known);
+        }
+        return known;
+    }
+
+    /**
+     * Whether a node holds a chart this output writes as an HTML table: a list item or definition list holding one is
+     * written as HTML, the chart's table between the text around it (one line of Markdown holds no table).
+     */
+    private holdsWrittenChart(node: OfficeContentNode): boolean {
+        return this.writesHtmlTables && this.writesCharts && this.holdsChart(node);
+    }
+
+    /** Whether a definition list is written as HTML (see definitionListAsHtml): one holding a chart, where Markdown blocks go. */
+    private writesDefinitionsAsHtml(node: OfficeContentNode): boolean {
+        return node.type === 'definitionList' && !this.inOneLine && this.inHtmlTable === 0 && this.holdsWrittenChart(node);
+    }
+
+    /**
+     * A definition list holding a chart, as an HTML block of its own (`<dl>`, `<dt>`, `<dd>`, as an HTML table cell
+     * writes one), the chart's table between the text before and after it. Written as its Markdown lines, the
+     * table was joined into the term's or description's line.
+     */
+    private async definitionListAsHtml(node: OfficeContentNode): Promise<string> {
+        // (Its terms and descriptions written as an HTML cell's; the list itself, already given to onNode, wrapped here.)
+        let content = '';
+        this.inHtmlTable++;
+        try {
+            for (const child of node.children ?? []) content += await this.processNodeRecursive(child, (n, co) => this.htmlCellNode(n, co));
+        } finally {
+            this.inHtmlTable--;
+        }
+        return `\n${closedUpLines(await this.htmlCellNode(node, content))}\n\n`;
+    }
+
     /** Whether a disclosure stands among a node's descendants (not its notes), each node asked once. */
     private holdsDisclosure(node: OfficeContentNode, depth = 0): boolean {
         let known = this.disclosureHolders.get(node);
@@ -1962,13 +2156,13 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
     }
 
     /**
-     * Whether a list item is written as an HTML list (see listItemAsHtml): one holding a disclosure, a block
-     * a Markdown item's one line cannot hold, and a nested item after one (a Markdown item cannot nest
+     * Whether a list item is written as an HTML list (see listItemAsHtml): one holding a disclosure or a chart
+     * written as a table (see holdsWrittenChart), blocks a Markdown item's one line cannot hold, and a nested item after one (a Markdown item cannot nest
      * under HTML), where Markdown blocks go (not in a pipe-table cell, a definition or another item's line;
      * an HTML cell writes its items as HTML already).
      */
     private writesItemAsHtml(node: OfficeContentNode): boolean {
-        return node.type === 'list' && !this.inOneLine && this.inHtmlTable === 0 && (this.htmlItems.has(node) || this.holdsDisclosure(node));
+        return node.type === 'list' && !this.inOneLine && this.inHtmlTable === 0 && (this.htmlItems.has(node) || this.holdsDisclosure(node) || this.holdsWrittenChart(node));
     }
 
     /**
@@ -1983,8 +2177,8 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
         let content = '';
         this.inHtmlTable++;
         try {
-            for (const child of paragraphsSplitAtBlocks(this.optimizeNodes(node.children ?? []))) {
-                content += await this.processNodeRecursive(child, (n, co) => this.htmlCellNode(n, co));
+            for (const listed of this.optimizeNodes(node.children ?? [])) {
+                for (const child of await this.atItsTurn(listed, isBlockInParagraph, this.writesCharts)) content += await this.processNodeRecursive(child, (n, co) => this.htmlCellNode(n, co));
             }
         } finally {
             this.inHtmlTable--;
@@ -2004,7 +2198,8 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
     private hasNestedTable(node: OfficeContentNode): boolean {
         if (!node.children) return false;
         for (const child of node.children) {
-            if (child.type === 'table') return true;
+            // (A chart is written as a table of its own: see the chart case.)
+            if (child.type === 'table' || (child.type === 'chart' && this.config.includeCharts !== false)) return true;
             if (this.hasNestedTable(child)) return true;
         }
         return false;
@@ -2076,7 +2271,7 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
     /**
      * A captioned picture's ids as anchors, written before its <img> (in its <figure>, where they cannot
      * join a line of text before it): on the <img> an id was lost where the picture is inlined (the HTML
-     * reader drops a data: picture's id, ledger). They read back as the picture's.
+     * reader drops a data: picture's id). They read back as the picture's.
      */
     private figureAnchors(meta: ImageMetadata | undefined): string {
         if (!this.resolvedFallbackToHtml.anchors || this.config.ignoreInternalLinks) return '';
@@ -2211,7 +2406,20 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
             case 'comment':
                 if (isSourceComment(n)) return `<!--${closedUpLines(sanitizeCommentText(n.text || ''))}-->`;
                 return !n.children?.length && n.text ? esc(n.text) : co;
-            case 'chart':
+            case 'chart': {
+                // In an HTML cell, its data's table in HTML, under its title (see the chart case above).
+                if (this.config.includeCharts === false) return '';
+                const meta = n.metadata as { attachmentName?: string } | undefined;
+                const data = this.getAttachment(meta?.attachmentName)?.chartData;
+                // Without its data: its text, else its reference, written again within the chart-copy budget (see
+                // chartLineWritten).
+                if (!data) return this.chartLineWritten(n, text => esc(text));
+                const cell = (text: string): OfficeContentNode => ({ type: 'cell', children: [{ type: 'text', text } as OfficeContentNode] } as OfficeContentNode);
+                const title = this.chartTitle(data).trim();
+                const caption = title ? `<p><b>${esc(title)}</b></p>` : '';
+                const table = await this.chartTableWritten(data, cell, async t => this.chartWritten(await this.renderTableAsHtml(t)));
+                return caption + (table ?? esc(this.chartReference(data, meta?.attachmentName)));
+            }
             case 'drawing':
             case 'slide':
             case 'note':
@@ -2318,8 +2526,8 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
                 // Cell content as HTML, which is what the cell is (a Markdown renderer shows an HTML
                 // block as it is, and the parser reads it with the HTML parser): the markup
                 // HtmlGenerator writes for each inline construct, so nothing in a cell is dropped.
-                for (const child of paragraphsSplitAtBlocks(this.optimizeNodes(node.children))) {
-                    content += await this.processNodeRecursive(child, (n, co) => this.htmlCellNode(n, co));
+                for (const listed of this.optimizeNodes(node.children)) {
+                    for (const child of await this.atItsTurn(listed, isBlockInParagraph, false)) content += await this.processNodeRecursive(child, (n, co) => this.htmlCellNode(n, co));
                 }
                 // (Whatever made it, the blocks of a cell standing apart or an onNode string: nothing in it can end the block.)
                 content = closedUpLines(content);

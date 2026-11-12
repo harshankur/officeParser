@@ -15,6 +15,7 @@ import { isBrowser } from './envUtils.js';
 import { buildOfficeError, getAbortError, logWarning } from './errorUtils.js';
 import { median } from './numberUtils.js';
 import { appendAll } from './nodeListUtils.js';
+import { pictureKindOf } from './imageUtils.js';
 
 /**
  * Internal interface for tracking jobs in the scheduler queue.
@@ -701,10 +702,18 @@ const parseCancelled = (config: FullOfficeParserConfig): boolean =>
  * @param image - The image bytes (or a path)
  * @param config - The parse's resolved configuration (its `ocrConfig` and signals)
  * @param name - The attachment's name, for the warning
+ * A metafile (EMF or WMF, by its bytes) is not recognized: it holds drawing records, not pixels, so
+ * Tesseract cannot read it. This returns `undefined` for one without a warning, as for any picture
+ * that is not OCR'd.
+ *
  * @param mimeType - Media type of `image`; sniffed from its signature otherwise
  */
 export const ocrDuringParse = async (image: Buffer | string, config: FullOfficeParserConfig, name: string, mimeType?: string): Promise<string | undefined> => {
     if (parseCancelled(config)) throw getAbortError();
+    if (typeof image !== 'string') {
+        const kind = pictureKindOf(image);
+        if (kind === 'EMF' || kind === 'WMF') return undefined;
+    }
     try {
         const text = (await performOcr(image, { ...config.ocrConfig }, mimeType)).trim();
         if (parseCancelled(config)) throw getAbortError();

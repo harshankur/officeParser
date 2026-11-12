@@ -9,8 +9,12 @@ import { withinTime } from './helpers/timing';
 import { digestOf, docxTemplateCases } from './helpers/docxTemplateCases';
 import { testUnicodeChunks } from './generator/unicodeChunks';
 import { testBrotliGuard } from './security/brotliGuard';
+import { testChartContainersMarkdownRtf, testChartTableCopies, testChartTextRepeats, testNativePdfChartLines, testNativePdfChartRoom, testChartScriptBubbles, testChartTextLines, testChartTextRepeatsProperty, testChartDefinitionListOnNode, testChartCopyBound, testChartCopyBoundProperty, testChartTextWeights, testChartLineCopies, testNativePdfChartTextCopies, testChartLineOnNode, testChartLineOnNodeOrder, testChartLookupLinear, testChartsInEpub, testEpubChartCopies, testChartsInCsvReported, testChartsWithoutData, randomOf, writtenText, chartScriptConfigs } from './parser/chartWriters';
+import { testUndecodablePictures, testNativePdfPictureSignatures, testRtfPictureSignatures, testTiffPicturesRefused, testMetafileBitmaps, testNativePdfLinePictures, testNativePdfEquationsReported, testOdfChartBlankPoints } from './parser/picturesAndLines';
+import { testMetafileTyping, testMetafileWriters, testRtfPictures, testRtfPictureWriters, testRtfTrackedChanges, testRtfEquations, testRtfEquationWriters, testRtfEmbeddedObjects, testWordPlaceholderWriters, testWordPlaceholdersLinear, testWordEmbeddedObjects } from './parser/wordRtfContent';
 import { testDisclosuresAndKeyboard, testFigureCaptions, testSheetsAsTables, testNoteMarks, testQuoteParagraphs, testRtfListTypesPerLevel, testXhtmlReadAsHtml, testNestedFiguresReadOnce, testDisclosureCarriesNoText, testDoctypeAndDeclarations, testQuoteIdsAcrossParts, testMarkdownDisclosureBodies, testOdtNoteMarksFromConfiguration, testMarkdownDisclosureSubDocuments, testMarkdownWithoutDisclosuresUnchanged, testOdtNoteMarksAsLibreOffice, testXhtmlSniffedPastFirstRead, testMarkdownDisclosurePreBlock, testMarkdownDisclosureTagAttributes, testMarkdownDisclosureSummaries, testMarkdownDisclosureContainerCloses, testMarkdownDisclosureFlattenedPastDepth, testMarkdownDisclosureShapesLinear, testMarkdownDisclosureNamesRenamed, testMarkdownDisclosureRound9Findings, testMarkdownDisclosureInItemsAndCells, testMarkdownDisclosureRound10Findings, testDisclosureSummaryShapesLinear, testFigureEndsItsLine, testFigureLinesGenerated, testFigureCaptionInEveryImageMode, testFigureAloneInFootnote, testFigureInHtmlCellHeading, testFigureInAdmonitionLine, testHtmlFigureCaptionInEveryImageMode, testPictureMatrixGenerated, testPictureMatrixCaptionFreeUnchanged, testHtmlCaptionedPictureOnItsOwnLine, testDisclosureHeadingAnchorSettles, testMarkdownItemLineSeparators, testHtmlPictureMatrixGenerated, testDisclosureHeadingsGenerated, testLineSeparatorsGenerated, testDisclosureAnchorPositionsKept, testHtmlFigureCaptionInAlignedBlock, testHtmlSourceCommentBesideCaptionedPicture, testAnchorPositionsGenerated, testHtmlPictureCommentMatrixGenerated, testDisclosureSummaryAnchorsLinear, testMarkdownManyAnchorsBeforeDisclosure, testNestedParagraphCaptionsMany } from './generator/documentShapes';
 import { OfficeGenerator } from '../src/OfficeGenerator';
+import { PdfGenerator } from '../src/generators/PdfGenerator';
 import { bulletCharacter, formatListNumber, readMarkerLabels } from '../src/utils/listMarkers';
 import { decodeBmp, decodeGif } from '../src/utils/rasterUtils';
 import { excelShownText } from '../src/utils/excelFormat';
@@ -26,6 +30,7 @@ import { markDroppedHyphen } from '../src/utils/lineJoins';
 import { runHyphenBreakGenerator } from './helpers/hyphenBreakGenerator';
 import { checkMarkdownCellPieces } from './helpers/markdownCellPieces';
 import { OfficeConverter } from '../src/OfficeConverter';
+import { isWorkbookChartsNotRead } from '../src/parsers/ExcelParser';
 import { zipSync, strToU8, unzipSync, unzlibSync, strFromU8 } from 'fflate';
 import { PDFDict, PDFDocument, PDFHexString, PDFName, PDFOperator, PDFRawStream, StandardFonts, TextAlignment, degrees, rgb } from 'pdf-lib';
 import * as assert from 'assert';
@@ -35,6 +40,8 @@ import type { ImageMetadata, OfficeContentNode, OfficeParserAST, ShapeMetadata, 
 import { OfficeWarningType } from '../src/types';
 import { parseXmlString } from '../src/utils/xmlUtils';
 import { mathmlToLatex, ommlToLatex } from '../src/utils/mathUtils';
+import { withWellTypedValues } from '../src/utils/valueTypeUtils';
+import { chartPositions, extractChartData } from '../src/utils/chartUtils';
 import { decodeWindows1252, textDecoder } from '../src/utils/encodingUtils';
 import { ocrTestHooks, performOcr, terminateOcr } from '../src/utils/ocrUtils';
 import { imageFromPdf, imageToTextPdf, newDecodeBudget } from '../src/utils/textPdf';
@@ -1248,6 +1255,84 @@ async function testWordRunCharacters(): Promise<void> {
 }
 
 /**
+ * A chart in a Word document is a drawing naming its chart part (`c:chart`'s `r:id`): inline, floating,
+ * or in the branch of `mc:AlternateContent` the reader reads. Each is a chart node where it stands, and
+ * with `extractAttachments` a chart attachment holding its data.
+ */
+async function testWordCharts(): Promise<void> {
+    console.log('\n=== Running Word Chart Tests ===');
+
+    const strCache = (values: string[]) => `<c:strRef><c:strCache><c:ptCount val="${values.length}"/>${values.map((v, i) => `<c:pt idx="${i}"><c:v>${v}</c:v></c:pt>`).join('')}</c:strCache></c:strRef>`;
+    const numCache = (values: string[]) => `<c:numRef><c:numCache><c:formatCode>General</c:formatCode><c:ptCount val="${values.length}"/>${values.map((v, i) => `<c:pt idx="${i}"><c:v>${v}</c:v></c:pt>`).join('')}</c:numCache></c:numRef>`;
+    const series = (name: string, labels: string[], values: string[]) => `<c:ser><c:tx>${strCache([name])}</c:tx><c:cat>${strCache(labels)}</c:cat><c:val>${numCache(values)}</c:val></c:ser>`;
+    const chartPart = (title: string, plot: string) => `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><c:chart>${title}<c:plotArea>${plot}</c:plotArea></c:chart></c:chartSpace>`;
+    const categories = ['Category 1', 'Category 2', 'Category 3', 'Category 4'];
+    const quarters = ['1st Qtr', '2nd Qtr', '3rd Qtr', '4th Qtr'];
+    const barChart = chartPart('<c:autoTitleDeleted val="1"/>', `<c:barChart><c:barDir val="col"/>${series('Series 1', categories, ['4.3', '2.5', '3.5', '4.5'])}${series('Series 2', categories, ['2.4', '4.4', '1.8', '2.8'])}${series('Series 3', categories, ['2', '2', '3', '5'])}</c:barChart>`);
+    const pieChart = chartPart('<c:title/>', `<c:pieChart>${series('Sales', quarters, ['8.2', '3.2', '1.4', '1.2'])}</c:pieChart>`);
+
+    const graphic = (rId: string) => `<a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart r:id="${rId}"/></a:graphicData></a:graphic>`;
+    const inline = (rId: string, id: number) => `<w:drawing><wp:inline><wp:extent cx="5486400" cy="3200400"/><wp:docPr id="${id}" name="Chart ${id}"/>${graphic(rId)}</wp:inline></w:drawing>`;
+    const anchor = (rId: string, id: number) => `<w:drawing><wp:anchor behindDoc="0" locked="0" layoutInCell="1" allowOverlap="1" relativeHeight="1" simplePos="0" distT="0" distB="0" distL="0" distR="0"><wp:simplePos x="0" y="0"/><wp:positionH relativeFrom="column"><wp:posOffset>0</wp:posOffset></wp:positionH><wp:positionV relativeFrom="paragraph"><wp:posOffset>0</wp:posOffset></wp:positionV><wp:extent cx="5486400" cy="3200400"/><wp:wrapSquare wrapText="bothSides"/><wp:docPr id="${id}" name="Chart ${id}"/>${graphic(rId)}</wp:anchor></w:drawing>`;
+    const documentXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape" xmlns:v="urn:schemas-microsoft-com:vml">
+  <w:body>
+    <w:p><w:r><w:t>Before</w:t></w:r></w:p>
+    <w:p><w:r>${inline('rId4', 1)}</w:r></w:p>
+    <w:p><w:r><w:t>Between</w:t></w:r></w:p>
+    <w:p><w:r><mc:AlternateContent><mc:Choice Requires="wps">${anchor('rId5', 2)}</mc:Choice><mc:Fallback><w:pict><v:rect style="width:432pt;height:252pt"/></w:pict></mc:Fallback></mc:AlternateContent></w:r></w:p>
+    <w:p><w:r><w:t>After</w:t></w:r></w:p>
+  </w:body>
+</w:document>`;
+    const relationship = (id: string, target: string) => `<Relationship Id="${id}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart" Target="${target}"/>`;
+    const zip = zipSync({
+        '[Content_Types].xml': strToU8(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+  <Override PartName="/word/charts/chart1.xml" ContentType="application/vnd.openxmlformats-officedocument.drawingml.chart+xml"/>
+  <Override PartName="/word/charts/chart2.xml" ContentType="application/vnd.openxmlformats-officedocument.drawingml.chart+xml"/>
+</Types>`),
+        '_rels/.rels': strToU8(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
+</Relationships>`),
+        'word/_rels/document.xml.rels': strToU8(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${relationship('rId5', 'charts/chart2.xml')}${relationship('rId4', 'charts/chart1.xml')}</Relationships>`),
+        'word/document.xml': strToU8(documentXml),
+        'word/charts/chart1.xml': strToU8(barChart),
+        'word/charts/chart2.xml': strToU8(pieChart),
+    });
+    const charts = (ast: OfficeParserAST) => collectAllNodes(ast).filter(n => n.type === 'chart');
+
+    // Without attachments
+    const plain = await OfficeParser.parseOffice(Buffer.from(zip), { fileType: 'docx' });
+    assert.deepStrictEqual(charts(plain).map(n => (n.metadata as any)?.attachmentName), ['chart1.xml', 'chart2.xml'], 'Word: an inline chart and a floating one in alternate content are chart nodes, once each, in document order');
+    assert.strictEqual(plain.attachments.length, 0, 'Word: without extractAttachments a chart is no attachment');
+
+    // With attachments
+    const ast = await OfficeParser.parseOffice(Buffer.from(zip), { fileType: 'docx', extractAttachments: true });
+    const chartData = (name: string) => {
+        const data = ast.attachments.find(a => a.type === 'chart' && a.name === name)?.chartData;
+        return data && { title: data.title, labels: data.labels, series: data.dataSets.map(d => [d.name, d.values]) };
+    };
+    assert.deepStrictEqual(chartData('chart1.xml'), {
+        title: undefined,
+        labels: categories,
+        series: [['Series 1', ['4.3', '2.5', '3.5', '4.5']], ['Series 2', ['2.4', '4.4', '1.8', '2.8']], ['Series 3', ['2', '2', '3', '5']]],
+    }, 'Word: a bar chart\'s attachment holds its series and categories');
+    assert.deepStrictEqual(chartData('chart2.xml'), { title: 'Sales', labels: quarters, series: [['Sales', ['8.2', '3.2', '1.4', '1.2']]] }, 'Word: a pie chart\'s attachment holds its title, series and categories');
+    assert.ok(charts(ast).every(n => n.text), 'Word: a chart node holds its chart\'s text');
+    const text = (await ast.to('text')).value as string;
+    assert.ok(['Before', 'Category 1', 'Series 1', '4.3', 'Between', '1st Qtr', '8.2', 'After'].every(t => text.includes(t)), `Word: the text holds the charts' data where they stand; got ${JSON.stringify(text)}`);
+    assert.ok(text.indexOf('4.3') < text.indexOf('Between') && text.indexOf('8.2') < text.indexOf('After'), 'Word: each chart\'s text is where the chart stands');
+
+    console.log('  Word charts: All assertions passed ✓');
+}
+
+/**
  * A content control that still shows its placeholder holds Word's prompt ("Click or tap here to enter
  * text.") until the author fills it in. The prompt is the glossary building block the control names; it
  * is kept in the AST, marked, and left out of generated output. A control whose flag is set over other
@@ -1329,84 +1414,6 @@ async function testWordPlaceholders(): Promise<void> {
     assert.ok(plain.includes(`Name: ${PROMPT} (required)`), 'Word: without a glossary to compare with, a control is read as before');
 
     console.log('  Word placeholders: All assertions passed ✓');
-}
-
-/**
- * A chart in a Word document is a drawing naming its chart part (`c:chart`'s `r:id`): inline, floating,
- * or in the branch of `mc:AlternateContent` the reader reads. Each is a chart node where it stands, and
- * with `extractAttachments` a chart attachment holding its data.
- */
-async function testWordCharts(): Promise<void> {
-    console.log('\n=== Running Word Chart Tests ===');
-
-    const strCache = (values: string[]) => `<c:strRef><c:strCache><c:ptCount val="${values.length}"/>${values.map((v, i) => `<c:pt idx="${i}"><c:v>${v}</c:v></c:pt>`).join('')}</c:strCache></c:strRef>`;
-    const numCache = (values: string[]) => `<c:numRef><c:numCache><c:formatCode>General</c:formatCode><c:ptCount val="${values.length}"/>${values.map((v, i) => `<c:pt idx="${i}"><c:v>${v}</c:v></c:pt>`).join('')}</c:numCache></c:numRef>`;
-    const series = (name: string, labels: string[], values: string[]) => `<c:ser><c:tx>${strCache([name])}</c:tx><c:cat>${strCache(labels)}</c:cat><c:val>${numCache(values)}</c:val></c:ser>`;
-    const chartPart = (title: string, plot: string) => `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><c:chart>${title}<c:plotArea>${plot}</c:plotArea></c:chart></c:chartSpace>`;
-    const categories = ['Category 1', 'Category 2', 'Category 3', 'Category 4'];
-    const quarters = ['1st Qtr', '2nd Qtr', '3rd Qtr', '4th Qtr'];
-    const barChart = chartPart('<c:autoTitleDeleted val="1"/>', `<c:barChart><c:barDir val="col"/>${series('Series 1', categories, ['4.3', '2.5', '3.5', '4.5'])}${series('Series 2', categories, ['2.4', '4.4', '1.8', '2.8'])}${series('Series 3', categories, ['2', '2', '3', '5'])}</c:barChart>`);
-    const pieChart = chartPart('<c:title/>', `<c:pieChart>${series('Sales', quarters, ['8.2', '3.2', '1.4', '1.2'])}</c:pieChart>`);
-
-    const graphic = (rId: string) => `<a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart r:id="${rId}"/></a:graphicData></a:graphic>`;
-    const inline = (rId: string, id: number) => `<w:drawing><wp:inline><wp:extent cx="5486400" cy="3200400"/><wp:docPr id="${id}" name="Chart ${id}"/>${graphic(rId)}</wp:inline></w:drawing>`;
-    const anchor = (rId: string, id: number) => `<w:drawing><wp:anchor behindDoc="0" locked="0" layoutInCell="1" allowOverlap="1" relativeHeight="1" simplePos="0" distT="0" distB="0" distL="0" distR="0"><wp:simplePos x="0" y="0"/><wp:positionH relativeFrom="column"><wp:posOffset>0</wp:posOffset></wp:positionH><wp:positionV relativeFrom="paragraph"><wp:posOffset>0</wp:posOffset></wp:positionV><wp:extent cx="5486400" cy="3200400"/><wp:wrapSquare wrapText="bothSides"/><wp:docPr id="${id}" name="Chart ${id}"/>${graphic(rId)}</wp:anchor></w:drawing>`;
-    const documentXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape" xmlns:v="urn:schemas-microsoft-com:vml">
-  <w:body>
-    <w:p><w:r><w:t>Before</w:t></w:r></w:p>
-    <w:p><w:r>${inline('rId4', 1)}</w:r></w:p>
-    <w:p><w:r><w:t>Between</w:t></w:r></w:p>
-    <w:p><w:r><mc:AlternateContent><mc:Choice Requires="wps">${anchor('rId5', 2)}</mc:Choice><mc:Fallback><w:pict><v:rect style="width:432pt;height:252pt"/></w:pict></mc:Fallback></mc:AlternateContent></w:r></w:p>
-    <w:p><w:r><w:t>After</w:t></w:r></w:p>
-  </w:body>
-</w:document>`;
-    const relationship = (id: string, target: string) => `<Relationship Id="${id}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart" Target="${target}"/>`;
-    const zip = zipSync({
-        '[Content_Types].xml': strToU8(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
-  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
-  <Default Extension="xml" ContentType="application/xml"/>
-  <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
-  <Override PartName="/word/charts/chart1.xml" ContentType="application/vnd.openxmlformats-officedocument.drawingml.chart+xml"/>
-  <Override PartName="/word/charts/chart2.xml" ContentType="application/vnd.openxmlformats-officedocument.drawingml.chart+xml"/>
-</Types>`),
-        '_rels/.rels': strToU8(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
-</Relationships>`),
-        'word/_rels/document.xml.rels': strToU8(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${relationship('rId5', 'charts/chart2.xml')}${relationship('rId4', 'charts/chart1.xml')}</Relationships>`),
-        'word/document.xml': strToU8(documentXml),
-        'word/charts/chart1.xml': strToU8(barChart),
-        'word/charts/chart2.xml': strToU8(pieChart),
-    });
-    const charts = (ast: OfficeParserAST) => collectAllNodes(ast).filter(n => n.type === 'chart');
-
-    // Without attachments
-    const plain = await OfficeParser.parseOffice(Buffer.from(zip), { fileType: 'docx' });
-    assert.deepStrictEqual(charts(plain).map(n => (n.metadata as any)?.attachmentName), ['chart1.xml', 'chart2.xml'], 'Word: an inline chart and a floating one in alternate content are chart nodes, once each, in document order');
-    assert.strictEqual(plain.attachments.length, 0, 'Word: without extractAttachments a chart is no attachment');
-
-    // With attachments
-    const ast = await OfficeParser.parseOffice(Buffer.from(zip), { fileType: 'docx', extractAttachments: true });
-    const chartData = (name: string) => {
-        const data = ast.attachments.find(a => a.type === 'chart' && a.name === name)?.chartData;
-        return data && { title: data.title, labels: data.labels, series: data.dataSets.map(d => [d.name, d.values]) };
-    };
-    assert.deepStrictEqual(chartData('chart1.xml'), {
-        title: undefined,
-        labels: categories,
-        series: [['Series 1', ['4.3', '2.5', '3.5', '4.5']], ['Series 2', ['2.4', '4.4', '1.8', '2.8']], ['Series 3', ['2', '2', '3', '5']]],
-    }, 'Word: a bar chart\'s attachment holds its series and categories');
-    assert.deepStrictEqual(chartData('chart2.xml'), { title: 'Sales', labels: quarters, series: [['Sales', ['8.2', '3.2', '1.4', '1.2']]] }, 'Word: a pie chart\'s attachment holds its title, series and categories');
-    assert.ok(charts(ast).every(n => n.text), 'Word: a chart node holds its chart\'s text');
-    const text = (await ast.to('text')).value as string;
-    assert.ok(['Before', 'Category 1', 'Series 1', '4.3', 'Between', '1st Qtr', '8.2', 'After'].every(t => text.includes(t)), `Word: the text holds the charts' data where they stand; got ${JSON.stringify(text)}`);
-    assert.ok(text.indexOf('4.3') < text.indexOf('Between') && text.indexOf('8.2') < text.indexOf('After'), 'Word: each chart\'s text is where the chart stands');
-
-    console.log('  Word charts: All assertions passed ✓');
 }
 
 /**
@@ -2168,7 +2175,7 @@ async function testOdfComments(): Promise<void> {
     assert.strictEqual(bodied[0].children![0], bodied[1].children![0], 'ODT embedded repeat: repeated cells share the child node by reference (no per-cell duplication)');
 }
 
-/** PowerPoint comments, from the OOXML review before 8.1.0. */
+/** PowerPoint comments. */
 async function testPptxComments(): Promise<void> {
     const { relsOf, rel, parse, texts } = ooxmlHelpers();
     // PowerPoint comments: a classic comment's plain text, a modern comment's paragraphs apart, and
@@ -2605,7 +2612,7 @@ async function testDocxGeneration(): Promise<void> {
 }
 
 /**
- * DOCX notes and bookmarks, from the OOXML review before 8.1.0: a note referred to again is one note and
+ * DOCX notes and bookmarks: a note referred to again is one note and
  * NOTEREF fields (read back as the same note), and every block a link can go to has a bookmark.
  */
 async function testDocxNotesAndBookmarks(): Promise<void> {
@@ -3688,7 +3695,7 @@ code here
     assert.deepStrictEqual(context.ast.content.map(n => [n.type, n.text, (n.metadata as any)?.listType]), [['heading', 'Introduction', undefined], ['paragraph', 'Hello world.', undefined], ['list', 'One', 'ordered'], ['list', 'Two', 'ordered'], ['code', 'code here', undefined]], 'TEX parse: ConTeXt sections, itemize and typing');
     assert.ok(context.warnings.some(w => JSON.stringify(w).includes('ConTeXt')), 'TEX parse: a ConTeXt document is reported as not LaTeX');
 
-    // Review follow-ups: a package's own conditional keeps its \else and \fi; nested theorems keep their
+    // A package's own conditional keeps its \else and \fi; nested theorems keep their
     // heads and numbers; a control word ends with its macro body; verbatim arguments print as written.
     assert.deepStrictEqual((await texOf(String.raw`\ifPDFTeX \ifdraft X \else Y \fi Z\fi W`)).paras, ['X Y ZW'], 'TEX parse: an unknown \\ifdraft inside a taken branch reads both of its own branches');
     assert.deepStrictEqual((await texOf(String.raw`\ifXeTeX \ifdraft A\fi B \else C \fi D`)).paras, ['C D'], 'TEX parse: an unknown \\ifdraft inside a skipped branch is skipped with it');
@@ -6334,15 +6341,16 @@ async function testChartPointPositions(): Promise<void> {
             `${fileType}: each entry keeps its point index past blank points`);
     }
 
-    // These lists get no point indexes: `c:v` outside a `c:pt`, a point with no index, two points with one
-    // index, and a cache of several levels, whose indexes start again at 0 in each level.
+    // These lists get no point indexes: `c:v` outside a `c:pt`, a point with no index, and two points with
+    // one index. A cache of several levels, whose indexes start again at 0 in each level, is read a level at a time.
     const unpositioned = await chartOf(pptx(chartXml('<c:v>Jan</c:v><c:v>Feb</c:v>', '<c:v>1</c:v><c:v>2</c:v>')), 'pptx');
     assert.deepStrictEqual([unpositioned.labels, unpositioned.labelIndexes, unpositioned.dataSets[0].values, unpositioned.dataSets[0].valueIndexes], [['Jan', 'Feb'], undefined, ['1', '2'], undefined], 'c:v outside c:pt gives no point indexes');
     const clashing = await chartOf(pptx(chartXml('<c:strCache><c:pt idx="0"><c:v>a</c:v></c:pt><c:pt idx="0"><c:v>b</c:v></c:pt></c:strCache>', '<c:numCache><c:pt><c:v>1</c:v></c:pt><c:pt idx="1"><c:v>2</c:v></c:pt></c:numCache>')), 'pptx');
     assert.deepStrictEqual([clashing.labels, clashing.labelIndexes, clashing.dataSets[0].values, clashing.dataSets[0].valueIndexes], [['a', 'b'], undefined, ['1', '2'], undefined], 'a repeated or missing idx gives its list no point indexes');
     const levels = `<c:multiLvlStrRef><c:multiLvlStrCache><c:ptCount val="4"/><c:lvl>${pts(['Q1', 'Q2', 'Q1', 'Q2'])}</c:lvl><c:lvl>${pts(['2025', undefined, '2026'])}</c:lvl></c:multiLvlStrCache></c:multiLvlStrRef>`;
     const multiLevel = await chartOf(pptx(chartXml(levels, numCache(['1', '2', '3', '4']))), 'pptx');
-    assert.deepStrictEqual([multiLevel.labels, multiLevel.labelIndexes, multiLevel.dataSets[0].valueIndexes], [['Q1', 'Q2', 'Q1', 'Q2', '2025', '2026'], undefined, [0, 1, 2, 3]], 'a multi-level cache keeps its labels and gives them no point indexes');
+    // (Its levels are read apart, each with its own indexes: see testChartLabelLevels.)
+    assert.deepStrictEqual([multiLevel.labels, multiLevel.labelIndexes, multiLevel.labelLevels?.[1], multiLevel.dataSets[0].valueIndexes], [['Q1', 'Q2', 'Q1', 'Q2'], [0, 1, 2, 3], { labels: ['2025', '2026'], labelIndexes: [0, 2] }, [0, 1, 2, 3]], 'a multi-level cache keeps its innermost level as its labels, each level with its point indexes');
 
     const gappedChart = await chartOf(pptx(gapped), 'pptx');
     const astOf = (chartData: unknown) => ({ type: 'docx', metadata: {}, content: [{ type: 'chart', metadata: { attachmentName: 'c' } }], attachments: [{ type: 'chart', name: 'c', mimeType: 'application/xml', extension: 'xml', data: '', chartData }] }) as any;
@@ -6540,6 +6548,25 @@ async function testExcelChartSheetKeepsWorksheetIdentity(): Promise<void> {
 }
 
 /**
+ * A workbook with a stray copy of its sheet part and of its drawing's relationships part, stored before the real ones
+ * (the stray drawing relationships part, `backup/xl/drawings/_rels/drawing1.xml.rels`, names another chart, chart2.xml,
+ * under the real one's id); the workbook's relationships part only when `listed`.
+ */
+const strayPartsWorkbook = (listed: boolean): Buffer => sheetParts.zip({
+    '[Content_Types].xml': sheetParts.types,
+    'xl/workbook.xml': sheetParts.workbook([['Data', 'rId1']]),
+    ...(listed ? { 'xl/_rels/workbook.xml.rels': sheetParts.rels([['rId1', 'worksheet', 'worksheets/sheet1.xml']]) } : {}),
+    'backup/xl/worksheets/sheet1.xml': sheetParts.worksheet(['stray'], '<drawing r:id="rId1"/>'),
+    'xl/worksheets/sheet1.xml': sheetParts.worksheet(['data'], '<drawing r:id="rId1"/>'),
+    'xl/worksheets/_rels/sheet1.xml.rels': sheetParts.rels([['rId1', 'drawing', '../drawings/drawing1.xml']]),
+    'xl/drawings/drawing1.xml': sheetParts.drawing(sheetParts.frame('rId1')),
+    'xl/drawings/_rels/drawing1.xml.rels': sheetParts.rels([['rId1', 'chart', '../charts/chart1.xml']]),
+    'backup/xl/drawings/_rels/drawing1.xml.rels': sheetParts.rels([['rId1', 'chart', '../charts/chart2.xml']]),
+    'xl/charts/chart1.xml': sheetParts.chart('Real', [7, 8]),
+    'xl/charts/chart2.xml': sheetParts.chart('Stray', [9, 10]),
+});
+
+/**
  * A worksheet's and a drawing's relationships are followed to the parts they name, resolved from the
  * part's own folder, rather than rebuilt from a file name: absolute targets (`/xl/drawings/drawing1.xml`)
  * placed no picture or chart and attached no comment, a stray copy of a sheet part elsewhere in the
@@ -6569,21 +6596,8 @@ async function testExcelRelationshipsByPartPath(): Promise<void> {
 
     // A stray copy of the sheet part and of the drawing's relationships part, stored before the real ones
     // (the stray drawing relationships part names another chart under the real one's id).
-    const stray = (listed: boolean) => sheetParts.zip({
-        '[Content_Types].xml': sheetParts.types,
-        'xl/workbook.xml': sheetParts.workbook([['Data', 'rId1']]),
-        ...(listed ? { 'xl/_rels/workbook.xml.rels': sheetParts.rels([['rId1', 'worksheet', 'worksheets/sheet1.xml']]) } : {}),
-        'backup/xl/worksheets/sheet1.xml': sheetParts.worksheet(['stray'], '<drawing r:id="rId1"/>'),
-        'xl/worksheets/sheet1.xml': sheetParts.worksheet(['data'], '<drawing r:id="rId1"/>'),
-        'xl/worksheets/_rels/sheet1.xml.rels': sheetParts.rels([['rId1', 'drawing', '../drawings/drawing1.xml']]),
-        'xl/drawings/drawing1.xml': sheetParts.drawing(sheetParts.frame('rId1')),
-        'xl/drawings/_rels/drawing1.xml.rels': sheetParts.rels([['rId1', 'chart', '../charts/chart1.xml']]),
-        'backup/xl/drawings/_rels/drawing1.xml.rels': sheetParts.rels([['rId1', 'chart', '../charts/chart2.xml']]),
-        'xl/charts/chart1.xml': sheetParts.chart('Real', [7, 8]),
-        'xl/charts/chart2.xml': sheetParts.chart('Stray', [9, 10]),
-    });
     for (const listed of [true, false]) {
-        const ast = await OfficeParser.parseOffice(stray(listed), { fileType: 'xlsx', extractAttachments: true } as any) as OfficeParserAST;
+        const ast = await OfficeParser.parseOffice(strayPartsWorkbook(listed), { fileType: 'xlsx', extractAttachments: true } as any) as OfficeParserAST;
         const shape = sheetParts.shape(ast);
         const real = shape.find(sheet => (sheet[2] as string[])[0] === 'row:data');
         const copy = shape.find(sheet => (sheet[2] as string[])[0] === 'row:stray');
@@ -10788,6 +10802,287 @@ async function testHiddenSlidesOdpAndRoundTrip(): Promise<void> {
 }
 
 /**
+ * CSV with `mergeSheets: false` writes each sheet a file of its own: names made alike by the characters a file name
+ * leaves out (`A/B`, `A_B`), or alike but for case (one file where case is not told apart), were one file, the first
+ * overwritten. A name an earlier sheet has is numbered (`A_B-2.csv`), never with a name another sheet has (a sheet named
+ * `A_B-2` keeps it); names apart are as before.
+ */
+async function testCsvZipFileNames(): Promise<void> {
+    const sheet = (name: string, value: string) => ({ type: 'sheet', metadata: { sheetName: name }, children: [{ type: 'row', children: [{ type: 'cell', children: [{ type: 'text', text: value }] }] }] });
+    const files = async (names: string[]) => {
+        const ast = { type: 'xlsx', metadata: {}, attachments: [], content: names.map((name, i) => sheet(name, `value ${i}`)) } as any as OfficeParserAST;
+        const out = await OfficeGenerator.generate(ast, 'csv', { csvConfig: { mergeSheets: false }, onWarning: () => { } } as any);
+        return Object.entries(unzipSync(out.value as Uint8Array)).map(([name, data]) => [name, strFromU8(data)]);
+    };
+    const alike = await files(['A/B', 'A_B', 'a_b', 'A_B-2', 'A?B', 'Other']);
+    assert.deepStrictEqual(alike.map(([name]) => name), ['A_B.csv', 'A_B-3.csv', 'a_b-4.csv', 'A_B-2.csv', 'A_B-5.csv', 'Other.csv'], 'names made alike are numbered; a sheet keeps its own name: a number is never one another sheet has');
+    assert.deepStrictEqual(alike.map(([, text]) => text), [0, 1, 2, 3, 4, 5].map(i => `value ${i}`), 'every sheet is written, each in its file');
+    assert.strictEqual(new Set(alike.map(([name]) => name.toLowerCase())).size, alike.length, 'no two names alike but for case');
+    const apart = await files(['Sales', 'Costs 2026', 'Q1-Q2']);
+    assert.deepStrictEqual(apart.map(([name]) => name), ['Sales.csv', 'Costs 2026.csv', 'Q1-Q2.csv'], 'names apart are as before');
+    // A duplicate before a sheet named like its number: the sheet keeps its name, the duplicate takes the next free one.
+    assert.deepStrictEqual((await files(['A', 'A', 'A-2'])).map(([name]) => name), ['A.csv', 'A-3.csv', 'A-2.csv'], 'A, A, A-2: the sheet named A-2 keeps it');
+    assert.deepStrictEqual((await files(['A', 'A', 'A-2', 'a-3'])).map(([name]) => name), ['A.csv', 'A-4.csv', 'A-2.csv', 'a-3.csv'], 'A, A, A-2, a-3: the number skips every sheet\'s own name, case aside');
+    // Random lists of names made alike: every file name its own, case aside; the first sheet with each own file name has
+    // it, any other sheet a name no sheet has as its own; each file holds its sheet's rows.
+    const random = randomOf(0x2c5f);
+    const pick = (n: number) => Math.floor(random() * n);
+    const alphabet = ['A', 'a', 'A-2', 'a-2', 'A-3', 'A/B', 'A_B', 'A_B-2', 'B', '', 'Sheet2', 'A-2-2'];
+    const seen = new Set<string>();
+    for (let round = 0; round < 500; round++) {
+        const names = Array.from({ length: 2 + pick(6) }, () => alphabet[pick(alphabet.length)]);
+        seen.add(JSON.stringify(names));
+        const written = await files(names);
+        const label = JSON.stringify(names);
+        assert.strictEqual(written.length, names.length, `${label}: every sheet is a file`);
+        assert.strictEqual(new Set(written.map(([name]) => name.toLowerCase())).size, written.length, `${label}: every file name its own, case aside`);
+        const own = names.map((name, i) => `${(name || `Sheet${i + 1}`).replace(/[^\w\s-]/g, '_')}.csv`);
+        const ownLower = own.map(name => name.toLowerCase());
+        const ownSet = new Set(ownLower);
+        for (let i = 0; i < names.length; i++) {
+            const [fileName, fileText] = written[i];
+            if (ownLower.indexOf(ownLower[i]) === i) assert.strictEqual(fileName, own[i], `${label}: sheet ${i + 1} keeps its own name`);
+            else assert.ok(!ownSet.has(fileName.toLowerCase()), `${label}: sheet ${i + 1}'s number ${fileName} is no sheet's own name`);
+            assert.strictEqual(fileText, `value ${i}`, `${label}: ${fileName} holds sheet ${i + 1}'s rows`);
+        }
+    }
+    console.log(`  CSV zip file names: ${seen.size} distinct lists of names`);
+    assert.ok(seen.size >= 300, `at least 300 distinct lists; ran ${seen.size}`);
+    // Linear in the sheets: 2,000 and 8,000 sheets of one name.
+    const many = (n: number) => ({ type: 'xlsx', metadata: {}, attachments: [], content: Array.from({ length: n }, (_, i) => sheet(i % 2 ? 'S' : 's', 'v')) } as any as OfficeParserAST);
+    assert.strictEqual(Object.keys(unzipSync((await OfficeGenerator.generate(many(2000), 'csv', { csvConfig: { mergeSheets: false }, onWarning: () => { } } as any)).value as Uint8Array)).length, 2000, '2,000 sheets of one name are 2,000 files');
+    const time = async (n: number) => { const started = performance.now(); await OfficeGenerator.generate(many(n), 'csv', { csvConfig: { mergeSheets: false }, onWarning: () => { } } as any); return performance.now() - started; };
+    let small = await time(2000), large = await time(8000);
+    if (large > 8 * small + 250) { small = await time(2000); large = Math.min(large, await time(8000)); }
+    assert.ok(large <= 8 * small + 250, `8,000 sheets of one name in ${large.toFixed(0)} ms, 2,000 in ${small.toFixed(0)} ms`);
+    // Linear in the sheets when every number is some sheet's own name: A-2 to A-(k+1), then k sheets named A.
+    const numbered = (k: number) => ({ type: 'xlsx', metadata: {}, attachments: [], content: [...Array.from({ length: k }, (_, i) => sheet(`A-${i + 2}`, 'v')), ...Array.from({ length: k }, () => sheet('A', 'v'))] } as any as OfficeParserAST);
+    const numberedNames = Object.keys(unzipSync((await OfficeGenerator.generate(numbered(1000), 'csv', { csvConfig: { mergeSheets: false }, onWarning: () => { } } as any)).value as Uint8Array));
+    assert.strictEqual(new Set(numberedNames.map(name => name.toLowerCase())).size, 2000, 'A-2 to A-1001, then 1,000 sheets named A: 2,000 files');
+    const timeNumbered = async (k: number) => { const started = performance.now(); await OfficeGenerator.generate(numbered(k), 'csv', { csvConfig: { mergeSheets: false }, onWarning: () => { } } as any); return performance.now() - started; };
+    small = await timeNumbered(1000); large = await timeNumbered(4000);
+    if (large > 8 * small + 250) { small = await timeNumbered(1000); large = Math.min(large, await timeNumbered(4000)); }
+    assert.ok(large <= 8 * small + 250, `A-2 to A-4001 then 4,000 sheets named A in ${large.toFixed(0)} ms, the 1,000 shape in ${small.toFixed(0)} ms`);
+}
+
+/**
+ * EPUB and PDF (`engine: 'html'`) write their HTML through an HTML writer given their resolved configuration. Resolved
+ * again with a parsed AST's config, an option it did not recognize was reported a second time, heard twice and listed
+ * twice in the result. Each configuration problem is now reported once, as HTML output reports it, and the AST's config
+ * still reaches the HTML (a parse with `allowRemoteAssets: false` writes a chart as its table, with no Chart.js address).
+ */
+async function testWrappedWritersConfigOnce(): Promise<void> {
+    const CONFIG_CODES = ['UNRECOGNIZED_CONFIG_OPTION', 'INVALID_CONFIG_VALUE', 'INVALID_CONTAINER_WIDTH'];
+    const parsed = await OfficeParser.parseOffice(path.join(__dirname, 'files', 'test.docx'), { onWarning: () => { } } as any) as OfficeParserAST;
+    assert.ok(parsed.config, 'a parsed AST carries its config');
+    const built = { type: 'docx', metadata: {}, attachments: [], content: [{ type: 'paragraph', children: [{ type: 'text', text: 'hello' }] }] } as any as OfficeParserAST;
+    const configs: [string, Record<string, unknown>][] = [
+        ['an unknown option', { fooBar: 1 }],
+        ['an unknown HTML option', { htmlConfig: { bogus: 1 } }],
+        ['an invalid choice', { mdConfig: { dialect: 'bogus' } }],
+        ['an invalid width', { htmlConfig: { containerWidth: -5 } }],
+    ];
+    // PDF through the browser, with the browser left out: the HTML it would print is kept, and the result is its messages.
+    const pdfOf = async (ast: OfficeParserAST, config: Record<string, unknown>): Promise<{ html: string; messages: { code: string; details?: any }[] }> => {
+        const generator = new PdfGenerator(ast, { ...config, pdfConfig: { engine: 'html' } } as any);
+        let html = '';
+        (generator as any).generateInNode = async (page: string) => { html = page; return { value: new Uint8Array(0), messages: (generator as any).messages }; };
+        const result = await generator.generate();
+        return { html, messages: result.messages as any };
+    };
+    const count = (codes: string[], code: string) => codes.filter(c => c === code).length;
+    for (const [astName, ast] of [['parsed', parsed], ['built', built]] as [string, OfficeParserAST][]) {
+        for (const [configName, config] of configs) {
+            const htmlHeard: string[] = [];
+            await OfficeGenerator.generate(ast, 'html', { ...config, onWarning: (w: any) => htmlHeard.push(w.code) } as any);
+            const reported = CONFIG_CODES.filter(code => count(htmlHeard, code) > 0);
+            assert.strictEqual(reported.length, 1, `${astName}, ${configName}: HTML output reports one configuration problem (${htmlHeard.join(', ')})`);
+            assert.strictEqual(count(htmlHeard, reported[0]), 1, `${astName}, ${configName}: HTML output reports it once`);
+            const epubHeard: string[] = [];
+            const epub = await OfficeGenerator.generate(ast, 'epub', { ...config, onWarning: (w: any) => epubHeard.push(w.code) } as any);
+            const pdfHeard: string[] = [];
+            const pdf = await pdfOf(ast, { ...config, onWarning: (w: any) => pdfHeard.push(w.code) });
+            for (const [format, heard, listed] of [['EPUB', epubHeard, epub.messages.map(m => m.code)], ['PDF', pdfHeard, pdf.messages.map(m => m.code)]] as [string, string[], string[]][]) {
+                assert.deepStrictEqual([...listed].sort(), [...heard].sort(), `${format}, ${astName}, ${configName}: the codes listed are the codes heard`);
+                for (const code of CONFIG_CODES) assert.strictEqual(count(heard, code), count(htmlHeard, code), `${format}, ${astName}, ${configName}: ${code} as often as HTML output reports it (heard ${count(heard, code)})`);
+            }
+        }
+    }
+    // The AST's config still reaches the HTML written: a deck parsed with allowRemoteAssets: false has its chart written
+    // as its table, with no Chart.js address, and the chart reported once.
+    const deck = await OfficeParser.parseOffice(path.join(__dirname, 'files', 'test.pptx'), { extractAttachments: true, allowRemoteAssets: false, onWarning: () => { } } as any) as OfficeParserAST;
+    const heard: string[] = [];
+    const printed = await pdfOf(deck, { fooBar: 1, onWarning: (w: any) => heard.push(w.code) });
+    assert.ok(printed.html.length > 0, 'PDF: the HTML is written');
+    assert.ok(!printed.html.includes('<canvas') && !printed.html.includes('cdn.jsdelivr.net'), 'PDF: a chart of a parse with allowRemoteAssets: false has no canvas and no Chart.js address');
+    assert.strictEqual(printed.messages.filter(m => m.code === 'CONTENT_NOT_REPRESENTABLE' && m.details?.reason === 'chart').length, 1, 'PDF: the chart written as its table is listed once');
+    assert.strictEqual(count(heard, 'UNRECOGNIZED_CONFIG_OPTION'), 1, 'PDF: the unknown option heard once');
+    assert.strictEqual(count(printed.messages.map(m => m.code), 'UNRECOGNIZED_CONFIG_OPTION'), 1, 'PDF: and listed once');
+}
+
+/**
+ * A workbook's charts are read with their attachments (placed through its drawings' relationships): parsed without
+ * extractAttachments it has no chart node, and every output left its charts out with no word. They are reported once
+ * (CONTENT_PART_NOT_READ), with how many and the first by its number; the content is as before.
+ */
+async function testXlsxChartsNotReadReported(): Promise<void> {
+    const notRead = (issues: any[]) => issues.filter(w => w.code === 'CONTENT_PART_NOT_READ');
+    const parse = async (file: string | Buffer, extractAttachments = false) => {
+        const heard: any[] = [];
+        const ast = await OfficeParser.parseOffice(file, { fileType: 'xlsx', extractAttachments, onWarning: (w: any) => heard.push(w) } as any) as OfficeParserAST;
+        return { ast, heard };
+    };
+    const chartNodes = (nodes: OfficeContentNode[] | undefined): number => (nodes ?? []).reduce((sum, node) => sum + (node.type === 'chart' ? 1 : 0) + chartNodes(node.children), 0);
+    const sample = path.join(__dirname, 'files', 'test.xlsx');
+    const { ast, heard } = await parse(sample);
+    const reported = notRead(heard);
+    assert.strictEqual(reported.length, 1, `test.xlsx without attachments: its charts reported once; got ${heard.map(w => w.code)}`);
+    assert.ok(reported[0].details.count === 1 && reported[0].details.name === 'chart1.xml', `test.xlsx: one chart, chart1.xml; got ${JSON.stringify(reported[0].details)}`);
+    assert.ok(reported[0].message.includes('xl/charts/chart1.xml') && reported[0].message.includes('extractAttachments'), `test.xlsx: the message names the part and how to read it; got ${reported[0].message}`);
+    assert.strictEqual(chartNodes(ast.content), 0, 'test.xlsx: no chart node, as before');
+    const ignored = await OfficeParser.parseOffice(sample, { onWarning: () => { } } as any) as OfficeParserAST;
+    assert.strictEqual(JSON.stringify(ast.content), JSON.stringify(ignored.content), 'test.xlsx: the content is the content of a parse whose warning is ignored');
+    assert.strictEqual(String((await ast.to('text')).value), String((await ignored.to('text')).value), 'test.xlsx: and its text, byte for byte');
+    assert.deepStrictEqual(notRead((await parse(sample, true)).heard), [], 'test.xlsx with attachments: its charts are read, nothing reported');
+
+    // A chart sheet's chart, and a worksheet drawing's beside it: counted, the first by its number whatever the archive's order.
+    const chartSheet = notRead((await parse(chartSheetBesideWorksheet(false))).heard);
+    assert.ok(chartSheet.length === 1 && chartSheet[0].details.count === 1 && chartSheet[0].details.name === 'chart1.xml', `a chart sheet's chart reported; got ${JSON.stringify(chartSheet.map(w => w.details))}`);
+    const both = sheetParts.zip({
+        '[Content_Types].xml': sheetParts.types,
+        'xl/charts/chart2.xml': sheetParts.chart('Drawn', [1, 2]),
+        'xl/workbook.xml': sheetParts.workbook([['Sheet1', 'rId1'], ['Chart1', 'rId2']]),
+        'xl/_rels/workbook.xml.rels': sheetParts.rels([['rId1', 'worksheet', 'worksheets/sheet1.xml'], ['rId2', 'chartsheet', 'chartsheets/sheet1.xml']]),
+        'xl/worksheets/sheet1.xml': sheetParts.worksheet(['Month', 'January'], '<drawing r:id="rId1"/>'),
+        'xl/worksheets/_rels/sheet1.xml.rels': sheetParts.rels([['rId1', 'drawing', '../drawings/drawing2.xml']]),
+        'xl/drawings/drawing2.xml': sheetParts.drawing(sheetParts.frame('rId1')),
+        'xl/drawings/_rels/drawing2.xml.rels': sheetParts.rels([['rId1', 'chart', '../charts/chart2.xml']]),
+        'xl/chartsheets/sheet1.xml': sheetParts.chartsheet(),
+        'xl/chartsheets/_rels/sheet1.xml.rels': sheetParts.rels([['rId1', 'drawing', '../drawings/drawing1.xml']]),
+        'xl/drawings/drawing1.xml': sheetParts.drawing(sheetParts.frame('rId1')),
+        'xl/drawings/_rels/drawing1.xml.rels': sheetParts.rels([['rId1', 'chart', '../charts/chart1.xml']]),
+        'xl/charts/chart1.xml': sheetParts.chart('Monthly', [3, 4]),
+    });
+    const two = notRead((await parse(both)).heard);
+    assert.ok(two.length === 1 && two[0].details.count === 2 && two[0].details.name === 'chart1.xml' && two[0].message.includes('2 charts, the first xl/charts/chart1.xml'), `a worksheet drawing's chart and a chart sheet's: two, the first chart1.xml; got ${JSON.stringify(two.map(w => w.message))}`);
+    assert.strictEqual(chartNodes((await parse(both, true)).ast.content), 2, 'with attachments, both are chart nodes');
+    const chartless = sheetParts.zip({
+        '[Content_Types].xml': sheetParts.types,
+        'xl/workbook.xml': sheetParts.workbook([['Sheet1', 'rId1']]),
+        'xl/_rels/workbook.xml.rels': sheetParts.rels([['rId1', 'worksheet', 'worksheets/sheet1.xml']]),
+        'xl/worksheets/sheet1.xml': sheetParts.worksheet(['Month']),
+    });
+    assert.deepStrictEqual(notRead((await parse(chartless)).heard), [], 'a workbook with no chart: nothing reported');
+
+    // Counted: the chart parts in xl/charts/ a drawing names, as a parse with attachments places them. A part no drawing
+    // names (a copy of the chart beside it, or in another folder) is shown by no sheet, so not counted.
+    const samplePackage = unzipSync(new Uint8Array(fs.readFileSync(sample)));
+    const sampleWith = (changes: Record<string, Uint8Array | string | undefined>) => Buffer.from(zipSync(Object.fromEntries(
+        Object.entries({ ...samplePackage, ...changes }).filter(([, data]) => data !== undefined).map(([name, data]) => [name, typeof data === 'string' ? strToU8(data) : data!]))));
+    const sampleDrawingRels = Object.keys(samplePackage).filter(name => /^xl\/drawings\/_rels\/drawing\d+\.xml\.rels$/.test(name));
+    const sampleChartRels = sampleDrawingRels.find(name => strFromU8(samplePackage[name]).includes('charts/chart1.xml'))!;
+    assert.ok(sampleChartRels, `test.xlsx: a drawing names chart1.xml; its drawings' relationships ${sampleDrawingRels}`);
+    const oneChart = async (name: string, file: Buffer) => {
+        const reports = notRead((await parse(file)).heard);
+        assert.ok(reports.length === 1 && reports[0].details.count === 1 && reports[0].details.name === 'chart1.xml', `${name}: one chart, chart1.xml; got ${JSON.stringify(reports.map(w => w.details))}`);
+        assert.strictEqual(chartNodes((await parse(file, true)).ast.content), 1, `${name}: with attachments one chart node`);
+    };
+    await oneChart('test.xlsx with a copy of its chart no drawing names (xl/charts/chart2.xml)', sampleWith({ 'xl/charts/chart2.xml': samplePackage['xl/charts/chart1.xml'] }));
+    await oneChart('test.xlsx with a copy of its chart in another folder (customXml/xl/charts/chart3.xml)', sampleWith({ 'customXml/xl/charts/chart3.xml': samplePackage['xl/charts/chart1.xml'] }));
+    // A target not to the letter (another case, missing its ../, from the package root) finds the chart with attachments,
+    // and counts it.
+    for (const target of ['../Charts/Chart1.xml', 'charts/chart1.xml', '/xl/charts/chart1.xml']) {
+        await oneChart(`test.xlsx whose drawing names its chart as ${target}`, sampleWith({ [sampleChartRels]: strFromU8(samplePackage[sampleChartRels]).replace('../charts/chart1.xml', target) }));
+    }
+    // A drawing's relationships that cannot be read count every chart part in xl/charts/, never fewer: no throw.
+    const unreadable = await parse(sampleWith({ [sampleChartRels]: 'not XML <<<' }));
+    const unreadReports = notRead(unreadable.heard);
+    assert.ok(unreadReports.length === 1 && unreadReports[0].details.count === 1 && unreadReports[0].details.name === 'chart1.xml', `test.xlsx whose drawing relationships are not XML: one chart, chart1.xml; got ${JSON.stringify(unreadReports.map(w => w.details))}`);
+    // The stray workbook (a copy of the drawing's relationships elsewhere naming chart2.xml): only the chart the real
+    // drawing names.
+    for (const listed of [true, false]) {
+        const strayReports = notRead((await parse(strayPartsWorkbook(listed))).heard);
+        assert.ok(strayReports.length === 1 && strayReports[0].details.count === 1 && strayReports[0].details.name === 'chart1.xml', `the stray workbook (listed ${listed}): one chart, chart1.xml; got ${JSON.stringify(strayReports.map(w => w.details))}`);
+    }
+    // A chart part no relationship names, or one named only by an external target: no chart node with attachments, no report.
+    const lonely = (drawingRels: string | undefined) => sheetParts.zip({
+        '[Content_Types].xml': sheetParts.types,
+        'xl/workbook.xml': sheetParts.workbook([['Sheet1', 'rId1']]),
+        'xl/_rels/workbook.xml.rels': sheetParts.rels([['rId1', 'worksheet', 'worksheets/sheet1.xml']]),
+        'xl/worksheets/sheet1.xml': sheetParts.worksheet(['Month'], '<drawing r:id="rId1"/>'),
+        'xl/worksheets/_rels/sheet1.xml.rels': sheetParts.rels([['rId1', 'drawing', '../drawings/drawing1.xml']]),
+        'xl/drawings/drawing1.xml': sheetParts.drawing(sheetParts.frame('rId1')),
+        ...(drawingRels ? { 'xl/drawings/_rels/drawing1.xml.rels': drawingRels } : {}),
+        'xl/charts/chart1.xml': sheetParts.chart('Alone', [1, 2]),
+    });
+    const external = (target: string) => `<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart" Target="${target}" TargetMode="External"/></Relationships>`;
+    for (const [name, rels] of [['a chart part no relationship names', undefined], ['a chart part named only by an external web address', external('https://example.com/charts/chart1.xml')]] as const) {
+        assert.deepStrictEqual(notRead((await parse(lonely(rels))).heard), [], `${name}: nothing reported`);
+        assert.strictEqual(chartNodes((await parse(lonely(rels), true)).ast.content), 0, `${name}: no chart node with attachments either`);
+    }
+    // An external relationship of a relative target: placed with attachments by the path it resolves to, so counted.
+    const relativeExternal = notRead((await parse(lonely(external('../charts/chart1.xml')))).heard);
+    assert.ok(relativeExternal.length === 1 && relativeExternal[0].details.count === 1 && relativeExternal[0].details.name === 'chart1.xml', `an external relationship of a relative target: one chart, chart1.xml; got ${JSON.stringify(relativeExternal.map(w => w.details))}`);
+    assert.strictEqual(chartNodes((await parse(lonely(external('../charts/chart1.xml')), true)).ast.content), 1, 'an external relationship of a relative target: one chart node with attachments');
+
+    // A conversion that leaves charts out (includeCharts: false) has no chart in its output, so it does not report a
+    // workbook's charts as not read: neither heard nor listed, wherever the callback is given and whether or not the
+    // caller sets extractAttachments: false. With charts wanted and no attachments it is reported once, as by a parse.
+    const converted = async (file: string, format: string, config: Record<string, any>, callbackIn: 'top' | 'parseConfig' = 'top') => {
+        const heard: any[] = [];
+        const listen = (w: any) => heard.push(w);
+        const withCallback = callbackIn === 'parseConfig' ? { ...config, parseConfig: { ...config.parseConfig, onWarning: listen } } : { ...config, onWarning: listen };
+        const result = await OfficeConverter.convert(file, format as any, withCallback as any);
+        return { heard: notRead(heard), listed: notRead(result.messages), value: result.value };
+    };
+    const leftOut = { generatorConfig: { includeCharts: false, includeImages: false } };
+    for (const format of ['html', 'text', 'csv', 'md']) {
+        for (const [name, config, callbackIn] of [
+            ['includeCharts: false', leftOut, 'top'],
+            ['includeCharts: false, the callback in parseConfig', leftOut, 'parseConfig'],
+            ['includeCharts: false, extractAttachments: false', { ...leftOut, parseConfig: { extractAttachments: false } }, 'top'],
+        ] as [string, Record<string, any>, 'top' | 'parseConfig'][]) {
+            const { heard: convertHeard, listed } = await converted(sample, format, config, callbackIn);
+            assert.deepStrictEqual([convertHeard.length, listed.length], [0, 0], `convert test.xlsx to ${format}, ${name}: its charts not reported (heard ${convertHeard.length}, listed ${listed.length})`);
+        }
+        const wanted = await converted(sample, format, { parseConfig: { extractAttachments: false } });
+        assert.ok(wanted.heard.length === 1 && wanted.listed.length === 1 && wanted.heard[0].details.count === 1 && wanted.listed[0].details.count === 1, `convert test.xlsx to ${format}, charts wanted, extractAttachments: false: reported once, heard and listed; got ${wanted.heard.length} / ${wanted.listed.length}`);
+    }
+    const drawn = await converted(sample, 'html', {});
+    assert.ok(drawn.heard.length === 0 && drawn.listed.length === 0 && String(drawn.value).includes('<canvas'), 'convert test.xlsx to HTML by default: the chart drawn, nothing reported');
+    for (const file of [path.join(__dirname, 'files', 'test.pptx'), path.join(__dirname, 'files', 'charts', 'word-charts.docx')]) {
+        const { heard: otherHeard, listed } = await converted(file, 'html', leftOut);
+        assert.deepStrictEqual([otherHeard.length, listed.length], [0, 0], `convert ${path.basename(file)} with includeCharts: false: nothing reported not read`);
+    }
+    // The report is told by its reason: the workbook's report is, another part not read (an EPUB chapter) is not.
+    assert.ok(isWorkbookChartsNotRead(reported[0]), 'isWorkbookChartsNotRead: the workbook\'s report');
+    assert.ok(!isWorkbookChartsNotRead({ code: 'CONTENT_PART_NOT_READ', details: { part: 'c.xhtml', reason: 'the chapter could not be read' } }), 'isWorkbookChartsNotRead: not an EPUB chapter not read');
+    assert.ok(!isWorkbookChartsNotRead({ code: 'CONTENT_NOT_REPRESENTABLE', details: { reason: reported[0].details.reason } }), 'isWorkbookChartsNotRead: not another code of the same reason');
+
+    // Linear in the chart parts: n tiny parts (stored highest number first), one drawing naming all n (its relationships
+    // stored after them), counted n; and the same parts with a drawing naming none, not reported.
+    const manyCharts = (n: number, named: boolean) => sheetParts.zip({
+        '[Content_Types].xml': sheetParts.types,
+        'xl/workbook.xml': sheetParts.workbook([['Sheet1', 'rId1']]),
+        'xl/_rels/workbook.xml.rels': sheetParts.rels([['rId1', 'worksheet', 'worksheets/sheet1.xml']]),
+        'xl/worksheets/sheet1.xml': sheetParts.worksheet(['Month']),
+        'xl/drawings/drawing1.xml': sheetParts.drawing(''),
+        ...Object.fromEntries(Array.from({ length: n }, (_, i) => [`xl/charts/chart${n - i}.xml`, '<c:chartSpace/>'])),
+        'xl/drawings/_rels/drawing1.xml.rels': sheetParts.rels(named ? Array.from({ length: n }, (_, i): [string, string, string] => [`rId${i + 1}`, 'chart', `../charts/chart${i + 1}.xml`]) : []),
+    });
+    const time = async (file: Buffer) => { const started = performance.now(); await parse(file); return performance.now() - started; };
+    for (const named of [true, false]) {
+        const small = manyCharts(2000, named), large = manyCharts(8000, named);
+        const counted = notRead((await parse(large)).heard);
+        if (named) assert.ok(counted.length === 1 && counted[0].details.count === 8000 && counted[0].details.name === 'chart1.xml', `8,000 chart parts a drawing names: one report, count 8,000, the first chart1.xml; got ${JSON.stringify(counted.map(w => w.details))}`);
+        else assert.deepStrictEqual(counted, [], '8,000 chart parts no drawing names: nothing reported');
+        let smallTime = await time(small), largeTime = await time(large);
+        if (largeTime > 8 * smallTime + 250) { smallTime = await time(small); largeTime = Math.min(largeTime, await time(large)); }
+        assert.ok(largeTime <= 8 * smallTime + 250, `8,000 chart parts (${named ? 'named' : 'none named'}) parsed in ${largeTime.toFixed(0)} ms, 2,000 in ${smallTime.toFixed(0)} ms`);
+    }
+}
+
+/**
  * A CSV file's delimiter is read from it by default: European spreadsheets write `;` with decimal commas,
  * which a comma split (`Müller;1.234,56` came out as `Müller;1.234 | 56`). An explicit one is used as
  * given, CSV output keeps the one read, and a byte order mark is no text of the first cell.
@@ -13875,9 +14170,10 @@ async function testPicturesLeftOutNamed(): Promise<void> {
 
     // The native PDF engine: each kind it does not embed by name, XML as no picture, damaged data as such.
     const native = await leftOut(all, 'pdf', { pdfConfig: { engine: 'native' } });
-    for (const [name, kind] of [['image1.emf', 'EMF'], ['image2.wmf', 'WMF'], ['image3.tiff', 'TIFF'], ['image4.webp', 'WebP']]) {
-        sentence(native.get(name), name, `the native PDF engine does not embed ${kind} pictures (it embeds PNG, JPEG, GIF, BMP and SVG)`, 'native PDF');
-    }
+    sentence(native.get('image4.webp'), 'image4.webp', 'the native PDF engine does not embed WebP pictures (only PNG, JPEG, GIF, BMP, SVG, and bitmaps in EMF and WMF)', 'native PDF');
+    sentence(native.get('image1.emf'), 'image1.emf', 'the native PDF engine draws an EMF picture only from a bitmap it holds, and this one holds none (it is drawn with lines, shapes or text)', 'native PDF');
+    sentence(native.get('image2.wmf'), 'image2.wmf', 'its WMF header is damaged', 'native PDF');
+    sentence(native.get('image3.tiff'), 'image3.tiff', 'the native PDF engine does not embed TIFF pictures (only PNG, JPEG, GIF, BMP, SVG, and bitmaps in EMF and WMF)', 'native PDF');
     sentence(native.get('item1.xml'), 'item1.xml', 'its data is XML, not a picture', 'native PDF');
     sentence(native.get('broken.png'), 'broken.png', 'its PNG data could not be read', 'native PDF');
     sentence(native.get('broken.jpg'), 'broken.jpg', 'its JPEG data could not be read', 'native PDF');
@@ -13885,11 +14181,13 @@ async function testPicturesLeftOutNamed(): Promise<void> {
     const badGif = await leftOut(docOf(['bad.gif'], [{ type: 'image', name: 'bad.gif', mimeType: 'image/gif', extension: 'gif', data: b64(new Uint8Array([...Buffer.from('GIF89a'), 1, 0, 1, 0, 0, 0, 0, 0x2c, 9, 9])) }]), 'pdf', { pdfConfig: { engine: 'native' } });
     sentence(badGif.get('bad.gif'), 'bad.gif', 'its GIF data could not be read', 'native PDF');
 
-    // DOCX, ODT and LaTeX: an EMF or a WMF picture, which none of them takes, named with the output.
-    for (const [format, label] of [['docx', 'DOCX'], ['odt', 'ODT'], ['tex', 'LaTeX']]) {
+    // LaTeX: an EMF or a WMF picture, which it does not take, named with the output. DOCX and ODT take both.
+    const latexNamed = await leftOut(all, 'tex');
+    sentence(latexNamed.get('image1.emf'), 'image1.emf', 'LaTeX output does not take EMF pictures', 'LaTeX');
+    sentence(latexNamed.get('image2.wmf'), 'image2.wmf', 'LaTeX output does not take WMF pictures', 'LaTeX');
+    for (const format of ['docx', 'odt']) {
         const named = await leftOut(all, format);
-        sentence(named.get('image1.emf'), 'image1.emf', `${label} output does not take EMF pictures`, label);
-        sentence(named.get('image2.wmf'), 'image2.wmf', `${label} output does not take WMF pictures`, label);
+        assert.ok(!named.has('image1.emf') && !named.has('image2.wmf'), `${format}: EMF and WMF pictures are kept, not reported`);
     }
     // A type named but data that is no base64: DOCX and ODT say it could not be decoded.
     const undecodable = docOf(['bad.png', 'bad.png'], [{ type: 'image', name: 'bad.png', mimeType: 'image/png', extension: 'png', data: '%%%' }]);
@@ -15706,6 +16004,740 @@ async function testMathCommandArguments(): Promise<void> {
     await assertLinearTime('MathML: a row of operators', 20000, n => mathmlToLatex(rows.get(n)!));
 }
 
+/** A native PDF read back: its nodes (with bounds), its text, and the messages the engine gave. */
+async function nativePdfOf(ast: OfficeParserAST, config: object = {}): Promise<{ nodes: OfficeContentNode[]; text: string; messages: any[]; back: OfficeParserAST }> {
+    const result = await OfficeGenerator.generate(ast, 'pdf', { pdfConfig: { engine: 'native' }, ...config } as any);
+    const back = await OfficeParser.parseOffice(Buffer.from(result.value as Uint8Array), { fileType: 'pdf', ocr: false, extractAttachments: true, pdfParserConfig: { separateProcess: false } } as any) as OfficeParserAST;
+    return { nodes: collectAllNodes(back), text: String((await back.to('text')).value), messages: result.messages || [], back };
+}
+
+/**
+ * A chart standing in a paragraph (where Word and ODF put one) is drawn as a chart by the native PDF
+ * engine, between the lines of text around it; its data was written as words in the line.
+ */
+async function testNativePdfChartInParagraph(): Promise<void> {
+    const chartData = { title: 'Quarterly', labels: ['Qone', 'Qtwo'], dataSets: [{ name: 'SeriesAlpha', values: ['11', '22'] }], rawTexts: ['Qone', 'Qtwo', 'SeriesAlpha', '11', '22'] };
+    const doc = (children: OfficeContentNode[]) => ({ type: 'docx', metadata: {}, attachments: [{ type: 'chart', name: 'chart1.xml', mimeType: 'application/vnd.openxmlformats-officedocument.drawingml.chart+xml', data: '', chartData }],
+        content: [{ type: 'paragraph', children }] }) as any as OfficeParserAST;
+    const chart = { type: 'chart', text: 'Qone\nQtwo\nSeriesAlpha\n11\n22', metadata: { attachmentName: 'chart1.xml' } } as OfficeContentNode;
+    const { nodes, text, messages } = await nativePdfOf(doc([{ type: 'text', text: 'Before the chart ' }, chart, { type: 'text', text: ' after it.' }]));
+    const at = (word: string) => nodes.find(n => n.type === 'text' && (n.text || '').includes(word))?.bounds;
+    const [before, title, after] = [at('Before the chart'), at('Quarterly'), at('after it')];
+    assert.ok(!messages.some(m => m.details?.reason === 'chart'), `the chart is drawn, not written as text; got ${JSON.stringify(messages.map(m => m.details))}`);
+    assert.ok(['Quarterly', 'Qone', 'Qtwo'].every(t => text.includes(t)), `its title and labels are drawn; got ${JSON.stringify(text)}`);
+    assert.ok(!text.includes('SeriesAlpha') && !/Qone\s+Qtwo\s+SeriesAlpha/.test(text), 'its data is not written as the line\'s words (one series has no legend)');
+    assert.ok(before && title && after && before.y < title.y && title.y < after.y, `the chart stands between the text before and after it; got ${JSON.stringify([before, title, after])}`);
+
+    // Only a chart in the paragraph: the chart alone, no empty line around it.
+    const alone = await nativePdfOf(doc([chart]));
+    assert.ok(alone.text.includes('Quarterly') && !alone.messages.some(m => m.details?.reason === 'chart'), 'a paragraph of a chart alone is its chart');
+
+    // includeCharts: false leaves the chart out (its words were written in the line).
+    const off = await nativePdfOf(doc([{ type: 'text', text: 'Before the chart ' }, chart, { type: 'text', text: ' after it.' }]), { includeCharts: false });
+    assert.ok(off.text.includes('Before the chart') && off.text.includes('after it') && !/Qone|SeriesAlpha|Quarterly/.test(off.text), `includeCharts: false leaves the chart out; got ${JSON.stringify(off.text)}`);
+
+    // A chart with no data to draw is its text, reported, as a chart of its own is.
+    const noData = { ...chart, metadata: { attachmentName: 'missing' } } as OfficeContentNode;
+    const textOnly = await nativePdfOf(doc([{ type: 'text', text: 'Lead ' }, noData]));
+    assert.ok(textOnly.messages.some(m => m.details?.reason === 'chart') && textOnly.text.includes('SeriesAlpha'), 'a chart with no data in a paragraph is its text, reported');
+
+    // End to end: a Word chart (a drawing in a run) is drawn.
+    const { docx, relsOf, rel, parse } = ooxmlHelpers();
+    const cache = (values: string[]) => `<c:ptCount val="${values.length}"/>${values.map((v, i) => `<c:pt idx="${i}"><c:v>${v}</c:v></c:pt>`).join('')}`;
+    const chartXml = `<?xml version="1.0"?><c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><c:chart><c:title><c:tx><c:rich><a:p><a:r><a:t>Quarterly</a:t></a:r></a:p></c:rich></c:tx></c:title><c:plotArea><c:barChart><c:barDir val="col"/><c:ser><c:tx><c:strRef><c:strCache>${cache(['SeriesAlpha'])}</c:strCache></c:strRef></c:tx><c:cat><c:strRef><c:strCache>${cache(['Qone', 'Qtwo'])}</c:strCache></c:strRef></c:cat><c:val><c:numRef><c:numCache>${cache(['11', '22'])}</c:numCache></c:numRef></c:val></c:ser></c:barChart></c:plotArea></c:chart></c:chartSpace>`;
+    const drawing = '<w:drawing><wp:inline><wp:extent cx="3657600" cy="2286000"/><wp:docPr id="1" name="Chart 1"/><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" r:id="rId9"/></a:graphicData></a:graphic></wp:inline></w:drawing>';
+    const { ast } = await parse(docx(`<w:p><w:r><w:t xml:space="preserve">Before the chart </w:t></w:r><w:r>${drawing}</w:r><w:r><w:t xml:space="preserve"> after it.</w:t></w:r></w:p>`, {
+        'word/_rels/document.xml.rels': relsOf(rel('rId9', 'chart', 'charts/chart1.xml')), 'word/charts/chart1.xml': chartXml,
+    }), { extractAttachments: true });
+    assert.deepStrictEqual(ast.content[0].children!.map(n => n.type), ['text', 'chart', 'text'], 'DOCX: the chart stands in its paragraph');
+    const word = await nativePdfOf(ast);
+    assert.ok(!word.messages.some(m => m.details?.reason === 'chart') && ['Quarterly', 'Qone', 'Before the chart', 'after it'].every(t => word.text.includes(t)) && !word.text.includes('SeriesAlpha'), `DOCX: the chart in a paragraph is drawn; got ${JSON.stringify(word.text)}`);
+}
+
+/**
+ * An ODF object frame is read as what its object is: a chart (a chart node named after the object, in a
+ * line of text, among blocks or in a cell, with or without a replacement picture beside it), or, for an
+ * object of another kind, the replacement picture the frame carries, extracted as an attachment of its own
+ * (`Object 3.png`); an object with neither is reported. A chart in a line, or with a replacement, was a
+ * picture named like the chart, which read the chart's XML and no output could draw.
+ */
+async function testOdfObjectFrames(): Promise<void> {
+    const NS = 'xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0" xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0" xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0" xmlns:xlink="http://www.w3.org/1999/xlink" xmlns:chart="urn:oasis:names:tc:opendocument:xmlns:chart:1.0"';
+    const cell = (text: string, value?: string) => value === undefined ? `<table:table-cell office:value-type="string"><text:p>${text}</text:p></table:table-cell>` : `<table:table-cell office:value-type="float" office:value="${value}"/>`;
+    const chartObject = `<?xml version="1.0"?><office:document-content ${NS}><office:body><office:chart><chart:chart chart:class="chart:bar"><chart:title><text:p>ChartTitleXYZ</text:p></chart:title>`
+        + '<chart:plot-area><chart:axis chart:dimension="x" chart:name="primary-x"><chart:categories table:cell-range-address="local-table.$A$2:.$A$3"/></chart:axis><chart:axis chart:dimension="y" chart:name="primary-y"/>'
+        + '<chart:series chart:values-cell-range-address="local-table.$B$2:.$B$3" chart:label-cell-address="local-table.$B$1" chart:class="chart:bar"/><chart:series chart:values-cell-range-address="local-table.$C$2:.$C$3" chart:label-cell-address="local-table.$C$1" chart:class="chart:bar"/></chart:plot-area>'
+        + `<table:table table:name="local-table"><table:table-header-rows><table:table-row><table:table-cell/>${cell('SeriesAlpha')}${cell('SeriesBeta')}</table:table-row></table:table-header-rows>`
+        + `<table:table-row>${cell('Qone')}${cell('', '11')}${cell('', '5')}</table:table-row><table:table-row>${cell('Qtwo')}${cell('', '22')}${cell('', '7')}</table:table-row></table:table>`
+        + '</chart:chart></office:chart></office:body></office:document-content>';
+    const calcObject = `<?xml version="1.0"?><office:document-content ${NS}><office:body><office:spreadsheet><table:table table:name="T"><table:table-row>${cell('CalcCell')}</table:table-row></table:table></office:spreadsheet></office:body></office:document-content>`;
+    const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAAF0lEQVR4nGP8z8BAEmAiTfmohlENQwkDAJQxAR9rsc8UAAAAAElFTkSuQmCC', 'base64');
+    const svm = Buffer.concat([Buffer.from('VCLMTF'), Buffer.alloc(40)]);
+    const frame = (object: string, replacement: boolean, anchor = 'as-char', title = '') => `<draw:frame draw:name="F" text:anchor-type="${anchor}" svg:width="4in" svg:height="2in"><draw:object xlink:href="./${object}"/>${replacement ? `<draw:image xlink:href="./ObjectReplacements/${object}"/>` : ''}${title ? `<svg:title>${title}</svg:title>` : ''}</draw:frame>`;
+    const pkg = (kind: 'text' | 'spreadsheet', body: string, parts: Record<string, string | Uint8Array> = {}) => Buffer.from(zipSync({
+        mimetype: [strToU8(`application/vnd.oasis.opendocument.${kind}`), { level: 0 }],
+        'content.xml': strToU8(`<?xml version="1.0"?><office:document-content ${NS}><office:body><office:${kind}>${body}</office:${kind}></office:body></office:document-content>`),
+        ...Object.fromEntries(Object.entries(parts).map(([name, value]) => [name, typeof value === 'string' ? strToU8(value) : value])),
+    }));
+    const withChart = { 'Object 2/content.xml': chartObject, 'ObjectReplacements/Object 2': svm };
+    const read = async (bytes: Buffer, extractAttachments = true) => {
+        const warnings: any[] = [];
+        const ast = await OfficeParser.parseOffice(bytes, { extractAttachments, onWarning: (w: any) => warnings.push(w) } as any) as OfficeParserAST;
+        return { ast, warnings, objects: collectAllNodes(ast).filter(n => n.type === 'chart' || n.type === 'image').map(n => [n.type, (n.metadata as any)?.attachmentName]) };
+    };
+    const drawn = async (ast: OfficeParserAST) => {
+        const { text, messages, nodes } = await nativePdfOf(ast);
+        return { text, codes: messages.map(m => [m.code, m.details?.reason]), images: nodes.filter(n => n.type === 'image').length };
+    };
+
+    for (const [label, body] of [
+        ['a chart as a character in a paragraph, with a replacement picture', `<text:p>Before ${frame('Object 2', true)} after</text:p>`],
+        ['a chart as a character in a paragraph, with none', `<text:p>Before ${frame('Object 2', false)} after</text:p>`],
+        ['a chart anchored to its paragraph, with a replacement picture', `<text:p>Before ${frame('Object 2', true, 'paragraph')}</text:p>`],
+        ['a chart anchored to the page, with a replacement picture', frame('Object 2', true, 'page')],
+    ] as const) {
+        const { ast, objects, warnings } = await read(pkg('text', body, withChart));
+        assert.deepStrictEqual(objects, [['chart', 'Object 2']], `ODT: ${label} is a chart node named after its object`);
+        assert.deepStrictEqual(ast.attachments.map(a => [a.name, a.type]), [['Object 2', 'chart']], `ODT: ${label} gives the chart's attachment only (its replacement is not shown)`);
+        assert.ok(collectAllNodes(ast).find(n => n.type === 'chart')!.text!.includes('ChartTitleXYZ'), `ODT: ${label} holds its chart's text`);
+        assert.strictEqual(warnings.length, 0, `ODT: ${label} gives no warning`);
+        const pdf = await drawn(ast);
+        assert.ok(['ChartTitleXYZ', 'Qone', 'SeriesBeta'].every(t => pdf.text.includes(t)) && !pdf.codes.some(([code, reason]) => code === 'IMAGE_PROCESSING_FAILED' || reason === 'chart'), `ODT: ${label} is drawn as a chart; got ${JSON.stringify(pdf)}`);
+    }
+    // Without extractAttachments the chart is still a chart node (its text from its object).
+    const bare = await read(pkg('text', `<text:p>Before ${frame('Object 2', true)} after</text:p>`, withChart), false);
+    assert.deepStrictEqual([bare.objects, bare.ast.attachments.length], [[['chart', 'Object 2']], 0], 'ODT: without extractAttachments the chart is a chart node, with no attachments');
+
+    // An object of another kind (a Calc table) is its replacement picture, under a name of its own.
+    const calc = (replacement?: Uint8Array) => pkg('text', `<text:p>Lead ${frame('Object 3', !!replacement, 'as-char', 'A Calc table')}</text:p>`, { 'Object 3/content.xml': calcObject, ...(replacement ? { 'ObjectReplacements/Object 3': replacement } : {}) });
+    const pngCalc = await read(calc(png));
+    assert.deepStrictEqual(pngCalc.objects, [['image', 'Object 3.png']], 'ODT: a Calc object is its replacement picture, named by its bytes');
+    assert.deepStrictEqual(pngCalc.ast.attachments.map(a => [a.name, a.mimeType]), [['Object 3.png', 'image/png']], 'ODT: the replacement picture is an attachment of its own');
+    assert.strictEqual((collectAllNodes(pngCalc.ast).find(n => n.type === 'image')!.metadata as any).altText, 'A Calc table', 'ODT: the frame\'s title is the picture\'s alt text');
+    const pngPdf = await drawn(pngCalc.ast);
+    assert.ok(pngPdf.images === 1 && !pngPdf.codes.some(([code]) => code === 'IMAGE_PROCESSING_FAILED'), `ODT: the replacement picture is drawn; got ${JSON.stringify(pngPdf)}`);
+    const svmCalc = await read(calc(svm));
+    assert.deepStrictEqual(svmCalc.objects, [['image', 'Object 3.svm']], 'ODT: a StarView metafile replacement is named .svm');
+    const svmPdf = await OfficeGenerator.generate(svmCalc.ast, 'pdf', { pdfConfig: { engine: 'native' } } as any);
+    assert.ok((svmPdf.messages || []).some((m: any) => m.code === 'IMAGE_PROCESSING_FAILED' && m.details?.name === 'Object 3.svm' && /SVM pictures/.test(m.message)), `ODT: the native engine names an SVM picture it does not embed; got ${JSON.stringify(svmPdf.messages)}`);
+    const noneCalc = await read(calc());
+    assert.deepStrictEqual(noneCalc.objects, [], 'ODT: an object of another kind with no replacement gives no node');
+    assert.ok(noneCalc.warnings.length === 1 && noneCalc.warnings[0].code === 'CONTENT_PART_NOT_READ' && noneCalc.warnings[0].message.includes('Object 3'), `ODT: it is reported, naming the object; got ${JSON.stringify(noneCalc.warnings)}`);
+    // Without extractAttachments the replacement is named after its object, with no attachment.
+    assert.deepStrictEqual((await read(calc(png), false)).objects, [['image', 'Object 3']], 'ODT: without extractAttachments the replacement picture is named after its object');
+
+    // A picture with no name still takes a picture no frame shows, never a replacement.
+    const nameless = await read(pkg('text', `<text:p>${frame('Object 3', true)}<draw:frame draw:name="P"><draw:image/></draw:frame>${frame('Object 2', true)}</text:p>`,
+        { 'Object 3/content.xml': calcObject, 'ObjectReplacements/Object 3': png, 'Pictures/free.png': png, ...withChart }));
+    assert.deepStrictEqual(nameless.objects, [['image', 'Object 3.png'], ['image', 'free.png'], ['chart', 'Object 2']], 'ODT: a nameless picture takes the picture no frame shows');
+
+    // A chart in a spreadsheet cell, with a replacement picture: a chart node.
+    const ods = await read(pkg('spreadsheet', `<table:table table:name="S"><table:table-row><table:table-cell>${frame('Object 2', true)}<text:p>Cell</text:p></table:table-cell></table:table-row></table:table>`, withChart));
+    assert.deepStrictEqual(ods.objects, [['chart', 'Object 2']], 'ODS: a chart in a cell with a replacement picture is a chart node');
+    assert.ok(collectAllNodes(ods.ast).find(n => n.type === 'chart')!.text!.includes('Qone'), 'ODS: the chart in a cell holds its chart\'s text');
+}
+
+/**
+ * What the chart tests build and read back: an XLSX, PPTX or DOCX holding one chart part, a chart's data as
+ * a parser reads it, a hand-built AST showing a chart, the rows of the table a writer makes of it, and the
+ * data the HTML chart script is given.
+ */
+function chartHelpers() {
+    const C = 'xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"';
+    const pts = (values: (string | undefined)[], formats: (string | undefined)[] = []) => values.map((v, i) => v === undefined ? '' : `<c:pt idx="${i}"${formats[i] ? ` formatCode="${formats[i]}"` : ''}><c:v>${v}</c:v></c:pt>`).join('');
+    const strCache = (values: (string | undefined)[]) => `<c:strRef><c:f>S!$A$2</c:f><c:strCache><c:ptCount val="${values.length}"/>${pts(values)}</c:strCache></c:strRef>`;
+    const numCache = (values: (string | undefined)[], code = 'General', formats?: (string | undefined)[]) => `<c:numRef><c:f>S!$B$2</c:f><c:numCache><c:formatCode>${code}</c:formatCode><c:ptCount val="${values.length}"/>${pts(values, formats)}</c:numCache></c:numRef>`;
+    const tx = (name: string) => `<c:tx>${strCache([name])}</c:tx>`;
+    const ser = (name: string, cat: string, val: string, extra = '') => `<c:ser><c:idx val="0"/>${tx(name)}<c:cat>${cat}</c:cat><c:val>${val}</c:val>${extra}</c:ser>`;
+    const title = (text: string) => `<c:title><c:tx><c:rich><a:p><a:r><a:t>${text}</a:t></a:r></a:p></c:rich></c:tx></c:title>`;
+    const chartPart = (plotArea: string, before = '', chartTitle = '') => `<?xml version="1.0"?><c:chartSpace ${C}>${before}<c:chart>${chartTitle}<c:plotArea>${plotArea}</c:plotArea></c:chart></c:chartSpace>`;
+    const zip = (parts: Record<string, string>) => Buffer.from(zipSync(Object.fromEntries(Object.entries(parts).map(([name, value]) => [name, strToU8(value)]))));
+    const S = 'xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"';
+    const P = 'xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"';
+    const rels = (rel: string) => `<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${rel}</Relationships>`;
+    const files = {
+        xlsx: (chart: string) => zip({
+            '[Content_Types].xml': '<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/></Types>',
+            'xl/workbook.xml': `<?xml version="1.0"?><workbook ${S}><sheets><sheet name="S" sheetId="1" r:id="rId1"/></sheets></workbook>`,
+            'xl/_rels/workbook.xml.rels': rels('<Relationship Id="rId1" Target="worksheets/sheet1.xml" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet"/>'),
+            'xl/worksheets/sheet1.xml': `<?xml version="1.0"?><worksheet ${S}><sheetData><row r="1"><c r="A1"><v>7</v></c></row></sheetData></worksheet>`,
+            'xl/charts/chart1.xml': chart,
+        }),
+        pptx: (chart: string) => zip({
+            '[Content_Types].xml': '<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/><Override PartName="/ppt/presentation.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml"/><Override PartName="/ppt/slides/slide1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/></Types>',
+            '_rels/.rels': rels('<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="ppt/presentation.xml"/>'),
+            'ppt/presentation.xml': `<?xml version="1.0"?><p:presentation ${P}><p:sldIdLst><p:sldId id="256" r:id="rId2"/></p:sldIdLst></p:presentation>`,
+            'ppt/slides/slide1.xml': `<?xml version="1.0"?><p:sld ${P}><p:cSld><p:spTree><p:sp><p:txBody><a:p><a:r><a:t>hi</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld></p:sld>`,
+            'ppt/charts/chart1.xml': chart,
+        }),
+        docx: (chart: string) => zip({
+            '[Content_Types].xml': '<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>',
+            'word/document.xml': '<?xml version="1.0"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><w:body><w:p><w:r><w:drawing><wp:inline><wp:extent cx="5486400" cy="3200400"/><wp:docPr id="1" name="Chart 1"/><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" r:id="rId9"/></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p></w:body></w:document>',
+            'word/_rels/document.xml.rels': rels('<Relationship Id="rId9" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart" Target="charts/chart1.xml"/>'),
+            'word/charts/chart1.xml': chart,
+        }),
+    };
+    /** The chart's data as the parser of `fileType` reads `chart`, and the AST it is in. */
+    const read = async (chart: string, fileType: 'xlsx' | 'pptx' | 'docx' = 'xlsx') => {
+        const ast = await OfficeParser.parseOffice(files[fileType](chart), { fileType, extractAttachments: true, onWarning: () => { } } as any) as OfficeParserAST;
+        const data = ast.attachments.find(a => a.chartData)?.chartData;
+        assert.ok(data, `${fileType}: the chart is read`);
+        return { ast, data: data! };
+    };
+    /** A document of one chart showing `chartData` (as an AST built in code gives it). */
+    const astOf = (chartData: unknown, type = 'docx') => ({ type, metadata: {}, content: [{ type: 'chart', text: 'chart', metadata: { attachmentName: 'c' } }], attachments: [{ type: 'chart', name: 'c', mimeType: 'application/xml', extension: 'xml', data: '', chartData }] }) as any as OfficeParserAST;
+    const textOf = (node: OfficeContentNode): string => node.children?.length ? node.children.map(textOf).join('') : node.text ?? '';
+    /** The rows of the first table `format` writes of `ast`, read back, as the text of each cell. */
+    const tableRows = async (ast: OfficeParserAST, format: 'html' | 'docx' | 'odt' | 'md' | 'rtf' = 'docx') => {
+        const out = await OfficeGenerator.generate(ast, format, { htmlConfig: { chartJsSrc: '' }, onWarning: () => { } } as any);
+        const back = await OfficeParser.parseOffice(Buffer.from(out.value as any), { fileType: format, onWarning: () => { } } as any) as OfficeParserAST;
+        const table = collectAllNodes(back).find(n => n.type === 'table');
+        return table?.children?.filter(row => row.type === 'row').map(row => row.children?.map(cell => textOf(cell).trim()));
+    };
+    /** The chart data the HTML chart script is given (its JSON), and the script itself. */
+    const scriptData = async (ast: OfficeParserAST) => {
+        const html = String((await OfficeGenerator.generate(ast, 'html', { onWarning: () => { } } as any)).value);
+        const json = html.match(/<script type="application\/json" id="chart-\d+-data">([\s\S]*?)<\/script>/)?.[1];
+        assert.ok(json, 'HTML: the chart\'s data is written for its script');
+        return { data: JSON.parse(json!.replace(/\\u003c/g, '<')), html };
+    };
+    return { pts, strCache, numCache, tx, ser, title, chartPart, read, astOf, tableRows, scriptData };
+}
+
+/**
+ * A chart's number formats and the text it shows (`formatCode`, `shownValues`, `labelFormatCode`,
+ * `shownLabels`) are kept through `ast.to()` (they were dropped by the AST's normalization), and chart
+ * tables, the HTML chart and native PDF output show that text (a chart's bars are still drawn from the raw
+ * values).
+ */
+async function testChartShownText(): Promise<void> {
+    const { numCache, ser, chartPart, read, astOf, tableRows, scriptData } = chartHelpers();
+    const months = numCache(['45658', '45689'], 'mmm\\-yy');
+    const chart = chartPart(`<c:barChart>${ser('Revenue', months, numCache(['1250000', '1500000'], '&quot;£&quot;#,##0'))}${ser('Margin', months, numCache(['0.12', '0.15'], '0%'))}</c:barChart>`);
+    const { ast, data } = await read(chart, 'docx');
+    assert.deepStrictEqual([data.shownLabels, data.dataSets.map(d => d.shownValues)], [['Jan-25', 'Feb-25'], [['£1,250,000', '£1,500,000'], ['12%', '15%']]], 'DOCX: the chart is read with its shown text');
+
+    // Kept through output: the HTML chart's data holds them (a JSON round trip of the AST too).
+    for (const [label, input] of [['the parsed AST', ast], ['the AST as JSON', JSON.parse(JSON.stringify(ast))]] as const) {
+        const { data: kept, html } = await scriptData(input);
+        assert.deepStrictEqual([kept.labelFormatCode, kept.shownLabels, kept.dataSets.map((d: any) => [d.formatCode, d.shownValues])],
+            ['mmm\\-yy', ['Jan-25', 'Feb-25'], [['"£"#,##0', ['£1,250,000', '£1,500,000']], ['0%', ['12%', '15%']]]], `${label}: the formats and shown text reach the chart's data`);
+        assert.ok(html.includes('shownOr(chartData.shownLabels') && html.includes('item.dataset.shown'), `${label}: the chart script labels its axis and tooltips with the shown text`);
+    }
+    // Table rows: the shown text, in DOCX, ODT and HTML without Chart.js (a chart standing alone; one in a
+    // paragraph DOCX and ODT write as its lines), also after a JSON round trip.
+    for (const [label, input] of [['the chart', astOf(data)], ['the chart as JSON', JSON.parse(JSON.stringify(astOf(data)))]] as const) {
+        for (const format of ['docx', 'odt', 'html'] as const) {
+            assert.deepStrictEqual(await tableRows(input, format), [['', 'Revenue', 'Margin'], ['Jan-25', '£1,250,000', '12%'], ['Feb-25', '£1,500,000', '15%']], `${label}: ${format} chart table shows the chart's text`);
+        }
+    }
+    // Native PDF: the labels under the bars are the shown text.
+    const pdf = await nativePdfOf(ast);
+    assert.ok(pdf.text.includes('Jan-25') && pdf.text.includes('Feb-25') && !pdf.text.includes('45658'), `PDF: the labels under the bars are as the chart shows them; got ${JSON.stringify(pdf.text)}`);
+
+    // A hand-built AST: shown text of another length than its list pairs nothing and is dropped; a format of
+    // another type or past 255 characters is dropped.
+    const odd = { labels: ['a', 'b'], shownLabels: ['A'], labelFormatCode: 'x'.repeat(256), dataSets: [{ name: 'S', values: ['1', '2'], shownValues: ['one', 'two', 'three'], formatCode: 7, pointLabels: [] }], rawTexts: [] };
+    const { data: dropped } = await scriptData(astOf(odd));
+    assert.deepStrictEqual([dropped.shownLabels, dropped.labelFormatCode, dropped.dataSets[0].shownValues, dropped.dataSets[0].formatCode], [undefined, undefined, undefined, undefined], 'shown text of another length, and a format that is no format, are dropped');
+    assert.deepStrictEqual(await tableRows(astOf(odd)), [['', 'S'], ['a', '1'], ['b', '2']], 'a table of a chart whose shown text was dropped shows the raw entries');
+    const good = { ...odd, shownLabels: ['A', 'B'], labelFormatCode: '@', dataSets: [{ ...odd.dataSets[0], shownValues: ['one', 'two'], formatCode: '0' }] };
+    assert.deepStrictEqual(await tableRows(astOf(good)), [['', 'S'], ['A', 'one'], ['B', 'two']], 'a hand-built AST\'s shown text is written');
+
+    // Linear time: n points with a format, read and written as a table.
+    const big = (n: number) => chartPart(`<c:barChart>${ser('Revenue', numCache(Array.from({ length: n }, (_, i) => String(45658 + i)), 'mmm\\-yy'), numCache(Array.from({ length: n }, (_, i) => String(1000 * i)), '&quot;£&quot;#,##0'))}</c:barChart>`);
+    const parts = new Map([4000, 1000].map(n => [n, big(n)]));
+    await assertLinearTime('a chart of n formatted points read and written', 4000, async n => tableRows(astOf((await read(parts.get(n)!, 'docx')).data)));
+}
+
+/**
+ * A chart whose categories have several levels (quarters under years, `c:multiLvlStrCache`) keeps them
+ * apart (#139): `labels` holds the innermost level with its point indexes, `labelLevels` every level. Every
+ * level's labels ran into one list. Chart tables write a column for each outer level, the HTML chart a line
+ * for each, and native PDF output a row of labels under the innermost. The point an outer label starts at has
+ * a row even where it has no inner label or value.
+ */
+async function testChartLabelLevels(): Promise<void> {
+    const { pts, numCache, ser, chartPart, read, astOf, tableRows, scriptData } = chartHelpers();
+    const levels = (lvls: (string | undefined)[][]) => `<c:multiLvlStrRef><c:f>S!$A$2:$B$5</c:f><c:multiLvlStrCache><c:ptCount val="${lvls[0].length}"/>${lvls.map(l => `<c:lvl>${pts(l)}</c:lvl>`).join('')}</c:multiLvlStrCache></c:multiLvlStrRef>`;
+    const chart = chartPart(`<c:barChart>${ser('Sales', levels([['Q1', 'Q2', 'Q1', 'Q2'], ['2025', undefined, '2026']]), numCache(['1', '2', '3', '4']))}</c:barChart>`);
+    let data: any;
+    for (const fileType of ['xlsx', 'pptx', 'docx'] as const) {
+        ({ data } = await read(chart, fileType));
+        assert.deepStrictEqual({ labels: data.labels, labelIndexes: data.labelIndexes, labelLevels: data.labelLevels },
+            { labels: ['Q1', 'Q2', 'Q1', 'Q2'], labelIndexes: [0, 1, 2, 3], labelLevels: [{ labels: ['Q1', 'Q2', 'Q1', 'Q2'], labelIndexes: [0, 1, 2, 3] }, { labels: ['2025', '2026'], labelIndexes: [0, 2] }] },
+            `${fileType}: the innermost level is the labels, every level is kept apart`);
+        assert.deepStrictEqual(data.rawTexts, ['Q1', 'Q2', 'Q1', 'Q2', '2025', '2026', 'Sales', '1', '2', '3', '4'], `${fileType}: the chart's text holds every level, innermost first`);
+    }
+    // A cache of one level is a chart of one level.
+    const one = (await read(chartPart(`<c:barChart>${ser('Sales', levels([['A', 'B']]), numCache(['1', '2']))}</c:barChart>`))).data;
+    assert.deepStrictEqual([one.labels, one.labelIndexes, one.labelLevels], [['A', 'B'], [0, 1], undefined], 'a cache of one level gives no labelLevels');
+
+    const rows = [['', '', 'Sales'], ['2025', 'Q1', '1'], ['', 'Q2', '2'], ['2026', 'Q1', '3'], ['', 'Q2', '4']];
+    for (const format of ['docx', 'html', 'odt'] as const) assert.deepStrictEqual(await tableRows(astOf(data), format), rows, `${format}: the chart table has a column for the outer level`);
+    // Three levels: the outermost column first.
+    const three = (await read(chartPart(`<c:barChart>${ser('S', levels([['a', 'b', 'c', 'd'], ['H1', undefined, 'H2'], ['Y']]), numCache(['1', '2', '3', '4']))}</c:barChart>`))).data;
+    assert.deepStrictEqual(await tableRows(astOf(three)), [['', '', '', 'S'], ['Y', 'H1', 'a', '1'], ['', '', 'b', '2'], ['', 'H2', 'c', '3'], ['', '', 'd', '4']], 'the outermost level is the first column');
+
+    const { data: scripted, html } = await scriptData(astOf(data));
+    assert.deepStrictEqual(scripted.labelLevels, data.labelLevels, 'HTML: the chart\'s data keeps its levels');
+    assert.ok(html.includes('chartData.labelLevels'), 'HTML: the chart script writes a line for each level');
+
+    // Native PDF: 2025 once, centred under the first two bars; 2026 under the last two, a tick between.
+    const pdf = await nativePdfOf(astOf(data));
+    const items = pdf.nodes.filter(n => n.type === 'text' && n.bounds);
+    const at = (text: string) => items.filter(n => (n.text || '').trim() === text).map(n => n.bounds!);
+    const [y2025, y2026, q1] = [at('2025'), at('2026'), at('Q1')];
+    assert.ok(y2025.length === 1 && y2026.length === 1 && q1.length === 2, `PDF: each outer label is drawn once; got ${JSON.stringify(pdf.text)}`);
+    const centre = (b: { x: number; width: number }) => b.x + b.width / 2;
+    assert.ok(centre(y2025[0]) > centre(q1[0]) && centre(y2025[0]) < centre(q1[1]) && centre(y2026[0]) > centre(q1[1]) && y2025[0].y > q1[0].y, `PDF: 2025 is under the first two bars, 2026 under the last two; got ${JSON.stringify([y2025, y2026, q1])}`);
+
+    // Linear time: four levels of n points, read and written as a table.
+    const big = (n: number) => chartPart(`<c:barChart>${ser('S', levels([0, 1, 2, 3].map(level => Array.from({ length: n }, (_, i) => i % (2 ** level) === 0 ? `L${level}-${i}` : undefined))), numCache(Array.from({ length: n }, (_, i) => String(i))))}</c:barChart>`);
+    const parts = new Map([4000, 1000].map(n => [n, big(n)]));
+    await assertLinearTime('a chart of four category levels of n points read and written', 4000, async n => tableRows(astOf((await read(parts.get(n)!)).data)));
+
+    // An empty innermost level under an outer one: the outer labels are kept (they were lost, labels and text).
+    const emptyInner = (await read(chartPart(`<c:barChart>${ser('A', `<c:multiLvlStrRef><c:f>S!A1</c:f><c:multiLvlStrCache><c:ptCount val="2"/><c:lvl></c:lvl><c:lvl>${pts(['Y', undefined])}</c:lvl></c:multiLvlStrCache></c:multiLvlStrRef>`, numCache(['1', '2']))}</c:barChart>`))).data;
+    assert.deepStrictEqual([emptyInner.labels, emptyInner.labelLevels?.[1]?.labels], [[], ['Y']], 'an empty innermost level keeps the outer level\'s labels');
+    assert.ok(emptyInner.rawTexts.includes('Y'), 'and the chart\'s text holds them');
+    for (const format of ['docx', 'md'] as const) assert.deepStrictEqual(await tableRows(astOf(emptyInner), format), [['', '', 'A'], ['Y', '', '1'], ['', '', '2']], `${format}: the level column holds Y`);
+    const emptyInnerAst = (await read(chartPart(`<c:barChart>${ser('A', `<c:multiLvlStrRef><c:f>S!A1</c:f><c:multiLvlStrCache><c:ptCount val="2"/><c:lvl></c:lvl><c:lvl>${pts(['Yonder', undefined])}</c:lvl></c:multiLvlStrCache></c:multiLvlStrRef>`, numCache(['1', '2']))}</c:barChart>`), 'docx')).ast;
+    assert.ok(String((await emptyInnerAst.to('text')).value).includes('Yonder'), 'text output holds the outer label');
+
+    // An outer label whose first point is blank (no inner label, no value): its point has a row.
+    const gap = (await read(chartPart(`<c:barChart>${ser('Sales', levels([['Q1', 'Q2', undefined, 'Q2'], ['2025', undefined, '2026']]), numCache(['1', '2', undefined, '4']))}</c:barChart>`))).data;
+    assert.deepStrictEqual(chartPositions(gap), [0, 1, 2, 3], 'the point an outer label starts at is a position');
+    for (const format of ['docx', 'html', 'odt', 'md'] as const) {
+        assert.deepStrictEqual(await tableRows(astOf(gap), format), [['', '', 'Sales'], ['2025', 'Q1', '1'], ['', 'Q2', '2'], ['2026', '', ''], ['', 'Q2', '4']], `${format}: an outer label at a blank point has its row`);
+    }
+    assert.ok((await scriptData(astOf(gap))).data.positions.includes(2), 'HTML: the chart script draws a group at the outer label\'s point');
+
+    // An outer label covering only blank points (2026 over points 2 and 3): a row of its own in every table, drawn once in native PDF.
+    const covering = (await read(chartPart(`<c:barChart>${ser('S', levels([['Q1', 'Q2', undefined, undefined, 'Q1', 'Q2'], ['2025', undefined, '2026', undefined, '2027']]), numCache(['1', '2', undefined, undefined, '5', '6']))}</c:barChart>`))).data;
+    for (const format of ['html', 'epub', 'md', 'rtf', 'docx', 'odt', 'tex', 'xlsx', 'ods', 'pptx', 'odp']) {
+        const { text } = await writtenText(astOf(covering), format);
+        assert.ok(['2025', '2026', '2027'].every(year => text.includes(year)), `${format}: every outer label is written`);
+    }
+    const coveringPdf = await nativePdfOf(astOf(covering));
+    assert.strictEqual(coveringPdf.nodes.filter(n => n.type === 'text' && (n.text || '').trim() === '2026').length, 1, `PDF: 2026 is drawn once; got ${JSON.stringify(coveringPdf.text)}`);
+
+    // Labels paired by place, and an outer label past the rows: written where it can be, and what has no row reported.
+    const pastRows = { labels: ['a', 'b', 'c'], labelLevels: [{ labels: ['a', 'b', 'c'] }, { labels: ['2025', '2026'], labelIndexes: [0, 5] }], dataSets: [{ name: 'S', values: ['1', '2', '3'], pointLabels: [] }], rawTexts: [] };
+    for (const format of ['md', 'docx', 'html'] as const) {
+        const { text, warnings } = await writtenText(astOf(pastRows), format);
+        assert.ok(text.includes('2025') && warnings.includes('CONTENT_NOT_REPRESENTABLE'), `${format}: 2025 is written, and the label past the rows reported; got ${JSON.stringify(warnings)}`);
+    }
+
+    // The Chart.js chart places each outer label as every chart table does (outerLabelRows), and reports one
+    // with no group as they do: it drew a level of no point indexes by point (H2 lost, H3 under b), and left a
+    // label past the drawn labels out with no word.
+    const featuresOf = async (chartData: unknown, format: string) => {
+        const features: string[] = [];
+        const out = await OfficeGenerator.generate(astOf(chartData), format as any, { htmlConfig: { chartJsSrc: '' }, onWarning: (w: any) => { if (w.code === 'CONTENT_NOT_REPRESENTABLE' && w.details?.feature !== 'chart') features.push(w.details?.feature); } } as any);
+        return { features, out };
+    };
+    const drawn = async (chartData: unknown) => {
+        const features: string[] = [];
+        const html = String((await OfficeGenerator.generate(astOf(chartData), 'html', { onWarning: (w: any) => { if (w.code === 'CONTENT_NOT_REPRESENTABLE') features.push(w.details?.feature); } } as any)).value);
+        // (Made in the script's own context: compared as JSON.)
+        return { labels: JSON.parse(JSON.stringify(chartScriptConfigs(html)[0].data.labels)), features };
+    };
+    const noLabelIdx = (await read(chartPart(`<c:barChart>${ser('Sales', `<c:multiLvlStrRef><c:f>S!A1</c:f><c:multiLvlStrCache><c:ptCount val="4"/><c:lvl><c:pt idx="0"><c:v>Q1</c:v></c:pt><c:pt><c:v>Q2</c:v></c:pt><c:pt idx="2"><c:v>Q3</c:v></c:pt></c:lvl><c:lvl>${pts(['2025', undefined, undefined, '2026'])}</c:lvl></c:multiLvlStrCache></c:multiLvlStrRef>`, numCache(['1', '2', '3', '4']))}</c:barChart>`))).data;
+    const noOuterIdx = (await read(chartPart(`<c:barChart>${ser('S', `<c:multiLvlStrRef><c:f>S!A1</c:f><c:multiLvlStrCache><c:ptCount val="6"/><c:lvl>${pts(['a', undefined, 'b', undefined, undefined, 'c'])}</c:lvl><c:lvl><c:pt idx="0"><c:v>H1</c:v></c:pt><c:pt><c:v>H2</c:v></c:pt><c:pt idx="2"><c:v>H3</c:v></c:pt></c:lvl></c:multiLvlStrCache></c:multiLvlStrRef>`, numCache(['1', undefined, '3', undefined, undefined, '6']))}</c:barChart>`))).data;
+    const noPoint = 'chart category label with no point';
+    for (const [name, chartData, labels, features] of [
+        ['two levels', data, [['Q1', '2025'], ['Q2', ''], ['Q1', '2026'], ['Q2', '']], []],
+        ['an outer label over blank points', covering, [['Q1', '2025'], ['Q2', ''], ['', '2026'], ['Q1', '2027'], ['Q2', '']], []],
+        ['an outer level of no point indexes', noOuterIdx, [['a', 'H1'], ['b', 'H2'], ['c', 'H3']], []],
+        ['labels of no point indexes, an outer label past them', noLabelIdx, [['Q1', '2025'], ['Q2', ''], ['Q3', '']], [noPoint]],
+        ['labels by place, an outer label past them', pastRows, [['a', '2025'], ['b', ''], ['c', '']], [noPoint]],
+    ] as [string, unknown, string[][], string[]][]) {
+        assert.deepStrictEqual(await drawn(chartData), { labels, features }, `HTML (Chart.js): ${name}: each outer label on its group, one with no group reported`);
+        // The same labels on the same rows in the chart's table, and the same report.
+        const rowsOf = await tableRows(astOf(chartData));
+        assert.deepStrictEqual(rowsOf?.slice(1).map(row => [row?.[1], row?.[0]]), labels, `DOCX: ${name}: the table's label and outer columns are what the chart draws`);
+        assert.deepStrictEqual((await featuresOf(chartData, 'md')).features, features, `Markdown: ${name}: reported alike`);
+    }
+    // What the table limit leaves out is reported as such, an outer label with no row among it.
+    const wide = { ...pastRows, dataSets: Array.from({ length: 1000 }, (_, i) => ({ name: `S${i}`, values: ['1', '2', '3'], pointLabels: [] })) };
+    assert.deepStrictEqual((await featuresOf(wide, 'md')).features, ['chart data past the table limit'], 'Markdown: series past the column limit and a label with no row: one report, the limit\'s');
+}
+
+/**
+ * A chart keeps every axis (`axes`: id, kind, side, title, whether hidden) and each series its chart type and
+ * the axes it is drawn on (`chartType`, `axisIds`) (#143). The axis titles are those of the primary axes (the
+ * axes the chart lists first): a date axis gives `xAxisTitle`, and a scatter chart's X axis title is no longer
+ * its `yAxisTitle`. HTML and native PDF output draw a series on a right-hand axis on a second axis there,
+ * each axis with its own title.
+ */
+async function testChartAxes(): Promise<void> {
+    const { numCache, ser, title, chartPart, read, astOf, scriptData } = chartHelpers();
+    const months = numCache(['45658', '45689'], 'mmm\\-yy');
+    const combo = chartPart(`<c:barChart>${ser('Revenue', months, numCache(['1250000', '1500000']))}<c:axId val="11"/><c:axId val="12"/></c:barChart>`
+        + `<c:lineChart>${ser('Margin', months, numCache(['0.12', '0.15'], '0%'))}<c:axId val="13"/><c:axId val="14"/></c:lineChart>`
+        + `<c:dateAx><c:axId val="11"/><c:axPos val="b"/>${title('Month')}<c:crossAx val="12"/></c:dateAx><c:valAx><c:axId val="12"/><c:axPos val="l"/>${title('Revenue (£)')}<c:crossAx val="11"/></c:valAx>`
+        + `<c:valAx><c:axId val="14"/><c:axPos val="r"/>${title('Margin %')}<c:crossAx val="13"/></c:valAx><c:dateAx><c:axId val="13"/><c:delete val="1"/><c:axPos val="b"/><c:crossAx val="14"/></c:dateAx>`);
+    const axes = [
+        { id: '11', kind: 'date', position: 'bottom', title: 'Month' }, { id: '12', kind: 'value', position: 'left', title: 'Revenue (£)' },
+        { id: '14', kind: 'value', position: 'right', title: 'Margin %' }, { id: '13', kind: 'date', position: 'bottom', deleted: true },
+    ];
+    let data: any;
+    for (const fileType of ['xlsx', 'pptx', 'docx'] as const) {
+        ({ data } = await read(combo, fileType));
+        assert.deepStrictEqual({ axes: data.axes, series: data.dataSets.map((d: any) => [d.name, d.chartType, d.axisIds]), xAxisTitle: data.xAxisTitle, yAxisTitle: data.yAxisTitle },
+            { axes, series: [['Revenue', 'bar', ['11', '12']], ['Margin', 'line', ['13', '14']]], xAxisTitle: 'Month', yAxisTitle: 'Revenue (£)' },
+            `${fileType}: every axis is kept, each series its chart type and axes, and a date axis gives the X axis title`);
+    }
+    // A scatter chart's horizontal value axis is its X axis.
+    const scatter = (await read(chartPart(`<c:scatterChart><c:ser><c:idx val="0"/><c:xVal>${numCache(['1', '2'])}</c:xVal><c:yVal>${numCache(['10', '20'])}</c:yVal></c:ser><c:axId val="1"/><c:axId val="2"/></c:scatterChart>`
+        + `<c:valAx><c:axId val="1"/><c:axPos val="b"/>${title('X')}<c:crossAx val="2"/></c:valAx><c:valAx><c:axId val="2"/><c:axPos val="l"/>${title('Y')}<c:crossAx val="1"/></c:valAx>`))).data;
+    assert.deepStrictEqual([scatter.xAxisTitle, scatter.yAxisTitle, scatter.dataSets[0].chartType], ['X', 'Y', 'scatter'], 'a scatter chart\'s X axis title is its X axis\'s');
+    // A chart whose group names no axis it has keeps the rule it had: the first category axis, the first value axis.
+    const unnamed = (await read(chartPart(`<c:barChart>${ser('S', numCache(['1']), numCache(['2']))}</c:barChart><c:catAx><c:axId val="1"/>${title('Cat')}</c:catAx><c:valAx><c:axId val="2"/>${title('Val')}</c:valAx>`))).data;
+    assert.deepStrictEqual([unnamed.xAxisTitle, unnamed.yAxisTitle, unnamed.dataSets[0].axisIds], ['Cat', 'Val', undefined], 'a group naming no axes takes the first category and value axes\' titles');
+    // The primary axes' titles, whichever plot group comes first: LibreOffice writes a secondary group first.
+    const margin = `<c:barChart>${ser('Margin', numCache(['1']), numCache(['1']))}<c:axId val="3"/><c:axId val="4"/></c:barChart>`;
+    const revenue = `<c:lineChart>${ser('Revenue', numCache(['1']), numCache(['1']))}<c:axId val="1"/><c:axId val="2"/></c:lineChart>`;
+    const primaryAxes = `<c:catAx><c:axId val="1"/><c:axPos val="b"/>${title('Month')}</c:catAx><c:valAx><c:axId val="2"/><c:axPos val="l"/>${title('Revenue')}</c:valAx>`;
+    const secondaryAxes = `<c:catAx><c:axId val="3"/><c:delete val="1"/><c:axPos val="b"/></c:catAx><c:valAx><c:axId val="4"/><c:axPos val="r"/>${title('Margin %')}</c:valAx>`;
+    const secondaryFirst = (await read(chartPart(`${margin}${revenue}${primaryAxes}${secondaryAxes}`))).data;
+    assert.deepStrictEqual([secondaryFirst.xAxisTitle, secondaryFirst.yAxisTitle], ['Month', 'Revenue'], 'a secondary plot group listed first: the titles are the primary axes\'');
+    const listedFirst = (await read(chartPart(`${margin}${revenue}${secondaryAxes}${primaryAxes}`))).data;
+    assert.deepStrictEqual([listedFirst.xAxisTitle, listedFirst.yAxisTitle], [undefined, 'Margin %'], 'the axes a chart lists first are its primary axes');
+    // Plot groups sharing the axis the chart lists first are told apart by their other axes, where the chart
+    // lists them (as LibreOffice takes the value axis it lists first as the primary one, on whichever side);
+    // a first axis no group is drawn on is passed over (the first group's axes were taken); an axis a group
+    // names twice counts once (a group of one axis named twice won over the group on it and the value axis).
+    const group = (kind: string, name: string, ...ids: string[]) => `<c:${kind}>${ser(name, numCache(['1']), numCache(['1']))}${ids.map(id => `<c:axId val="${id}"/>`).join('')}</c:${kind}>`;
+    const axis = (kind: string, id: string, text?: string, side?: string) => `<c:${kind}><c:axId val="${id}"/>${side ? `<c:axPos val="${side}"/>` : ''}${text ? title(text) : ''}</c:${kind}>`;
+    for (const [name, plot, titles] of [
+        ['a category axis shared, the secondary group first', `${group('lineChart', 'Margin', '1', '4')}${group('barChart', 'Revenue', '1', '2')}${axis('catAx', '1', 'Month', 'b')}${axis('valAx', '2', 'Revenue', 'l')}${axis('valAx', '4', 'Margin %', 'r')}`, ['Month', 'Revenue']],
+        ['a value axis listed first and shared', `${group('lineChart', 'Other', '3', '2')}${group('barChart', 'Revenue', '1', '2')}${axis('valAx', '2', 'Revenue', 'l')}${axis('catAx', '1', 'Month', 'b')}${axis('catAx', '3', 'Other', 't')}`, ['Month', 'Revenue']],
+        ['a category axis shared, the right-hand value axis listed first', `${group('barChart', 'Revenue', '1', '2')}${group('lineChart', 'Margin', '1', '4')}${axis('catAx', '1', 'Month', 'b')}${axis('valAx', '4', 'Margin %', 'r')}${axis('valAx', '2', 'Revenue', 'l')}`, ['Month', 'Margin %']],
+        ['a first axis in no group, the secondary group first', `${group('lineChart', 'Margin', '3', '4')}${group('barChart', 'Revenue', '1', '2')}${axis('catAx', '9', 'Orphan')}${axis('catAx', '1', 'Month', 'b')}${axis('valAx', '2', 'Revenue', 'l')}${axis('catAx', '3')}${axis('valAx', '4', 'Margin %', 'r')}`, ['Month', 'Revenue']],
+        ['a group naming one axis twice, after the group on it and a value axis', `${group('barChart', 'Revenue', '1', '2')}${group('lineChart', 'Bad', '1', '1')}${axis('catAx', '1', 'Month', 'b')}${axis('valAx', '2', 'Revenue', 'l')}`, ['Month', 'Revenue']],
+        ['a group naming one axis twice, before the group on it and a value axis', `${group('lineChart', 'Bad', '1', '1')}${group('barChart', 'Revenue', '1', '2')}${axis('catAx', '1', 'Month', 'b')}${axis('valAx', '2', 'Revenue', 'l')}`, ['Month', 'Revenue']],
+    ] as [string, string, string[]][]) {
+        const shared = (await read(chartPart(plot))).data;
+        assert.deepStrictEqual([shared.xAxisTitle, shared.yAxisTitle], titles, `${name}: the titles are the primary axes'`);
+    }
+    // Linear in the plot groups: n groups, each on two of 64 axes.
+    const groupsOf = (n: number) => chartPart(Array.from({ length: n }, (_, i) => `<c:barChart><c:axId val="${i % 70}"/><c:axId val="${(i + 1) % 70}"/></c:barChart>`).join('') + Array.from({ length: 64 }, (_, i) => axis('valAx', String(63 - i), `T${i}`)).join(''));
+    const groupParts = new Map([40000, 10000].map(n => [n, groupsOf(n)]));
+    await assertLinearTime('a chart of n plot groups read', 40000, async n => { const d = (await read(groupParts.get(n)!)).data; assert.deepStrictEqual([d.xAxisTitle, d.yAxisTitle], ['T1', 'T0']); });
+    assert.strictEqual((await scriptData(astOf(secondaryFirst))).data.yAxisTitle, 'Revenue', 'HTML: the left scale\'s title is the primary value axis\'s');
+    // With a series at each side, each scale is titled as the axis its series are drawn on, wherever the chart
+    // lists it: the left one's title was `yAxisTitle`, the primary axis's, so a chart listing its right-hand
+    // value axis first had that title at both sides and the left one's nowhere.
+    for (const [name, plot, y, scales] of [
+        ['the right-hand value axis listed first', `${group('barChart', 'Sales', '1', '2')}${group('lineChart', 'Rate', '1', '4')}${axis('catAx', '1', 'Month', 'b')}${axis('valAx', '4', 'Margin %', 'r')}${axis('valAx', '2', 'Revenue', 'l')}`, 'Margin %', ['Revenue', 'Margin %']],
+        ['the secondary axes listed first', `${group('barChart', 'Sales', '1', '2')}${group('lineChart', 'Rate', '3', '4')}${axis('catAx', '3', undefined, 'b')}${axis('valAx', '4', 'Margin %', 'r')}${axis('catAx', '1', 'Month', 'b')}${axis('valAx', '2', 'Revenue', 'l')}`, 'Margin %', ['Revenue', 'Margin %']],
+        ['the right-hand value axis listed first, the left-hand one untitled', `${group('barChart', 'Sales', '1', '2')}${group('lineChart', 'Rate', '1', '4')}${axis('catAx', '1', 'Month', 'b')}${axis('valAx', '4', 'Margin %', 'r')}${axis('valAx', '2', undefined, 'l')}`, 'Margin %', [undefined, 'Margin %']],
+        ['the primary axes listed first', `${group('barChart', 'Sales', '1', '2')}${group('lineChart', 'Rate', '3', '4')}${axis('catAx', '1', 'Month', 'b')}${axis('valAx', '2', 'Revenue', 'l')}${axis('catAx', '3', undefined, 't')}${axis('valAx', '4', 'Margin %', 'r')}`, 'Revenue', ['Revenue', 'Margin %']],
+    ] as [string, string, string, (string | undefined)[]][]) {
+        const sides = (await read(chartPart(plot))).data;
+        assert.strictEqual(sides.yAxisTitle, y, `${name}: yAxisTitle is the primary value axis's`);
+        const html = String((await OfficeGenerator.generate(astOf(sides), 'html', { onWarning: () => { } } as any)).value);
+        const scaleTitles = chartScriptConfigs(html)[0].options.scales;
+        assert.deepStrictEqual([scaleTitles.y.title.text, scaleTitles.y1?.title.text], scales, `HTML: ${name}: the left and right scales are titled as their axes`);
+        const pdf = await nativePdfOf(astOf(sides));
+        const drawnTimes = (text: string) => pdf.text.split(text).length - 1;
+        // (The two turned titles read back as one line, left to right.)
+        assert.deepStrictEqual([drawnTimes('Revenue'), drawnTimes('Margin %')], [scales[0] ? 1 : 0, 1], `PDF: ${name}: each axis's title is drawn once; got ${JSON.stringify(pdf.text)}`);
+        assert.ok(!scales[0] || /Revenue\s+Margin %/.test(pdf.text), `PDF: ${name}: the left axis's title is drawn at the left; got ${JSON.stringify(pdf.text)}`);
+    }
+    // A hand-built chart whose series at the left names no axis: the left scale keeps yAxisTitle.
+    const handBuilt = { labels: ['a', 'b'], yAxisTitle: 'Revenue', axes: [{ id: '4', kind: 'value', position: 'right', title: 'Margin %' }], dataSets: [{ name: 'Sales', values: ['1', '2'], pointLabels: [] }, { name: 'Rate', values: ['3', '4'], pointLabels: [], axisIds: ['1', '4'] }], rawTexts: [] };
+    const handScales = chartScriptConfigs(String((await OfficeGenerator.generate(astOf(handBuilt), 'html', { onWarning: () => { } } as any)).value))[0].options.scales;
+    assert.deepStrictEqual([handScales.y.title.text, handScales.y1?.title.text], ['Revenue', 'Margin %'], 'HTML: a series at the left naming no axis: the left scale is titled yAxisTitle');
+
+    // ODF: axes from chart:axis, a series' attached axis, the primary axis's title.
+    const NS = 'xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0" xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0" xmlns:xlink="http://www.w3.org/1999/xlink" xmlns:chart="urn:oasis:names:tc:opendocument:xmlns:chart:1.0" xmlns:chartooo="http://openoffice.org/2010/chart"';
+    const axisTitle = (t: string) => `<chart:title><text:p>${t}</text:p></chart:title>`;
+    const odfChart = `<?xml version="1.0"?><office:document-content ${NS}><office:body><office:chart><chart:chart chart:class="chart:bar"><chart:plot-area>`
+        + `<chart:axis chart:dimension="x" chart:name="primary-x" chartooo:axis-type="date">${axisTitle('Month')}<chart:categories table:cell-range-address="local-table.$A$2:.$A$3"/></chart:axis>`
+        + `<chart:axis chart:dimension="y" chart:name="primary-y">${axisTitle('Revenue')}</chart:axis><chart:axis chart:dimension="y" chart:name="secondary-y">${axisTitle('Margin %')}</chart:axis>`
+        + '<chart:series chart:values-cell-range-address="local-table.$B$2:.$B$3" chart:class="chart:bar" chart:attached-axis="primary-y"/><chart:series chart:values-cell-range-address="local-table.$C$2:.$C$3" chart:class="chart:line" chart:attached-axis="secondary-y"/></chart:plot-area>'
+        + '<table:table table:name="local-table"><table:table-header-rows><table:table-row><table:table-cell/><table:table-cell office:value-type="string"><text:p>Revenue</text:p></table:table-cell><table:table-cell office:value-type="string"><text:p>Margin</text:p></table:table-cell></table:table-row></table:table-header-rows>'
+        + '<table:table-row><table:table-cell office:value-type="string"><text:p>Jan</text:p></table:table-cell><table:table-cell office:value-type="float" office:value="100"/><table:table-cell office:value-type="float" office:value="0.1"/></table:table-row>'
+        + '<table:table-row><table:table-cell office:value-type="string"><text:p>Feb</text:p></table:table-cell><table:table-cell office:value-type="float" office:value="150"/><table:table-cell office:value-type="float" office:value="0.2"/></table:table-row></table:table>'
+        + '</chart:chart></office:chart></office:body></office:document-content>';
+    const ods = Buffer.from(zipSync({
+        mimetype: [strToU8('application/vnd.oasis.opendocument.spreadsheet'), { level: 0 }],
+        'content.xml': strToU8(`<?xml version="1.0"?><office:document-content ${NS}><office:body><office:spreadsheet><table:table table:name="S"><table:table-row><table:table-cell><draw:frame><draw:object xlink:href="./Object 1"/></draw:frame></table:table-cell></table:table-row></table:table></office:spreadsheet></office:body></office:document-content>`),
+        'Object 1/content.xml': strToU8(odfChart),
+    }));
+    const odsAst = await OfficeParser.parseOffice(ods, { extractAttachments: true, onWarning: () => { } } as any) as OfficeParserAST;
+    const odsData = odsAst.attachments.find(a => a.chartData)!.chartData!;
+    assert.deepStrictEqual({ axes: odsData.axes, series: odsData.dataSets.map(d => [d.name, d.chartType, d.axisIds]), titles: [odsData.xAxisTitle, odsData.yAxisTitle] }, {
+        axes: [{ id: 'primary-x', kind: 'date', title: 'Month' }, { id: 'primary-y', kind: 'value', title: 'Revenue' }, { id: 'secondary-y', kind: 'value', title: 'Margin %' }],
+        series: [['Revenue', 'bar', ['primary-x', 'primary-y']], ['Margin', 'line', ['primary-x', 'secondary-y']]],
+        titles: ['Month', 'Revenue'],
+    }, 'ODS: every axis, each series\' chart type and attached axis, and the primary axes\' titles (the last y axis\'s was taken)');
+
+    // Output: the HTML chart draws the margin on a second axis at the right; native PDF too, with its title.
+    const { data: kept, html } = await scriptData(astOf(data));
+    assert.deepStrictEqual([kept.axes, kept.dataSets.map((d: any) => [d.chartType, d.axisIds])], [axes, [['bar', ['11', '12']], ['line', ['13', '14']]]], 'HTML: the chart\'s data keeps its axes and each series\' type and axes');
+    assert.ok(html.includes("yAxisID: twoAxes && onRight[index] ? 'y1' : 'y'") && html.includes("type: ds.chartType === 'line' ? 'line' : 'bar'"), 'HTML: the chart script draws a line series as a line, on its axis at the right');
+    const pdf = await nativePdfOf(astOf(data));
+    // (The two turned titles read back as one line, left to right.)
+    const tick = (text: string) => pdf.nodes.find(n => n.type === 'text' && n.text === text)?.bounds;
+    const [leftTick, rightTick] = [tick('1500000'), tick('0.15')];
+    assert.ok(/Revenue \(£\)\s+Margin %/.test(pdf.text), `PDF: the right-hand axis's title is drawn after the left's; got ${JSON.stringify(pdf.text)}`);
+    assert.ok(leftTick && rightTick && rightTick.x > leftTick.x + 300 && Math.abs(rightTick.y - leftTick.y) < 1, `PDF: the right-hand axis has its own ticks at the right, scaled to its series; got ${JSON.stringify([leftTick, rightTick])}`);
+
+    // A hand-built AST: an axis of no kind it can have is dropped; a side or flag of another value is.
+    const odd = { labels: ['a'], dataSets: [{ values: ['1'], pointLabels: [], chartType: 'sparkline', axisIds: ['1', '2', '3', '4', '5'] }], axes: [{ id: 1, kind: 'value', position: 'middle', deleted: 'yes', title: 'T' }, { id: 'z', kind: 'bogus' }, null], rawTexts: [] };
+    const { data: normal } = await scriptData(astOf(odd));
+    assert.deepStrictEqual([normal.axes, normal.dataSets[0].chartType, normal.dataSets[0].axisIds], [[{ id: '1', kind: 'value', title: 'T' }], undefined, ['1', '2', '3', '4']], 'axes, a chart type and axis ids are kept as a chart can have them');
+}
+
+/**
+ * A scatter or bubble series keeps its own X values and sizes (`xValues`, `bubbleSizes`, with their point
+ * indexes) (#144): every series' X values were taken to be the first's, and sizes were not read. The chart's
+ * text holds them, chart tables write each series' X, value and size columns, and HTML and native PDF output
+ * draw the chart as points. A property test over generated caches checks every index list and every table row.
+ */
+async function testChartXYSeries(): Promise<void> {
+    const { pts, numCache, tx, title, chartPart, read, astOf, tableRows, scriptData } = chartHelpers();
+    const xySer = (name: string, xs: (string | undefined)[], ys: (string | undefined)[], sizes?: (string | undefined)[]) =>
+        `<c:ser><c:idx val="0"/>${tx(name)}<c:xVal>${numCache(xs)}</c:xVal><c:yVal>${numCache(ys)}</c:yVal>${sizes ? `<c:bubbleSize>${numCache(sizes)}</c:bubbleSize>` : ''}</c:ser>`;
+    const axes = `<c:axId val="1"/><c:axId val="2"/>`;
+    const valAxes = `<c:valAx><c:axId val="1"/><c:axPos val="b"/>${title('X')}<c:crossAx val="2"/></c:valAx><c:valAx><c:axId val="2"/><c:axPos val="l"/>${title('Y')}<c:crossAx val="1"/></c:valAx>`;
+    const scatterXml = chartPart(`<c:scatterChart>${xySer('Series A', ['1', '2'], ['10', '20'])}${xySer('Series B', ['100', '200'], ['30', '40'])}${axes}</c:scatterChart>${valAxes}`);
+    const bubbleXml = chartPart(`<c:bubbleChart>${xySer('Series C', ['1', '2', '3'], ['10', '20', '30'], ['5', '15', '25'])}${axes}</c:bubbleChart><c:valAx><c:axId val="1"/></c:valAx><c:valAx><c:axId val="2"/></c:valAx>`);
+    let scatter: any, bubble: any;
+    for (const fileType of ['xlsx', 'pptx', 'docx'] as const) {
+        scatter = (await read(scatterXml, fileType)).data;
+        assert.deepStrictEqual(scatter.dataSets.map((d: any) => [d.name, d.xValues, d.xValueIndexes, d.values]), [['Series A', ['1', '2'], [0, 1], ['10', '20']], ['Series B', ['100', '200'], [0, 1], ['30', '40']]], `${fileType}: each scatter series keeps its own X values`);
+        assert.deepStrictEqual(scatter.labels, ['1', '2'], `${fileType}: labels stay the first series' X values`);
+        assert.deepStrictEqual(scatter.rawTexts, ['1', '2', 'Series A', '10', '20', 'Series B', '30', '40', '100', '200'], `${fileType}: the chart's text holds every series' X values, the first's once`);
+        bubble = (await read(bubbleXml, fileType)).data;
+        assert.deepStrictEqual([bubble.dataSets[0].bubbleSizes, bubble.dataSets[0].bubbleSizeIndexes], [['5', '15', '25'], [0, 1, 2]], `${fileType}: a bubble series keeps its sizes`);
+        assert.ok(['5', '15', '25'].every(t => bubble.rawTexts.includes(t)), `${fileType}: the chart's text holds the bubble sizes`);
+    }
+
+    // Tables: each series' X and value columns (and sizes), under its name and what each column holds.
+    for (const format of ['docx', 'html', 'odt'] as const) {
+        const rows = await tableRows(astOf(scatter), format);
+        assert.deepStrictEqual(rows?.slice(1), [['X', 'Y', 'X', 'Y'], ['1', '10', '100', '30'], ['2', '20', '200', '40']], `${format}: a scatter chart's table pairs each series' X and Y values; got ${JSON.stringify(rows)}`);
+        assert.deepStrictEqual(rows?.[0]?.filter(Boolean), ['Series A', 'Series B'], `${format}: each series' name heads its columns`);
+    }
+    assert.deepStrictEqual((await tableRows(astOf(bubble)))?.slice(1), [['X', 'Y', 'Size'], ['1', '10', '5'], ['2', '20', '15'], ['3', '30', '25']], 'a bubble chart\'s table has a size column');
+
+    // HTML: drawn as a scatter (or bubble) chart of { x, y } points.
+    const { data: kept, html } = await scriptData(astOf(scatter));
+    assert.deepStrictEqual(kept.dataSets.map((d: any) => d.xValues), [['1', '2'], ['100', '200']], 'HTML: the chart\'s data keeps each series\' X values');
+    assert.ok(html.includes("type: xy ? (bubble ? 'bubble' : 'scatter') : 'bar'") && html.includes('point.r = largest > 0'), 'HTML: the chart script draws a scatter or bubble chart as such');
+    // Native PDF: points, not bars, on an X axis whose ticks reach 200.
+    const pdf = await OfficeGenerator.generate(astOf(scatter), 'pdf', { pdfConfig: { engine: 'native' } } as any);
+    const pdfBack = await nativePdfOf(astOf(scatter));
+    assert.ok(!(pdf.messages || []).some((m: any) => m.details?.reason === 'chart') && pdfBack.nodes.some(n => n.type === 'text' && n.text === '200'), `PDF: a scatter chart is drawn with X ticks to 200; got ${JSON.stringify(pdfBack.text)}`);
+    // (A bar is a rectangle, `re`; a point a circle of curves, `c`.)
+    const page = (await PDFDocument.load(pdf.value as Uint8Array)).getPages()[0];
+    const streams = page.node.normalizedEntries().Contents as any;
+    const content = (streams?.asArray?.() ?? [streams]).map((ref: any) => { const stream = page.doc.context.lookup(ref); return stream instanceof PDFRawStream ? strFromU8(unzlibSync(stream.contents)) : ''; }).join('\n');
+    assert.ok(!/\sre\n/.test(content) && /\sc\n/.test(content), 'PDF: the points are circles, and no bar is drawn');
+
+    // Property: generated caches (gaps, several levels, repeated or descending indexes, values outside a
+    // point) read to index lists that ascend or are absent, and tables whose rows pair entries by index.
+    let state = 0x2545f491;
+    const next = (n: number) => { state = (Math.imul(state, 1664525) + 1013904223) >>> 0; return state % n; };
+    const seen = new Set<string>();
+    let rowsChecked = 0;
+    const ascendsOrAbsent = (indexes: unknown, list: unknown[]) => indexes === undefined || (Array.isArray(indexes) && indexes.length === list.length && indexes.every((v, i) => i === 0 || v > indexes[i - 1]));
+    const flaw = ['none', 'repeat', 'descending', 'outside'] as const;
+    const cache = (values: (string | undefined)[], how: typeof flaw[number], tag: 'num' | 'str') => {
+        let points = values.map((v, i) => v === undefined ? '' : `<c:pt idx="${i}"><c:v>${v}</c:v></c:pt>`).filter(Boolean);
+        if (how === 'repeat' && points.length > 1) points[1] = points[1].replace(/idx="\d+"/, points[0].match(/idx="\d+"/)![0]);
+        if (how === 'descending' && points.length > 1) points = [points[1], points[0], ...points.slice(2)];
+        if (how === 'outside') points.push('<c:v>99</c:v>');
+        return tag === 'num' ? `<c:numRef><c:numCache><c:ptCount val="${values.length}"/>${points.join('')}</c:numCache></c:numRef>` : `<c:strRef><c:strCache><c:ptCount val="${values.length}"/>${points.join('')}</c:strCache></c:strRef>`;
+    };
+    for (let c = 0; c < 300; c++) {
+        const n = 1 + next(5), kind = next(3) === 0 ? 'bar' : next(2) ? 'scatter' : 'bubble';
+        const series = 1 + next(2);
+        const params: any = { n, kind, series: [] as any[] };
+        const sers: string[] = [];
+        for (let s = 0; s < series; s++) {
+            const lists = ['x', 'y', 'size'].map(() => Array.from({ length: n }, (_, i) => next(4) === 0 ? undefined : String(1 + next(50) + i)));
+            const hows = lists.map(() => flaw[next(10) < 8 ? 0 : 1 + next(3)]);
+            const levels = kind === 'bar' && next(3) === 0;
+            params.series.push({ lists, hows, levels });
+            if (kind === 'bar') {
+                const cat = levels ? `<c:multiLvlStrRef><c:multiLvlStrCache><c:ptCount val="${n}"/><c:lvl>${pts(lists[0].map((v, i) => v && `L${i}`))}</c:lvl><c:lvl>${pts(lists[2].map((v, i) => v && `G${i}`))}</c:lvl></c:multiLvlStrCache></c:multiLvlStrRef>` : cache(lists[0].map((v, i) => v && `L${i}`), hows[0], 'str');
+                sers.push(`<c:ser>${tx(`S${s}`)}<c:cat>${cat}</c:cat><c:val>${cache(lists[1], hows[1], 'num')}</c:val></c:ser>`);
+            } else {
+                sers.push(`<c:ser>${tx(`S${s}`)}<c:xVal>${cache(lists[0], hows[0], 'num')}</c:xVal><c:yVal>${cache(lists[1], hows[1], 'num')}</c:yVal>${kind === 'bubble' ? `<c:bubbleSize>${cache(lists[2], hows[2], 'num')}</c:bubbleSize>` : ''}</c:ser>`);
+            }
+        }
+        seen.add(JSON.stringify(params));
+        const xml = chartPart(`<c:${kind}Chart>${sers.join('')}${axes}</c:${kind}Chart>`);
+        const { data } = await read(xml);
+        const label = `case ${c} ${JSON.stringify(params)}`;
+        assert.ok(ascendsOrAbsent(data.labelIndexes, data.labels) && (data.labelLevels ?? []).every((l: any) => ascendsOrAbsent(l.labelIndexes, l.labels)), `${label}: label indexes ascend or are absent`);
+        for (const d of data.dataSets) {
+            assert.ok(ascendsOrAbsent(d.valueIndexes, d.values) && ascendsOrAbsent(d.xValueIndexes, d.xValues ?? []) && ascendsOrAbsent(d.bubbleSizeIndexes, d.bubbleSizes ?? []), `${label}: series index lists ascend or are absent`);
+        }
+        // Rows pair by index: where every list of a case is clean (no flaw), the table is the generated points.
+        const clean = params.series.every((s: any) => s.hows.every((h: string) => h === 'none') && !s.levels);
+        // (A scatter chart of no X values at all has the table of a bar chart, of no labels.)
+        const xyLayout = kind !== 'bar' && params.series.some((s: any) => s.lists[0].some((v: any) => v !== undefined) || (kind === 'bubble' && s.lists[2].some((v: any) => v !== undefined)));
+        if (!clean || (kind !== 'bar' && !xyLayout)) continue;
+        rowsChecked++;
+        const html = String((await OfficeGenerator.generate(astOf(data), 'html', { htmlConfig: { chartJsSrc: '' }, onWarning: () => { } } as any)).value);
+        const rows = [...html.matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/g)].map(m => [...m[1].matchAll(/<t[dh][^>]*>([\s\S]*?)<\/t[dh]>/g)].map(cell => cell[1].replace(/<[^>]+>/g, '').trim()));
+        const used = new Set<number>();
+        for (const s of params.series) for (const [l, list] of (s.lists as (string | undefined)[][]).entries()) if (kind !== 'bar' || l < 2) list.forEach((v, i) => { if (v !== undefined) used.add(i); });
+        const positions = [...used].sort((a, b) => a - b);
+        const expected = positions.map(i => params.series.flatMap((s: any) => kind === 'bar' ? [s.lists[1][i] ?? ''] : [s.lists[0][i] ?? '', s.lists[1][i] ?? '', ...(kind === 'bubble' ? [s.lists[2][i] ?? ''] : [])]));
+        const body = rows.slice(kind === 'bar' ? 1 : 2).map(row => kind === 'bar' ? row.slice(1) : row);
+        if (kind === 'bar') {
+            // A bar chart: the labels of the first series that has any, and each series' values, a row per
+            // point index either has.
+            const labelSeries = params.series.find((s: any) => s.lists[0].some((v: any) => v !== undefined));
+            const barUsed = new Set<number>();
+            for (const s of params.series) s.lists[1].forEach((v: any, i: number) => { if (v !== undefined) barUsed.add(i); });
+            labelSeries?.lists[0].forEach((v: any, i: number) => { if (v !== undefined) barUsed.add(i); });
+            const barExpected = [...barUsed].sort((a, b) => a - b).map(i => [labelSeries?.lists[0][i] !== undefined ? `L${i}` : '', ...params.series.map((s: any) => s.lists[1][i] ?? '')]);
+            assert.deepStrictEqual(rows.slice(1), barExpected, `${label}: each row pairs a point's label and values by its index`);
+        } else {
+            assert.deepStrictEqual(body, expected, `${label}: each row pairs a point's entries by its index`);
+        }
+    }
+    console.log(`  Chart XY property: ${seen.size} distinct cases, ${rowsChecked} of them read back row by row`);
+    assert.ok(seen.size > 250 && rowsChecked > 20, 'the generator gives distinct cases, enough of them clean to check row by row');
+}
+
+/**
+ * A chart's optional lists (X values, bubble sizes, shown texts, point indexes) are given only with entries,
+ * by the parser as by the normalizer (withWellTypedValues): a chart read and the same chart normalized are
+ * alike. An empty `c:xVal` or `c:bubbleSize`, a cache with a number format and no points, and an ODF series
+ * of no values each gave an empty list the normalizer left out.
+ */
+async function testChartEmptyListsLeftOut(): Promise<void> {
+    const { numCache, chartPart } = chartHelpers();
+    const NS = 'xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:chart="urn:oasis:names:tc:opendocument:xmlns:chart:1.0" xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0"';
+    const one = '<c:numLit><c:pt idx="0"><c:v>1</c:v></c:pt></c:numLit>';
+    const cases: [string, string][] = [
+        ['an empty c:xVal and c:bubbleSize', chartPart(`<c:bubbleChart><c:ser><c:xVal/><c:yVal>${one}</c:yVal><c:bubbleSize/></c:ser></c:bubbleChart>`)],
+        ['a cache with a number format and no points', chartPart(`<c:barChart><c:ser><c:cat>${numCache([], '0%')}</c:cat><c:val>${numCache([], '0%')}</c:val></c:ser></c:barChart>`)],
+        ['an ODF series of no values', `<?xml version="1.0"?><office:document-content ${NS}><office:body><office:chart><chart:chart chart:class="chart:bar"><table:table>`
+            + '<table:table-row><table:table-cell/><table:table-cell><text:p>A</text:p></table:table-cell><table:table-cell><text:p>B</text:p></table:table-cell></table:table-row>'
+            + '<table:table-row><table:table-cell/><table:table-cell office:value="1"/><table:table-cell/></table:table-row></table:table></chart:chart></office:chart></office:body></office:document-content>'],
+    ];
+    const required = new Set(['labels', 'values', 'pointLabels', 'rawTexts', 'dataSets']);
+    const emptyOptional = (record: Record<string, unknown>) => Object.keys(record).filter(key => Array.isArray(record[key]) && (record[key] as unknown[]).length === 0 && !required.has(key));
+    for (const [name, xml] of cases) {
+        const data = extractChartData(Buffer.from(xml));
+        const ast = { type: 'pptx', metadata: {}, content: [], attachments: [{ type: 'chart', name: 'c', mimeType: 'application/xml', extension: 'xml', data: '', chartData: data }] } as any as OfficeParserAST;
+        const normalized = withWellTypedValues(ast).attachments[0].chartData;
+        assert.deepStrictEqual(JSON.parse(JSON.stringify(data)), JSON.parse(JSON.stringify(normalized)), `${name}: the chart read is the chart normalized`);
+        const empty = [...emptyOptional(data as any), ...data.dataSets.flatMap(series => emptyOptional(series as any)), ...(data.labelLevels ?? []).flatMap(level => emptyOptional(level as any))];
+        assert.deepStrictEqual(empty, [], `${name}: no optional list is empty`);
+    }
+    const odf = extractChartData(Buffer.from(cases[2][1]));
+    assert.deepStrictEqual([odf.pointCount, odf.dataSets[0].valueIndexes, odf.dataSets[1].valueIndexes, odf.labelIndexes], [1, [0], undefined, undefined], 'the ODF chart keeps its point count, and index lists where they have entries');
+}
+
+/**
+ * Each list a chart read gives is its own: `labels` (and `labelIndexes`) are not the first series' X values,
+ * nor the innermost level's labels, and no two series share their `axisIds`, though they hold the same entries.
+ * A change to one list changed the other. The chart's text holds the first series' X values once.
+ */
+async function testChartListsOwn(): Promise<void> {
+    const { pts, numCache, ser, chartPart } = chartHelpers();
+    const xySer = (name: string) => `<c:ser><c:tx><c:v>${name}</c:v></c:tx><c:xVal>${numCache(['1', '2'])}</c:xVal><c:yVal>${numCache(['5', '6'])}</c:yVal></c:ser>`;
+    const scatter = extractChartData(Buffer.from(chartPart(`<c:scatterChart>${xySer('a')}${xySer('b')}<c:axId val="1"/><c:axId val="2"/></c:scatterChart><c:valAx><c:axId val="1"/></c:valAx><c:valAx><c:axId val="2"/></c:valAx>`)));
+    const [first, second] = scatter.dataSets;
+    assert.ok(scatter.labels !== first.xValues && scatter.labelIndexes !== first.xValueIndexes && first.axisIds !== second.axisIds, 'the labels are not the first series\' X values, and the series do not share their axis ids');
+    assert.deepStrictEqual([scatter.labels, scatter.labelIndexes, first.axisIds], [first.xValues, first.xValueIndexes, second.axisIds], 'yet they hold the same entries');
+    assert.deepStrictEqual(scatter.rawTexts, ['1', '2', 'a', '5', '6', 'b', '5', '6', '1', '2'], 'the chart\'s text holds the first series\' X values once');
+    scatter.labels.push('3');
+    first.axisIds!.push('9');
+    assert.deepStrictEqual([first.xValues, second.axisIds], [['1', '2'], ['1', '2']], 'a change to the labels or one series\' axis ids leaves the others as they are');
+
+    const levels = `<c:multiLvlStrRef><c:f>S!A1</c:f><c:multiLvlStrCache><c:ptCount val="2"/><c:lvl>${pts(['Q1', 'Q2'])}</c:lvl><c:lvl>${pts(['2025'])}</c:lvl></c:multiLvlStrCache></c:multiLvlStrRef>`;
+    const leveled = extractChartData(Buffer.from(chartPart(`<c:barChart>${ser('S', levels, numCache(['1', '2']))}</c:barChart>`)));
+    const inner = leveled.labelLevels![0];
+    assert.ok(inner.labels !== leveled.labels && inner.labelIndexes !== leveled.labelIndexes, 'the labels are not the innermost level\'s');
+    assert.deepStrictEqual([leveled.labels, leveled.labelIndexes], [inner.labels, inner.labelIndexes], 'yet they hold the same entries');
+}
+
+/**
+ * Markdown and RTF output write a chart as its data's table (as DOCX writes one), under its title: they wrote
+ * no chart at all, with no word. A chart standing in a paragraph (Word, ODF) is a table between the
+ * paragraph's parts. Every label and value of a chart from XLSX, PPTX, DOCX and ODT reads back.
+ */
+async function testChartsInMarkdownAndRtf(): Promise<void> {
+    const { numCache, strCache, ser, chartPart, read, astOf, tableRows } = chartHelpers();
+    const NS = 'xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0" xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0" xmlns:xlink="http://www.w3.org/1999/xlink" xmlns:chart="urn:oasis:names:tc:opendocument:xmlns:chart:1.0"';
+    const odfCell = (text: string, value?: string) => value === undefined ? `<table:table-cell office:value-type="string"><text:p>${text}</text:p></table:table-cell>` : `<table:table-cell office:value-type="float" office:value="${value}"/>`;
+    const odt = Buffer.from(zipSync({
+        mimetype: [strToU8('application/vnd.oasis.opendocument.text'), { level: 0 }],
+        'content.xml': strToU8(`<?xml version="1.0"?><office:document-content ${NS}><office:body><office:text><text:p>Before <draw:frame text:anchor-type="as-char"><draw:object xlink:href="./Object 1"/></draw:frame> after</text:p></office:text></office:body></office:document-content>`),
+        'Object 1/content.xml': strToU8(`<?xml version="1.0"?><office:document-content ${NS}><office:body><office:chart><chart:chart chart:class="chart:bar"><chart:title><text:p>OdfChartTitle</text:p></chart:title><chart:plot-area><chart:series/><chart:series/></chart:plot-area>`
+            + `<table:table table:name="local-table"><table:table-header-rows><table:table-row><table:table-cell/>${odfCell('OdfSeriesA')}${odfCell('OdfSeriesB')}</table:table-row></table:table-header-rows>`
+            + `<table:table-row>${odfCell('OdfCatOne')}${odfCell('', '101')}${odfCell('', '202')}</table:table-row><table:table-row>${odfCell('OdfCatTwo')}${odfCell('', '303')}${odfCell('', '404')}</table:table-row></table:table></chart:chart></office:chart></office:body></office:document-content>`),
+    }));
+    const docxChart = chartPart(`<c:barChart>${ser('DocxSeries', strCache(['DocxCatOne', 'DocxCatTwo']), numCache(['0.25', '0.5'], '0%'))}</c:barChart>`);
+    const sources: [string, OfficeParserAST][] = [
+        ['XLSX', await OfficeParser.parseOffice(path.join(__dirname, 'files', 'test.xlsx'), { extractAttachments: true, onWarning: () => { } } as any) as OfficeParserAST],
+        ['PPTX', await OfficeParser.parseOffice(path.join(__dirname, 'files', 'test.pptx'), { extractAttachments: true, onWarning: () => { } } as any) as OfficeParserAST],
+        ['DOCX', (await read(docxChart, 'docx')).ast],
+        ['ODT', await OfficeParser.parseOffice(odt, { fileType: 'odt', extractAttachments: true, onWarning: () => { } } as any) as OfficeParserAST],
+    ];
+    for (const [source, ast] of sources) {
+        const charts = collectAllNodes(ast).filter(n => n.type === 'chart');
+        assert.ok(charts.length > 0, `${source}: the document has a chart`);
+        // What each chart shows: its title, labels and series names, and each value as the chart shows it.
+        const expected = new Set<string>();
+        for (const chart of charts) {
+            const data = ast.attachments.find(a => a.name === (chart.metadata as any)?.attachmentName)?.chartData;
+            assert.ok(data, `${source}: each chart has its data`);
+            if (data!.title) expected.add(data!.title);
+            for (const label of data!.shownLabels ?? data!.labels) expected.add(label);
+            for (const set of data!.dataSets) {
+                if (set.name) expected.add(set.name);
+                for (const value of set.shownValues ?? set.values) expected.add(value);
+            }
+        }
+        for (const format of ['md', 'rtf'] as const) {
+            const out = await ast.to(format, { onWarning: () => { } } as any);
+            const back = await OfficeParser.parseOffice(Buffer.from(String(out.value)), { fileType: format, onWarning: () => { } } as any) as OfficeParserAST;
+            const words = new Set(collectAllNodes(back).filter(n => n.type === 'text').flatMap(n => (n.text || '').split(/\s*\|\s*|\n/).map(t => t.trim())).filter(Boolean));
+            const text = String((await back.to('text')).value);
+            const missing = [...expected].filter(t => !words.has(t) && !text.includes(t));
+            assert.deepStrictEqual(missing, [], `${source} to ${format}: every title, label, series name and value of its charts reads back`);
+            assert.ok(collectAllNodes(back).some(n => n.type === 'table'), `${source} to ${format}: its charts read back as tables`);
+        }
+    }
+    // A chart in a paragraph: the paragraph's text before and after it, the table between.
+    const odtAst = sources[3][1];
+    const md = String((await odtAst.to('md')).value);
+    assert.ok(/^Before\n\n\*\*OdfChartTitle\*\*\n\n\|[^\n]*OdfSeriesA[\s\S]*\| OdfCatTwo \| 303 \| 404 \|\n\nafter/m.test(md), `Markdown: a chart in a paragraph is a table between the paragraph's parts; got ${JSON.stringify(md)}`);
+    const rtf = String((await odtAst.to('rtf')).value);
+    const rtfBack = await OfficeParser.parseOffice(Buffer.from(rtf), { fileType: 'rtf', onWarning: () => { } } as any) as OfficeParserAST;
+    assert.deepStrictEqual(rtfBack.content.map(n => n.type), ['paragraph', 'paragraph', 'table', 'paragraph'], `RTF: a chart in a paragraph is a table between the paragraph's parts (the title before it); got ${JSON.stringify(rtfBack.content.map(n => [n.type, n.text]))}`);
+    // includeCharts: false leaves the chart out of both.
+    for (const format of ['md', 'rtf'] as const) {
+        const off = String((await odtAst.to(format, { includeCharts: false } as any)).value);
+        assert.ok(!off.includes('OdfSeriesA') && off.includes('Before') && off.includes('after'), `${format}: includeCharts false leaves the chart out`);
+    }
+    // A chart of no data is its text, else its name.
+    const bare = { type: 'docx', metadata: {}, attachments: [], content: [{ type: 'chart', text: 'Alpha 1 2', metadata: { attachmentName: 'gone' } }, { type: 'chart', metadata: { attachmentName: 'gone2' } }] } as any;
+    for (const format of ['md', 'rtf'] as const) {
+        const out = String((await OfficeGenerator.generate(bare, format, { onWarning: () => { } } as any)).value);
+        assert.ok(out.includes('Alpha 1 2') && out.includes('gone2'), `${format}: a chart of no data is written as its text, else its name`);
+    }
+    // A scatter chart's table, its header across its columns: an HTML table in Markdown, rows in RTF.
+    const scatterData = { labels: ['1', '2'], dataSets: [{ name: 'A', values: ['10', '20'], xValues: ['1', '2'], pointLabels: [] }, { name: 'B', values: ['30', '40'], xValues: ['100', '200'], pointLabels: [] }], rawTexts: [] };
+    for (const format of ['md', 'rtf'] as const) {
+        assert.deepStrictEqual((await tableRows(astOf(scatterData), format))?.slice(1), [['X', 'Y', 'X', 'Y'], ['1', '10', '100', '30'], ['2', '20', '200', '40']], `${format}: a scatter chart's table reads back`);
+    }
+}
+
 async function runTests(): Promise<void> {
     console.log('Starting exhaustive officeParser test suite...');
     let passed = 0;
@@ -15729,8 +16761,8 @@ async function runTests(): Promise<void> {
         ['BlobInput', testBlobInput],
         ['WordParagraphMark', testWordParagraphMarkFormatting],
         ['WordRunCharacters', testWordRunCharacters],
-        ['WordPlaceholders', testWordPlaceholders],
         ['WordCharts', testWordCharts],
+        ['WordPlaceholders', testWordPlaceholders],
         ['ExcelDates', testExcelDates],
         ['ExcelSheetOrder', testExcelSheetOrder],
         ['ExcelChartSheetKeepsWorksheetIdentity', testExcelChartSheetKeepsWorksheetIdentity],
@@ -15903,6 +16935,59 @@ async function runTests(): Promise<void> {
         ['Template mistyped operators', testTemplateMistypedOperators],
         ['Pictures left out named', testPicturesLeftOutNamed],
         ['Cancellation', testCancellation],
+        ['Math command arguments braced', testMathCommandArguments],
+        ['Native PDF chart in a paragraph', testNativePdfChartInParagraph],
+        ['ODF object frames', testOdfObjectFrames],
+        ['Chart shown text', testChartShownText],
+        ['Chart label levels', testChartLabelLevels],
+        ['Chart axes', testChartAxes],
+        ['Chart XY series', testChartXYSeries],
+        ['Chart lists of no entries left out, read and normalized alike', testChartEmptyListsLeftOut],
+        ['Chart lists each their own', testChartListsOwn],
+        ['Charts in Markdown and RTF', testChartsInMarkdownAndRtf],
+        ['Metafiles typed', testMetafileTyping],
+        ['Metafiles written into DOCX and ODT', testMetafileWriters],
+        ['RTF pictures', testRtfPictures],
+        ['RTF output pictures in their own formats', testRtfPictureWriters],
+        ['RTF tracked deletions', testRtfTrackedChanges],
+        ['RTF equations', testRtfEquations],
+        ['RTF equations written as their own pictures', testRtfEquationWriters],
+        ['RTF embedded objects', testRtfEmbeddedObjects],
+        ['Content-control prompts in every writer', testWordPlaceholderWriters],
+        ['Content-control prompts in linear time', testWordPlaceholdersLinear],
+        ['DOCX embedded objects', testWordEmbeddedObjects],
+        ['Chart text written again', testChartTextRepeats],
+        ['Chart tables written again', testChartTableCopies],
+        ['Native PDF chart text within its line', testNativePdfChartLines],
+        ['Charts in headings, list items, definitions and cells', testChartContainersMarkdownRtf],
+        ['Native PDF chart in a text box, heading, list item or note', testNativePdfChartRoom],
+        ['Chart.js bubbles without X values', testChartScriptBubbles],
+        ['A chart\'s text on lines of its own in text and chunks', testChartTextLines],
+        ['Chart text written again, random charts', testChartTextRepeatsProperty],
+        ['Markdown definition list holding a chart given to onNode once', testChartDefinitionListOnNode],
+        ['Chart copies charged what each writer writes', testChartCopyBound],
+        ['Chart copies charged what each writer writes, random charts', testChartCopyBoundProperty],
+        ['Chart copies charged at least what each writer writes, every class of text', testChartTextWeights],
+        ['A chart in a line charged what DOCX, ODT and LaTeX write of it', testChartLineCopies],
+        ['Native PDF chart text written again charged what it lays out', testNativePdfChartTextCopies],
+        ['Markdown and RTF ask onNode about a line holding a chart before splitting it', testChartLineOnNode],
+        ['Markdown asks onNode about a line holding a chart at its turn, in document order', testChartLineOnNodeOrder],
+        ['XLSX and ODS find a chart by its name at once', testChartLookupLinear],
+        ['Charts in EPUB as tables of their data', testChartsInEpub],
+        ['Charts in EPUB charged what they write', testEpubChartCopies],
+        ['Charts CSV leaves out reported', testChartsInCsvReported],
+        ['CSV files of sheets whose names are made alike', testCsvZipFileNames],
+        ['EPUB and PDF (html engine) report a configuration problem once', testWrappedWritersConfigOnce],
+        ['XLSX charts not read without attachments are reported', testXlsxChartsNotReadReported],
+        ['A chart without its data written as its text', testChartsWithoutData],
+        ['Pictures whose data is not base64', testUndecodablePictures],
+        ['Native PDF pictures embedded by their bytes', testNativePdfPictureSignatures],
+        ['RTF output pictures by their bytes', testRtfPictureSignatures],
+        ['TIFF pictures', testTiffPicturesRefused],
+        ['Metafiles drawn from their bitmaps', testMetafileBitmaps],
+        ['Native PDF pictures in headings, list items and notes drawn in their line', testNativePdfLinePictures],
+        ['Native PDF equations written as their LaTeX source reported', testNativePdfEquationsReported],
+        ['ODF chart blank categories and values keep their positions', testOdfChartBlankPoints],
     ];
 
     for (const [name, fn] of tests) {

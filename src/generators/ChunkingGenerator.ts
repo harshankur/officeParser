@@ -27,6 +27,7 @@ import {
 } from '../types.js';
 import { getOfficeError, checkAbortSignal } from '../utils/errorUtils.js';
 import { BaseGenerator } from './BaseGenerator.js';
+import { chartReferenceText } from '../utils/chartUtils.js';
 import { appendAll } from '../utils/nodeListUtils.js';
 import { isPlaceholderNode } from '../utils/officeGenUtils.js';
 
@@ -97,6 +98,8 @@ function characterBoundary(text: string, offset: number): number {
 /** What collectNodeText reads a picture as, and the notes whose text a chunk already holds. */
 interface ChunkTextContext {
     imageText: (image: OfficeContentNode) => string;
+    /** What a chart of no text is written as: its reference (see ChunkingGenerator.chartReferenceOf). */
+    chartReference: (chart: OfficeContentNode) => string;
     /**
      * Each note's text is in the chunk of its first reference only: a note one parser node shares
      * among thousands of references was copied into every chunk holding one.
@@ -104,19 +107,52 @@ interface ChunkTextContext {
     notesIncluded: Set<OfficeContentNode>;
     /** Whether a content control's placeholder prompt is written (`includePlaceholderText`). */
     includePlaceholderText: boolean;
+    /** Whether charts are written (`includeCharts` is not false), and whether each node asked holds one (see holdsChart). */
+    includeCharts: boolean;
+    chartHolders: WeakMap<OfficeContentNode, boolean>;
+    /** Whether a node holds a placeholder prompt at any depth among its children, found once per node. */
+    holdsPrompt: WeakMap<OfficeContentNode, boolean>;
+}
+
+/** Whether a chart stands among a node's children or their descendants (not its notes), each node asked once. */
+function holdsChart(node: OfficeContentNode, context: ChunkTextContext): boolean {
+    let known = context.chartHolders.get(node);
+    if (known === undefined) {
+        known = false;
+        for (const child of node.children ?? []) if (child.type === 'chart' || holdsChart(child, context)) { known = true; break; }
+        context.chartHolders.set(node, known);
+    }
+    return known;
+}
+
+/** Whether a placeholder prompt (isPlaceholderNode) is among `node`'s children at any depth, found once per node. */
+function holdsPlaceholder(node: OfficeContentNode, memo: WeakMap<OfficeContentNode, boolean>): boolean {
+    let holds = memo.get(node);
+    if (holds === undefined) {
+        holds = false;
+        for (const child of node.children ?? []) if (isPlaceholderNode(child) || holdsPlaceholder(child, memo)) { holds = true; break; }
+        memo.set(node, holds);
+    }
+    return holds;
 }
 
 function collectNodeText(node: OfficeContentNode, context: ChunkTextContext): string {
     // A picture is its alt text and recognized text (see ChunkingGenerator.imageText): its alt text,
     // kept in its metadata, was in no chunk.
     if (node.type === 'image') return context.imageText(node);
+    // A chart of no text (a DOCX or PPTX chart parsed without extractAttachments): its reference, as every flow writer
+    // writes it. It was in no chunk.
+    if (node.type === 'chart' && context.includeCharts && !(node.text ?? '').trim() && !node.children?.length) return context.chartReference(node);
     // A content control's placeholder prompt is not the document's text (TextMetadata.placeholder).
     if (isPlaceholderNode(node) && !context.includePlaceholderText) return '';
     let out = '';
     // A paragraph's `.text` leaves its prompts out: to write them, it is read from its runs, as the
-    // parser built its `.text`, a line break being a newline there.
-    const fromRuns = context.includePlaceholderText && !!node.children?.some(isPlaceholderNode);
-    if (typeof node.text === 'string' && node.text.length > 0 && !fromRuns) {
+    // parser built its `.text`, a line break being a newline there. So is any node holding a prompt below
+    // it (a note's paragraphs): it is read from its children, each deciding again.
+    const fromRuns = context.includePlaceholderText && holdsPlaceholder(node, context.holdsPrompt);
+    // A node holding a chart is read through its children, where the chart's lines stand apart: its `.text` (a DOCX or
+    // ODT paragraph's, a cell's) leaves the chart's text out. (With includeCharts: false, its `.text` as it is.)
+    if (typeof node.text === 'string' && node.text.length > 0 && !fromRuns && !(context.includeCharts && holdsChart(node, context))) {
         out = node.text;
         // The `.text` fast-path above skips the children walk, but DOCX/ODT/RTF set `.text` on the
         // paragraph while the footnote hangs off a nested text child - so its body would be missed.
@@ -132,7 +168,8 @@ function collectNodeText(node: OfficeContentNode, context: ChunkTextContext): st
                 if (breakType === 'textWrapping' || breakType === 'carriageReturn') out += '\n';
                 continue;
             }
-            const block = BLOCK_NODE_TYPES.has(child.type) && !(child.type === 'code' && (child.metadata as CodeMetadata | undefined)?.math === 'inline');
+            // (A chart, its data's lines, counts as a block here.)
+            const block = (BLOCK_NODE_TYPES.has(child.type) || child.type === 'chart') && !(child.type === 'code' && (child.metadata as CodeMetadata | undefined)?.math === 'inline');
             if (out && (block || afterBlock) && !out.endsWith('\n')) out += '\n';
             out += collectNodeText(child, context);
             afterBlock = block;
@@ -206,7 +243,15 @@ export class ChunkingGenerator extends BaseGenerator<'chunks'> {
         const recognized = typeof image.text === 'string' ? image.text : '';
         return label && recognized ? `${label}\n${recognized}` : label || recognized;
     };
-    private readonly textContext: ChunkTextContext = { imageText: this.imageText, notesIncluded: new Set(), includePlaceholderText: !!this.config.includePlaceholderText };
+    /**
+     * A chart's reference (`[Chart: Sales]`, else its attachment's name), as every writer writes a chart of no text.
+     * (Named apart from BaseGenerator's chartReference, which takes the chart's data and name.)
+     */
+    private readonly chartReferenceOf = (chart: OfficeContentNode): string => {
+        const name = (chart.metadata as { attachmentName?: string } | undefined)?.attachmentName;
+        return chartReferenceText(this.getAttachment(name)?.chartData, name);
+    };
+    private readonly textContext: ChunkTextContext = { imageText: this.imageText, chartReference: this.chartReferenceOf, notesIncluded: new Set(), includePlaceholderText: !!this.config.includePlaceholderText, holdsPrompt: new WeakMap(), includeCharts: this.config.includeCharts !== false, chartHolders: new WeakMap() };
 
     /**
      * Merges the user's chunking config with the appropriate defaults for the chosen strategy.
@@ -469,7 +514,7 @@ export class ChunkingGenerator extends BaseGenerator<'chunks'> {
             return;
         }
 
-        const isContentNode = node.type === 'paragraph' || node.type === 'heading' || node.type === 'list' || node.type === 'code' || node.type === 'cell' || node.type === 'image' || (node.text && (!node.children || node.children.length === 0));
+        const isContentNode = node.type === 'paragraph' || node.type === 'heading' || node.type === 'list' || node.type === 'code' || node.type === 'cell' || node.type === 'image' || (node.text && (!node.children || node.children.length === 0)) || (node.type === 'chart' && this.textContext.includeCharts);
 
         if (isStructuralBoundary || isContentNode) {
             const text = typeof override === 'string' ? override : collectNodeText(node, this.textContext);
@@ -763,7 +808,7 @@ export class ChunkingGenerator extends BaseGenerator<'chunks'> {
             if (node.type === 'page') currentPage = (node.metadata as PageMetadata)?.pageNumber;
             if (node.type === 'sheet') currentSheet = contextLabel((node.metadata as SheetMetadata)?.sheetName);
 
-            const isContentNode = node.type === 'paragraph' || node.type === 'heading' || node.type === 'list' || node.type === 'cell' || node.type === 'image' || (node.text && (!node.children || node.children.length === 0));
+            const isContentNode = node.type === 'paragraph' || node.type === 'heading' || node.type === 'list' || node.type === 'cell' || node.type === 'image' || (node.text && (!node.children || node.children.length === 0)) || (node.type === 'chart' && this.textContext.includeCharts);
 
             if (isContentNode) {
                 const text = (typeof override === 'string' ? override : collectNodeText(node, this.textContext)).trim();
@@ -824,7 +869,7 @@ export class ChunkingGenerator extends BaseGenerator<'chunks'> {
             if (node.type === 'page') currentPage = (node.metadata as PageMetadata)?.pageNumber;
             if (node.type === 'sheet') currentSheet = contextLabel((node.metadata as SheetMetadata)?.sheetName);
 
-            const isContentNode = node.type === 'paragraph' || node.type === 'heading' || node.type === 'list' || node.type === 'code' || node.type === 'cell' || node.type === 'image' || (node.text && (!node.children || node.children.length === 0));
+            const isContentNode = node.type === 'paragraph' || node.type === 'heading' || node.type === 'list' || node.type === 'code' || node.type === 'cell' || node.type === 'image' || (node.text && (!node.children || node.children.length === 0)) || (node.type === 'chart' && this.textContext.includeCharts);
 
             if (isContentNode) {
                 const nodeText = typeof override === 'string' ? override : collectNodeText(node, this.textContext);

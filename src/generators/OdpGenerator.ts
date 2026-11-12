@@ -3,9 +3,10 @@ import { ConversionResult, GeneratorConfig, OfficeAttachment, OfficeContentNode,
 import { escapeXml, stripInvalidXmlChars } from '../utils/sanitize.js';
 import { checkAbortSignal } from '../utils/errorUtils.js';
 import { PRESET_TO_ODF } from '../utils/shapeNames.js';
-import { decodeBase64, encUrl, hexColor, odfUserDefinedXml, resolveZipInstant, sniffImageSize, toW3CDTF } from '../utils/officeGenUtils.js';
+import { decodedPictureBytes, encUrl, hexColor, odfUserDefinedXml, resolveZipInstant, sniffImageSize, toW3CDTF } from '../utils/officeGenUtils.js';
 import { pictureKindOf, picturesOfKind } from '../utils/imageUtils.js';
 import { BaseGenerator } from './BaseGenerator.js';
+import { utf8Length } from '../utils/repeatUtils.js';
 import { buildDeck, bulletMargin, Box, DeckItem, DeckParagraph, DeckRun, DeckSlide, unseenTable } from './slides/deck.js';
 
 
@@ -16,6 +17,14 @@ const PICTURE_MIME = new Map<string, string>([['png', 'image/png'], ['jpg', 'ima
 /** Escapes text content for an XML part after stripping XML-illegal characters. */
 function xmlText(s: string | undefined): string {
     return escapeXml(stripInvalidXmlChars(s ?? ''));
+}
+
+/**
+ * A run's text as ODP writes it in a text element: escaped, each run of two or more spaces as a space and a
+ * `<text:s text:c="N"/>` for the rest (ODF collapses spaces otherwise), each tab a `<text:tab/>`.
+ */
+function odpText(s: string): string {
+    return xmlText(s).replace(/ {2,}/g, m => ` <text:s text:c="${m.length - 1}"/>`).replace(/\t/g, '<text:tab/>');
 }
 
 /** A length in points, as ODF writes one. */
@@ -38,6 +47,12 @@ const ODF_NS = 'xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" 
  * slide each.
  */
 export class OdpGenerator extends BaseGenerator<'odp'> {
+    /** What one cell of a chart's table weighs as this writer writes it, beyond its text: a `table:table-cell` with its paragraph and style (see BaseGenerator.chartTable). */
+    protected chartCellWeight = 176;
+    /** What `text` weighs in a chart's table cell: exactly what ODP writes of it (see odpText; BaseGenerator.chartTextWeight). */
+    protected override chartTextWeight(text: string): number {
+        return utf8Length(odpText(text));
+    }
     constructor(ast: OfficeParserAST, config?: GeneratorConfig<'odp'>) {
         super('odp', ast, config);
     }
@@ -46,6 +61,8 @@ export class OdpGenerator extends BaseGenerator<'odp'> {
     private readonly media: { path: string; bytes: Uint8Array; mime: string }[] = [];
     private readonly mediaByKey = new Map<string, number>();
     private readonly attachmentsByName = new Map<string, OfficeAttachment>();
+    /** Each attachment's bytes, decoded once at the first picture showing it; null when its data is not base64. */
+    private readonly pictureBytes = new Map<string, Uint8Array | null>();
 
     /** Reports, once, a table's cells that found no place in its grid. */
     private pastGridReported = false;
@@ -78,10 +95,12 @@ export class OdpGenerator extends BaseGenerator<'odp'> {
             keep: async node => { checkAbortSignal(this.config.abortSignal); const v = await this.handleOnNode(node); return v === false ? false : typeof v === 'string' ? v : true; },
             includeCharts: this.config.includeCharts !== false,
             imageMode: this.imageMode(),
+            mathPicture: node => this.mathPicture(node),
             includeFormatting: this.config.includeFormatting !== false,
             chartTable: node => {
-                const data = this.attachmentsByName.get((node.metadata as { attachmentName?: string } | undefined)?.attachmentName ?? '')?.chartData;
-                return data ? this.chartTable(data, text => ({ type: 'cell', text, children: [{ type: 'text', text }] } as OfficeContentNode), true) : undefined;
+                const name = (node.metadata as { attachmentName?: string } | undefined)?.attachmentName;
+                const data = this.attachmentsByName.get(name ?? '')?.chartData;
+                return data ? this.chartTableOrReference(data, name, text => ({ type: 'cell', text, children: [{ type: 'text', text }] } as OfficeContentNode), true) : undefined;
             },
         }, { backgrounds: this.config.odpConfig.backgrounds ?? undefined });
         for (const feature of deck.unrepresentable) this.warn(OfficeWarningType.CONTENT_NOT_REPRESENTABLE, { feature, format: 'odp' });
@@ -201,14 +220,14 @@ export class OdpGenerator extends BaseGenerator<'odp'> {
         }
         if (item.kind === 'picture') {
             const a = this.attachmentsByName.get(item.attachment);
-            const bytes = a?.data ? decodeBase64(a.data) : undefined;
-            const href = this.mediaFor(item.attachment, bytes ?? undefined, a?.mimeType);
+            const bytes = a?.data ? decodedPictureBytes(this.pictureBytes, item.attachment, a.data) : undefined;
+            const href = bytes === null ? undefined : this.mediaFor(item.attachment, bytes, a?.mimeType);
             if (!href) {
-                // (Its alternative text in its place.)
+                // (Its alternative text in its place: a kind ODP holds none of, or data that is not base64.)
                 const kind = bytes?.length ? pictureKindOf(bytes, a?.mimeType, a?.extension) : '';
                 this.warn(OfficeWarningType.IMAGE_PROCESSING_FAILED, {
                     name: item.attachment,
-                    reason: !a ? 'missing attachment' : !kind ? 'attachment has no data'
+                    reason: !a ? 'missing attachment' : bytes === null ? 'its data could not be decoded' : !kind ? 'attachment has no data'
                         : kind === 'XML' ? 'its data is XML, not a picture' : `ODP output does not take ${picturesOfKind(kind)} (it takes PNG, JPEG, GIF, BMP, TIFF, EMF, WMF and SVG)`,
                 });
                 return item.alt ? this.itemXml({ kind: 'text', box: item.box, paragraphs: [{ runs: [{ text: item.alt }] }] }) : '';
@@ -315,7 +334,7 @@ export class OdpGenerator extends BaseGenerator<'odp'> {
             // Invisible text in its colour made fully transparent (LibreOffice's opacity, which it reads with a colour
             // of the text's own): not seen, still there to select and search.
             + (r.invisible ? ` fo:color="#${(r.color && hexColor(r.color)) || '000000'}" loext:opacity="0%"` : r.color && hexColor(r.color) ? ` fo:color="#${hexColor(r.color)}"` : '') + (r.font || mono ? face(r.font || 'Courier New') : '');
-        const text = xmlText(r.text).replace(/ {2,}/g, m => ` <text:s text:c="${m.length - 1}"/>`).replace(/\t/g, '<text:tab/>');
+        const text = odpText(r.text);
         const span = props ? `<text:span text:style-name="${this.styleNamed(`t|${props}`, 'T', name => `<style:style style:name="${name}" style:family="text"><style:text-properties${props}/></style:style>`)}">${text}</text:span>` : text;
         return r.link ? `<text:a xlink:type="simple" xlink:href="${xmlText(encUrl(r.link))}">${span}</text:a>` : span;
     }

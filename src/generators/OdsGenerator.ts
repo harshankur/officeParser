@@ -1,10 +1,12 @@
 import { zipSync, Zippable } from 'fflate';
 import { ConversionResult, GeneratorConfig, OfficeContentNode, OfficeParserAST, OfficeWarningType } from '../types.js';
+import { attachmentsByExactName } from '../utils/chartUtils.js';
 import { checkAbortSignal } from '../utils/errorUtils.js';
 import { escapeXml, stripInvalidXmlChars } from '../utils/sanitize.js';
 import { encUrl, odfUserDefinedXml, resolveZipInstant, toW3CDTF } from '../utils/officeGenUtils.js';
 import { trimEndChars } from '../utils/textUtils.js';
 import { BaseGenerator } from './BaseGenerator.js';
+import { utf8Length } from '../utils/repeatUtils.js';
 import { buildWorkbook, cellTextProcessor, noteLabels, rowAt, sheetIndex, sheetRef, writableLink, CellValue, hiddenColumns, wholeInFull, WorkSheet } from './sheets/workbook.js';
 
 /** Escapes text content for an XML part after stripping XML-illegal characters. */
@@ -27,6 +29,14 @@ const ODF_NS = 'xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" 
  * reported.
  */
 export class OdsGenerator extends BaseGenerator<'ods'> {
+    /** What one cell of a chart's table weighs as this writer writes it, beyond its text: a `table:table-cell` with its value and paragraph (see BaseGenerator.chartTable). */
+    protected chartCellWeight = 144;
+    /** What `text` weighs in a chart's table cell: escaped, each line after the first a paragraph of its own (`</text:p><text:p>`; see BaseGenerator.chartTextWeight). */
+    protected override chartTextWeight(text: string): number {
+        let lines = 0;
+        for (let i = 0; i < text.length; i++) if (text.charCodeAt(i) === 10) lines++;
+        return utf8Length(xmlText(text)) + 17 * lines;
+    }
     constructor(ast: OfficeParserAST, config?: GeneratorConfig<'ods'>) {
         super('ods', ast, config);
     }
@@ -153,11 +163,13 @@ export class OdsGenerator extends BaseGenerator<'ods'> {
         const keep = async (node: OfficeContentNode) => { checkAbortSignal(this.config.abortSignal); const v = await this.handleOnNode(node); return v === false ? false : typeof v === 'string' ? v : true; };
         const labels = await noteLabels(this.ast.content, keep);
         const textProcessor = cellTextProcessor(this.imageMode(), labels);
-        const chartData = (node: OfficeContentNode) => this.ast.attachments?.find(a => a?.name === (node.metadata as { attachmentName?: string } | undefined)?.attachmentName)?.chartData;
+        // (By its name, from a table made once: a scan a chart node took charts times attachments.)
+        const attachmentNamed = attachmentsByExactName(this.ast.attachments);
+        const chartData = (node: OfficeContentNode) => attachmentNamed((node.metadata as { attachmentName?: string } | undefined)?.attachmentName)?.chartData;
         const { sheets, unrepresentable } = await buildWorkbook(this.ast.content, {
             chartTable: node => {
                 const data = chartData(node);
-                return data ? this.chartTable(data, text => ({ type: 'cell', text, children: [{ type: 'text', text }] } as OfficeContentNode), true) : undefined;
+                return data ? this.chartTableOrReference(data, (node.metadata as { attachmentName?: string } | undefined)?.attachmentName, text => ({ type: 'cell', text, children: [{ type: 'text', text }] } as OfficeContentNode), true) : undefined;
             },
             chartTitle: node => chartData(node)?.title,
             textOf: async node => trimEndChars(await this.processNodeRecursive(node, textProcessor), '\n'),

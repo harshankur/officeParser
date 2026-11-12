@@ -12222,35 +12222,6 @@
                 "style": "a819"
               },
               "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a819\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a818\" text:class-names=\"\">Slide Note 1.</text:span></text:p>"
-            },
-            {
-              "type": "paragraph",
-              "text": "1",
-              "children": [
-                {
-                  "type": "text",
-                  "text": "1",
-                  "formatting": {
-                    "size": "0.16667in",
-                    "color": "#000000",
-                    "font": "Calibri"
-                  },
-                  "metadata": {
-                    "field": "page",
-                    "fieldFormat": "decimal",
-                    "style": "a823"
-                  }
-                }
-              ],
-              "metadata": {
-                "alignment": "right",
-                "spacing": {
-                  "before": 0,
-                  "after": 0
-                },
-                "style": "a823"
-              },
-              "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a823\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a821\" text:class-names=\"\"><text:page-number xmlns:style=\"urn:oasis:names:tc:opendocument:xmlns:style:1.0\" style:num-format=\"1\" text:fixed=\"false\">1</text:page-number></text:span><text:span text:style-name=\"a822\" text:class-names=\"\"/></text:p>"
             }
           ],
           "metadata": {
@@ -13242,35 +13213,6 @@
                 "style": "a902"
               },
               "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a902\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a895\" text:class-names=\"\">Slide Note 2. This is a<text:s text:c=\"1\"/></text:span><text:span text:style-name=\"a896\" text:class-names=\"\">bold</text:span><text:span text:style-name=\"a897\" text:class-names=\"\"><text:s text:c=\"1\"/>text, but no<text:s text:c=\"1\"/></text:span><text:span text:style-name=\"a898\" text:class-names=\"\">italic</text:span><text:span text:style-name=\"a899\" text:class-names=\"\">. Let's strike<text:s text:c=\"1\"/></text:span><text:span text:style-name=\"a900\" text:class-names=\"\">that</text:span><text:span text:style-name=\"a901\" text:class-names=\"\"><text:s text:c=\"1\"/>out.</text:span></text:p>"
-            },
-            {
-              "type": "paragraph",
-              "text": "2",
-              "children": [
-                {
-                  "type": "text",
-                  "text": "2",
-                  "formatting": {
-                    "size": "0.16667in",
-                    "color": "#000000",
-                    "font": "Calibri"
-                  },
-                  "metadata": {
-                    "field": "page",
-                    "fieldFormat": "decimal",
-                    "style": "a906"
-                  }
-                }
-              ],
-              "metadata": {
-                "alignment": "right",
-                "spacing": {
-                  "before": 0,
-                  "after": 0
-                },
-                "style": "a906"
-              },
-              "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a906\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a904\" text:class-names=\"\"><text:page-number xmlns:style=\"urn:oasis:names:tc:opendocument:xmlns:style:1.0\" style:num-format=\"1\" text:fixed=\"false\">2</text:page-number></text:span><text:span text:style-name=\"a905\" text:class-names=\"\"/></text:p>"
             }
           ],
           "metadata": {
@@ -15226,35 +15168,6 @@
                 "style": "a1130"
               },
               "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1130\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1129\" text:class-names=\"\">And then about tables</text:span></text:p>"
-            },
-            {
-              "type": "paragraph",
-              "text": "3",
-              "children": [
-                {
-                  "type": "text",
-                  "text": "3",
-                  "formatting": {
-                    "size": "0.16667in",
-                    "color": "#000000",
-                    "font": "Calibri"
-                  },
-                  "metadata": {
-                    "field": "page",
-                    "fieldFormat": "decimal",
-                    "style": "a1134"
-                  }
-                }
-              ],
-              "metadata": {
-                "alignment": "right",
-                "spacing": {
-                  "before": 0,
-                  "after": 0
-                },
-                "style": "a1134"
-              },
-              "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1134\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1132\" text:class-names=\"\"><text:page-number xmlns:style=\"urn:oasis:names:tc:opendocument:xmlns:style:1.0\" style:num-format=\"1\" text:fixed=\"false\">3</text:page-number></text:span><text:span text:style-name=\"a1133\" text:class-names=\"\"/></text:p>"
             }
           ],
           "metadata": {
@@ -23049,35 +22962,6 @@
                 "style": "a1887"
               },
               "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1887\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1886\" text:class-names=\"\">7. Sat</text:span></text:p>"
-            },
-            {
-              "type": "paragraph",
-              "text": "5",
-              "children": [
-                {
-                  "type": "text",
-                  "text": "5",
-                  "formatting": {
-                    "size": "0.16667in",
-                    "color": "#000000",
-                    "font": "Calibri"
-                  },
-                  "metadata": {
-                    "field": "page",
-                    "fieldFormat": "decimal",
-                    "style": "a1891"
-                  }
-                }
-              ],
-              "metadata": {
-                "alignment": "right",
-                "spacing": {
-                  "before": 0,
-                  "after": 0
-                },
-                "style": "a1891"
-              },
-              "rawContent": "<text:p xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" text:style-name=\"a1891\" text:class-names=\"\" text:cond-style-name=\"\"><text:span text:style-name=\"a1889\" text:class-names=\"\"><text:page-number xmlns:style=\"urn:oasis:names:tc:opendocument:xmlns:style:1.0\" style:num-format=\"1\" text:fixed=\"false\">5</text:page-number></text:span><text:span text:style-name=\"a1890\" text:class-names=\"\"/></text:p>"
             }
           ],
           "metadata": {
@@ -24944,7 +24828,18 @@
                     "3.5",
                     "4.5"
                   ],
-                  "pointLabels": []
+                  "pointLabels": [],
+                  "valueIndexes": [
+                    0,
+                    1,
+                    2,
+                    3
+                  ],
+                  "chartType": "bar",
+                  "axisIds": [
+                    "primary-x",
+                    "primary-y"
+                  ]
                 },
                 {
                   "name": "Series 2",
@@ -24954,7 +24849,18 @@
                     "1.8",
                     "2.8"
                   ],
-                  "pointLabels": []
+                  "pointLabels": [],
+                  "valueIndexes": [
+                    0,
+                    1,
+                    2,
+                    3
+                  ],
+                  "chartType": "bar",
+                  "axisIds": [
+                    "primary-x",
+                    "primary-y"
+                  ]
                 },
                 {
                   "name": "Series 3",
@@ -24964,7 +24870,18 @@
                     "3",
                     "5"
                   ],
-                  "pointLabels": []
+                  "pointLabels": [],
+                  "valueIndexes": [
+                    0,
+                    1,
+                    2,
+                    3
+                  ],
+                  "chartType": "bar",
+                  "axisIds": [
+                    "primary-x",
+                    "primary-y"
+                  ]
                 }
               ],
               "labels": [
@@ -24972,6 +24889,23 @@
                 "Category 2",
                 "Category 3",
                 "Category 4"
+              ],
+              "labelIndexes": [
+                0,
+                1,
+                2,
+                3
+              ],
+              "pointCount": 4,
+              "axes": [
+                {
+                  "id": "primary-x",
+                  "kind": "category"
+                },
+                {
+                  "id": "primary-y",
+                  "kind": "value"
+                }
               ],
               "rawTexts": [
                 "Chart Title",
@@ -25031,7 +24965,18 @@
               "3.5",
               "4.5"
             ],
-            "pointLabels": []
+            "pointLabels": [],
+            "valueIndexes": [
+              0,
+              1,
+              2,
+              3
+            ],
+            "chartType": "bar",
+            "axisIds": [
+              "primary-x",
+              "primary-y"
+            ]
           },
           {
             "name": "Series 2",
@@ -25041,7 +24986,18 @@
               "1.8",
               "2.8"
             ],
-            "pointLabels": []
+            "pointLabels": [],
+            "valueIndexes": [
+              0,
+              1,
+              2,
+              3
+            ],
+            "chartType": "bar",
+            "axisIds": [
+              "primary-x",
+              "primary-y"
+            ]
           },
           {
             "name": "Series 3",
@@ -25051,7 +25007,18 @@
               "3",
               "5"
             ],
-            "pointLabels": []
+            "pointLabels": [],
+            "valueIndexes": [
+              0,
+              1,
+              2,
+              3
+            ],
+            "chartType": "bar",
+            "axisIds": [
+              "primary-x",
+              "primary-y"
+            ]
           }
         ],
         "labels": [
@@ -25059,6 +25026,23 @@
           "Category 2",
           "Category 3",
           "Category 4"
+        ],
+        "labelIndexes": [
+          0,
+          1,
+          2,
+          3
+        ],
+        "pointCount": 4,
+        "axes": [
+          {
+            "id": "primary-x",
+            "kind": "category"
+          },
+          {
+            "id": "primary-y",
+            "kind": "value"
+          }
         ],
         "rawTexts": [
           "Chart Title",

@@ -3656,6 +3656,7 @@
                 { id: 'cfg_includeImages', label: 'Images', type: 'select', options: ['image-only', 'image+ocr-text', 'ocr-text-only', 'none'], names: ['Image only', 'Image + OCR text', 'OCR text only', 'None'], default: 'image-only', width: '130px' },
                 { id: 'cfg_maxInlineImageBytes', label: 'Max Inline Image (bytes)', type: 'number', default: 1500000, width: '90px', min: 0 },
                 { id: 'cfg_includeCharts', label: 'Include Charts', type: 'switch', default: true },
+                { id: 'cfg_includePlaceholderText', label: 'Placeholder Prompts', type: 'switch', default: false },
                 { id: 'cfg_ignoreInternalLinks_generator', label: 'Ignore Internal Links', type: 'switch', default: false },
                 { id: 'cfg_ignoreDefaultStyleMap', label: 'Ignore Default Style Map', type: 'switch', default: false }
             ],
@@ -4361,7 +4362,10 @@
                     <h3>High Fidelity</h3>
                     <p>Unmatched support for merged table cells, anchors, bookmarks, and complex document hierarchies.
                         Content kept apart from the text is read where it stands: SmartArt, text boxes, content controls,
-                        embedded HTML and RTF chunks, comments with their replies, and RTF headers and footers.
+                        embedded HTML and RTF chunks, comments with their replies, and RTF headers and footers; embedded
+                        objects by their pictures, and RTF equations as math. Charts in Word documents too, and every
+                        chart's gaps, formats, category levels, axes and XY series, written by every output but CSV, which
+                        reports them (Markdown, RTF and EPUB as their data's table).
                     </p>
                 </div>
                 <div class="feature-card">
@@ -6061,6 +6065,11 @@
                     ['pdf/rotated.pdf', 'Turned pages read as sections, each with its own orientation'],
                     ['pdf/form_labels_libreoffice.pdf', 'A filled PDF form\'s values, each at its field beside its label'],
                     ['template/invoice.ott', 'An OpenDocument text template: its {{ tags }} as text (fill it in the Template Studio)'],
+                    ['charts/word-charts.docx', 'Word charts read as chart nodes: point positions, number formats, category levels, every axis, XY series'],
+                    ['charts/inline-chart.odt', 'An ODT chart in a line of text, read as a chart'],
+                    ['sheets/formulas.xlsx', 'Cell formulas beside their values (CellMetadata.formula): a filled-down column with each cell\'s own references'],
+                    ['slides/hidden-slide.pptx', 'A hidden slide, marked SlideMetadata.hidden and left out of PDF output unless printHidden; its notes without the notes page\'s slide number'],
+                    ['slides/hidden-slide.odp', 'An ODP hidden slide, marked SlideMetadata.hidden and left out of PDF output unless printHidden; its notes without the notes page\'s slide number'],
                 ].forEach(([path, title]) => moreSamplesGrid.appendChild(sampleButton(path, title)));
             }
 
@@ -6254,6 +6263,7 @@
                     includeImages: document.getElementById('cfg_includeImages').value,
                     maxInlineImageBytes: parseInt(document.getElementById('cfg_maxInlineImageBytes').value, 10),
                     includeCharts: document.getElementById('cfg_includeCharts').checked,
+                    includePlaceholderText: document.getElementById('cfg_includePlaceholderText').checked,
                     ignoreInternalLinks: document.getElementById('cfg_ignoreInternalLinks_generator').checked,
                     ignoreDefaultStyleMap: document.getElementById('cfg_ignoreDefaultStyleMap').checked,
                     metadataOverrides: getMetadataOverrides(),

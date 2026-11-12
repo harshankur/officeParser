@@ -1,4 +1,4 @@
-import { isPointIndexList } from './chartUtils.js';
+import { CHART_AXIS_KINDS, CHART_AXIS_POSITIONS, CHART_TYPES, isPointIndexList, MAX_CHART_AXES, MAX_CHART_LEVELS, MAX_SERIES_AXES } from './chartUtils.js';
 import { mapNodeLists, NodeMemo, nodeMemo } from './nodeListUtils.js';
 import { OfficeContentNode, OfficeParserAST } from '../types.js';
 
@@ -282,6 +282,20 @@ const asStrings = (value: unknown): string[] => {
     return strings;
 };
 
+/** A chart cache's number format as a chart keeps one: a string of at most 255 characters (Excel's limit). */
+const isFormatCode = (value: unknown): value is string => typeof value === 'string' && value.length > 0 && value.length <= 255;
+
+/**
+ * A list of shown texts (`shownValues`, `shownLabels`) as strings, kept only when it holds one entry for
+ * each of the `length` entries it shows: they line up, so a list of another length pairs nothing.
+ */
+const shownList = (value: unknown, length: number): string[] | undefined =>
+    Array.isArray(value) && value.length === length && length > 0 ? asStrings(value) : undefined;
+
+/** `indexes` where they give each of the `length` entries of a list with entries its point index (see isPointIndexList): a list of none has no index list. */
+const indexList = (indexes: unknown, length: number): number[] | undefined =>
+    length > 0 && isPointIndexList(indexes, length) ? indexes : undefined;
+
 /**
  * Each attachment's text fields as strings and its chart data as lists of plain strings. A chart's
  * labels and values are written into a table at every chart showing it, and a label that was a list
@@ -309,6 +323,24 @@ function normalizeAttachments(attachments: OfficeParserAST['attachments']): Offi
             else {
                 const dataSets = Array.isArray(chart.dataSets) ? chart.dataSets.slice(0, MAX_CHART_ENTRIES) : [];
                 const labels = asStrings(chart.labels);
+                const shownLabels = shownList(chart.shownLabels, labels.length);
+                const labelIndexes = indexList(chart.labelIndexes, labels.length);
+                // Each axis with an id and a kind it can have; a side or a flag of another value is dropped.
+                const axes = (Array.isArray(chart.axes) ? chart.axes.slice(0, MAX_CHART_AXES) : []).flatMap((axis: any) => {
+                    if (!axis || typeof axis !== 'object' || typeof axis.kind !== 'string' || !CHART_AXIS_KINDS.has(axis.kind) || !isPrimitive(axis.id)) return [];
+                    return [{
+                        id: asString(axis.id),
+                        kind: axis.kind,
+                        ...(typeof axis.position === 'string' && CHART_AXIS_POSITIONS.has(axis.position) && { position: axis.position }),
+                        ...(axis.title !== undefined && axis.title !== null && { title: asString(axis.title) }),
+                        ...(typeof axis.deleted === 'boolean' && { deleted: axis.deleted }),
+                    }];
+                });
+                const levels = (Array.isArray(chart.labelLevels) ? chart.labelLevels.slice(0, MAX_CHART_LEVELS) : []).map((level: any) => {
+                    const levelLabels = asStrings(level?.labels);
+                    const labelIndexes = indexList(level?.labelIndexes, levelLabels.length);
+                    return { labels: levelLabels, ...(labelIndexes && { labelIndexes }) };
+                });
                 set('chartData', {
                     ...(chart.title !== undefined && { title: asString(chart.title) }),
                     ...(chart.xAxisTitle !== undefined && { xAxisTitle: asString(chart.xAxisTitle) }),
@@ -317,17 +349,35 @@ function normalizeAttachments(attachments: OfficeParserAST['attachments']): Offi
                         if (!series || typeof series !== 'object') return { values: [], pointLabels: [] };
                         const values = asStrings(series.values);
                         const pointLabels = asStrings(series.pointLabels);
+                        const shownValues = shownList(series.shownValues, values.length);
+                        const xValues = asStrings(series.xValues);
+                        const bubbleSizes = asStrings(series.bubbleSizes);
+                        const axisIds = Array.isArray(series.axisIds) ? asStrings(series.axisIds.slice(0, MAX_SERIES_AXES)) : [];
+                        const valueIndexes = indexList(series.valueIndexes, values.length);
+                        const xValueIndexes = indexList(series.xValueIndexes, xValues.length);
+                        const bubbleSizeIndexes = indexList(series.bubbleSizeIndexes, bubbleSizes.length);
+                        const pointLabelIndexes = indexList(series.pointLabelIndexes, pointLabels.length);
                         return {
+                            ...(typeof series.chartType === 'string' && CHART_TYPES.has(series.chartType) && { chartType: series.chartType }),
+                            ...(axisIds.length > 0 && { axisIds }),
                             ...(series.name !== undefined && { name: asString(series.name) }),
                             values,
-                            ...(isPointIndexList(series.valueIndexes, values.length) && { valueIndexes: series.valueIndexes }),
+                            ...(valueIndexes && { valueIndexes }),
+                            ...(isFormatCode(series.formatCode) && { formatCode: series.formatCode }),
+                            ...(shownValues && { shownValues }),
+                            ...(xValues.length > 0 && { xValues, ...(xValueIndexes && { xValueIndexes }) }),
+                            ...(bubbleSizes.length > 0 && { bubbleSizes, ...(bubbleSizeIndexes && { bubbleSizeIndexes }) }),
                             pointLabels,
-                            ...(isPointIndexList(series.pointLabelIndexes, pointLabels.length) && { pointLabelIndexes: series.pointLabelIndexes }),
+                            ...(pointLabelIndexes && { pointLabelIndexes }),
                         };
                     }),
                     labels,
-                    ...(isPointIndexList(chart.labelIndexes, labels.length) && { labelIndexes: chart.labelIndexes }),
+                    ...(labelIndexes && { labelIndexes }),
                     ...(Number.isSafeInteger(chart.pointCount) && chart.pointCount >= 0 && { pointCount: chart.pointCount }),
+                    ...(isFormatCode(chart.labelFormatCode) && { labelFormatCode: chart.labelFormatCode }),
+                    ...(shownLabels && { shownLabels }),
+                    ...(levels.length > 0 && { labelLevels: levels }),
+                    ...(axes.length > 0 && { axes }),
                     rawTexts: asStrings(chart.rawTexts),
                 });
             }

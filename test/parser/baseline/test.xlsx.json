@@ -8748,6 +8748,11 @@
         "title": "Chart Title",
         "dataSets": [
           {
+            "chartType": "bar",
+            "axisIds": [
+              "1402597383",
+              "1291682311"
+            ],
             "name": "Series 1",
             "values": [
               "4.3",
@@ -8764,6 +8769,11 @@
             "pointLabels": []
           },
           {
+            "chartType": "bar",
+            "axisIds": [
+              "1402597383",
+              "1291682311"
+            ],
             "name": "Series 2",
             "values": [
               "2.4",
@@ -8780,6 +8790,11 @@
             "pointLabels": []
           },
           {
+            "chartType": "bar",
+            "axisIds": [
+              "1402597383",
+              "1291682311"
+            ],
             "name": "Series 3",
             "values": [
               "2",
@@ -8809,6 +8824,20 @@
           3
         ],
         "pointCount": 4,
+        "axes": [
+          {
+            "id": "1402597383",
+            "kind": "category",
+            "position": "bottom",
+            "deleted": false
+          },
+          {
+            "id": "1291682311",
+            "kind": "value",
+            "position": "left",
+            "deleted": false
+          }
+        ],
         "rawTexts": [
           "Category 1",
           "Category 2",

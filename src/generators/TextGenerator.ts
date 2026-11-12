@@ -1,6 +1,7 @@
 import { CodeMetadata, ConversionResult, GeneratorConfig, OfficeContentNode, OfficeContentNodeType, OfficeParserAST, OfficeWarningType } from '../types.js';
 import { documentBytesOf, LAYOUT_SPACES_PER_BYTE } from '../utils/budgetUtils.js';
 import { BaseGenerator } from './BaseGenerator.js';
+import { chartReferenceText } from '../utils/chartUtils.js';
 import { clampRepeat, median } from '../utils/numberUtils.js';
 import { base64ByteLength } from '../utils/officeGenUtils.js';
 import { trimRepeated } from '../utils/textUtils.js';
@@ -89,6 +90,12 @@ export class TextGenerator extends BaseGenerator<'text'> {
             // includeCharts: false omits charts in every generator. Plain text otherwise renders a
             // chart's data series (it lives in `node.text`); this drops it when charts are turned off.
             if (node.type === 'chart' && this.config.includeCharts === false) return '';
+            // A chart of no text (a DOCX or PPTX chart parsed without extractAttachments): its reference, as every flow
+            // writer writes it. It wrote nothing.
+            if (node.type === 'chart' && !(node.text || '').trim() && !node.children?.length) {
+                const name = (node.metadata as { attachmentName?: string } | undefined)?.attachmentName;
+                return `${chartReferenceText(this.getAttachment(name)?.chartData, name)}${newline}`;
+            }
 
             // Return raw text for text nodes, and for math in a line of text
             if (node.type === 'text' || (node.type === 'code' && isInlineMath(node))) {
@@ -240,11 +247,12 @@ export class TextGenerator extends BaseGenerator<'text'> {
 
     /**
      * A block starts a line of its own: a list item's text followed by a nested definition list or
-     * table ran into the block's first line (`- itemT`).
+     * table ran into the block's first line (`- itemT`). So does a chart, whose text is its data's lines:
+     * they ran on from the word before it (`In box:45658`).
      */
     protected override childSeparator(previous: string, child: OfficeContentNode): string {
         const newline = this.config.textConfig.newlineDelimiter;
-        return TEXT_NODE_CLASS[child.type] === 'block' && !isInlineMath(child) && previous && !previous.endsWith(newline) ? newline : '';
+        return (TEXT_NODE_CLASS[child.type] === 'block' || child.type === 'chart') && !isInlineMath(child) && previous && !previous.endsWith(newline) ? newline : '';
     }
 
     /**

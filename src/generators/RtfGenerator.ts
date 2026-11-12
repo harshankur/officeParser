@@ -3,14 +3,19 @@ import { hasPageSize, MAX_PAGE_PT, onDocumentPage, type SizedPageSetup } from '.
 import { pageFieldInstruction } from '../utils/pageNumbers.js';
 import { escapeRtf as escapeRtfShared, sanitizeRtfUrl } from '../utils/sanitize.js';
 import { BaseGenerator } from './BaseGenerator.js';
+import { utf8Length } from '../utils/repeatUtils.js';
 import { checkAbortSignal } from '../utils/errorUtils.js';
 import { isSourceComment } from '../utils/commentUtils.js';
 import { heldColumns } from '../utils/columnUtils.js';
-import { base64ByteLength, decodeBase64, embedUrl, furnitureKind, hexColor, isHeaderRow, runningFurniture, sectionFurniture, sectionFurnitureIndex, writableSpacing } from '../utils/officeGenUtils.js';
+import { base64ByteLength, decodeBase64, embedUrl, furnitureKind, hexColor, isHeaderRow, runningFurniture, sectionFurniture, sectionFurnitureIndex, sniffImageSize, writableSpacing } from '../utils/officeGenUtils.js';
 
 /** Each byte's two hex digits. */
 const HEX_BYTES = Array.from({ length: 256 }, (_, i) => i.toString(16).padStart(2, '0'));
 import { clampInt } from '../utils/numberUtils.js';
+import { lookupTable } from '../utils/lookupUtils.js';
+import { pictureKindOf, pictureKindOfBase64, pictureSignature, picturesOfKind, type PictureSignature } from '../utils/imageUtils.js';
+import { decodeBmp, decodeGif, encodePng, MAX_RASTER_PIXELS, type Raster } from '../utils/rasterUtils.js';
+import { metafileSize, rtfLength, rtfWmf } from '../utils/metafileUtils.js';
 
 /** The width in twips a table takes on the page (its cells share it). */
 const PAGE_WIDTH = 9000;
@@ -34,10 +39,29 @@ function rtfDateTime(date: unknown): number | undefined {
     return (d.getUTCMinutes() | (d.getUTCHours() << 6) | (d.getUTCDate() << 11) | ((d.getUTCMonth() + 1) << 16) | (year << 20) | (d.getUTCDay() << 29)) | 0;
 }
 
+/** The RTF picture word for each kind of picture RTF holds, by {@link pictureKindOf}'s name. */
+const RTF_PICTURE_TYPES: Readonly<Record<string, 'pngblip' | 'jpegblip' | 'emfblip' | 'wmetafile8'>> = lookupTable({
+    PNG: 'pngblip', JPEG: 'jpegblip', EMF: 'emfblip', WMF: 'wmetafile8',
+});
+
+/** The picture formats RTF has no word for that are written as a PNG of their pixels. */
+const RTF_AS_PNG: ReadonlySet<string> = new Set(['GIF', 'BMP']);
+
+/** A GIF's first frame or an uncompressed BMP as a PNG, decoded within the pixel budget; why it cannot be read otherwise. */
+function rasterAsPng(bytes: Uint8Array, signature: PictureSignature): { png: Uint8Array } | { reason: string } {
+    const raster: Raster | null = signature === 'GIF' ? decodeGif(bytes, MAX_RASTER_PIXELS) : signature === 'BMP' ? decodeBmp(bytes, MAX_RASTER_PIXELS) : null;
+    const png = raster && encodePng(raster);
+    return png ? { png } : { reason: `its ${signature} data could not be read` };
+}
+
 /**
  * Generates high-fidelity RTF (Rich Text Format) from an AST.
  */
 export class RtfGenerator extends BaseGenerator<'rtf'> {
+    /** What `text` weighs in a chart's caption or cell: escaped, a character past ASCII as `\uN`, a line as `\line` (see BaseGenerator.chartTextWeight). */
+    protected override chartTextWeight(text: string): number {
+        return utf8Length(this.escapeRtf(text));
+    }
     private colorTable: string[] = [];
     /** Each colour's index in {@link colorTable}, so a run finds its colour without scanning the table. */
     private colorIndex = new Map<string, number>();
@@ -68,6 +92,11 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
     private usedMonospace = false;
     /** Whether the math-as-source warning was given (once per document). */
     private mathWarned = false;
+    /**
+     * Each GIF or BMP attachment as the PNG RTF holds it as, or why it could not be read, converted once (null for
+     * one whose data starts like one of them but is not, written as any other picture).
+     */
+    private readonly picturesAsPng = new WeakMap<object, ReturnType<typeof rasterAsPng> | null>();
     /** The section being written, counted from 0 as BreakMetadata.section counts. */
     private currentSection = 0;
     /** The node processor the document is written with, kept so a comment's and a header's blocks are written by it too. */
@@ -147,6 +176,15 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
         const wasWidths = this.widths.length;
         // A table is a level deeper, as is a row no table holds (a sheet's): its cells' paragraphs said
         // nothing of being in a table, which ended the row at the first of them.
+        // A line holding a chart (a paragraph, heading, list item, definition or cell, where Word and ODF put
+        // one) is written in parts, the chart a table between them: see splitAtCharts.
+        // onNode is asked about the line first, as about any node: only a line it leaves alone is split.
+        if (LINE_HOLDERS.has(node.type) && this.config.includeCharts !== false && !this.splitParts.has(node) && node.children?.some(child => child.type === 'chart')) {
+            const verdict = await this.handleOnNode(node);
+            if (verdict === false) return '';
+            if (typeof verdict === 'string') return verdict;
+            return await this.splitAtCharts(node, processor);
+        }
         const opensTable = node.type === 'table' || (node.type === 'row' && this.openTypes[this.openTypes.length - 1] !== 'table');
         if (opensTable) {
             this.tableDepth++;
@@ -203,6 +241,96 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
         if (spacing?.lineMultiple) out += `\\sl${Math.round(spacing.lineMultiple * 240)}\\slmult1`;
         else if (spacing?.lineHeight) out += `\\sl${(spacing.lineAtLeast ? 1 : -1) * Math.round(spacing.lineHeight * 20)}\\slmult0`;
         return out;
+    }
+
+    /**
+     * Objects splitAtCharts made (a cell whose runs it made paragraphs of, those paragraphs, a part of a line), which
+     * onNode is not asked about (their line was) and which are not split again.
+     */
+    private readonly splitParts = new WeakSet<OfficeContentNode>();
+
+    /** onNode's verdict on `node`: none for an object splitAtCharts made (see splitParts), else the hook's. */
+    protected override async handleOnNode(node: OfficeContentNode): Promise<string | false | void> {
+        return this.splitParts.has(node) ? undefined : await super.handleOnNode(node);
+    }
+    /** A list item's text after a chart in it (see splitAtCharts): a line under the item's, not an item of its own. */
+    private readonly itemContinuations = new WeakSet<OfficeContentNode>();
+
+    /**
+     * A line holding a chart, written in parts, each chart a table between them (a table written inside the line's
+     * group broke it: a heading's table read back as headings, a cell's paragraph ran into the chart's title). A
+     * paragraph, heading, term or description: each run between charts a node of its type, the first with its comments
+     * and notes (a run of blank text alone is left out). A list item: the first run the item, the later ones lines
+     * under it (itemContinuations). A cell stays one cell: its runs between charts each a paragraph in it.
+     */
+    private async splitAtCharts(node: OfficeContentNode, processor: (node: OfficeContentNode, childrenOutput: string) => Promise<string>): Promise<string> {
+        const children = node.children ?? [];
+        if (node.type === 'cell') {
+            const regrouped: OfficeContentNode[] = [];
+            let run: OfficeContentNode[] = [];
+            const flush = () => {
+                if (run.length) {
+                    const paragraph = { type: 'paragraph', children: run } as OfficeContentNode;
+                    this.splitParts.add(paragraph);
+                    regrouped.push(paragraph);
+                }
+                run = [];
+            };
+            for (const child of children) {
+                if (child.type === 'chart' || child.type === 'table' || LINE_HOLDERS.has(child.type)) { flush(); regrouped.push(child); }
+                else run.push(child);
+            }
+            flush();
+            const cell = { ...node, children: regrouped };
+            this.splitParts.add(cell);
+            return await this.processNodeRecursive(cell, processor);
+        }
+        let out = '';
+        let run: OfficeContentNode[] = [];
+        let first = true;
+        const flush = async () => {
+            if (run.some(child => child.type !== 'text' || (child.text || '').trim() || child.notes?.length)) {
+                const part = { ...node, text: undefined, children: run, ...(first ? {} : { comments: undefined, notes: undefined }) } as OfficeContentNode;
+                if (!first && node.type === 'list') this.itemContinuations.add(part);
+                this.splitParts.add(part);
+                out += await this.processNodeRecursive(part, processor);
+                first = false;
+            }
+            run = [];
+        };
+        for (const child of children) {
+            if (child.type !== 'chart') { run.push(child); continue; }
+            await flush();
+            out += await this.processNodeRecursive(child, processor);
+        }
+        await flush();
+        return out;
+    }
+
+    /**
+     * A picture's goals (`\picwgoal`, `\pichgoal`, twips) for its size in inches, cut to the width available (the cell's,
+     * else the page's) keeping its shape, as DOCX and ODT output cut a picture to the text's width; 3 by 2.25 inches
+     * when its size is not known.
+     */
+    private pictureGoals(inches: { w: number; h: number } | undefined): string {
+        if (!inches) return '\\picwgoal4320\\pichgoal3240';
+        const width = this.widths[this.widths.length - 1] ?? PAGE_WIDTH;
+        const scale = inches.w * 1440 > width ? width / (inches.w * 1440) : 1;
+        return `\\picwgoal${rtfLength(inches.w * scale, 1440)}\\pichgoal${rtfLength(inches.h * scale, 1440)}`;
+    }
+
+    /**
+     * The size words of a PNG, JPEG or EMF picture, from its own header: an EMF's frame (metafileSize; `\picw`, `\pich` in
+     * HIMETRIC, as Word writes them), a PNG's or JPEG's pixels (sniffImageSize; `\picw`, `\pich` in pixels), at 96 pixels an
+     * inch for the goals. The default goals alone where the header gives no size.
+     */
+    private pictureSize(type: 'pngblip' | 'jpegblip' | 'emfblip', bytes: Uint8Array): string {
+        const px = type === 'emfblip' ? metafileSize(bytes) : sniffImageSize(bytes);
+        if (!px || !(px.w > 0) || !(px.h > 0) || !Number.isFinite(px.w) || !Number.isFinite(px.h)) return this.pictureGoals(undefined);
+        const inches = { w: px.w / 96, h: px.h / 96 };
+        return type === 'emfblip'
+            ? `\\picw${rtfLength(inches.w, 2540)}\\pich${rtfLength(inches.h, 2540)}${this.pictureGoals(inches)}`
+            : `\\picw${rtfLength(px.w, 1)}\\pich${rtfLength(px.h, 1)}${this.pictureGoals(inches)}`;
     }
 
     private pard(): string {
@@ -335,6 +463,8 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
                         : isOrdered ? `${clampInt(meta.itemIndex, 0, 999_999_998, 0) + 1}. ` : '\\bullet ';
                     const listControl = isOrdered ? '\\pndec' : '\\pnbullet';
                     const pPr = this.pard();
+                    // The item's text after a chart in it (see splitAtCharts): a line at the item's indent, no marker.
+                    if (this.itemContinuations.has(node)) return `${pPr}\\li${indent} ${childrenOutput}\\par\n`;
                     return `${pPr}\\li${indent}\\fi-360\\ilvl${level}${listControl} ${marker}${childrenOutput}\\par\n`;
                 }
 
@@ -366,7 +496,8 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
                     // A nested table's cell ends in \nestcell; a cell ending in a table, in a
                     // paragraph of its own (as Word writes one), not in the table's last row.
                     const end = this.tableDepth > 1 ? '\\nestcell' : '\\cell';
-                    const endsInTable = node.children?.[node.children.length - 1]?.type === 'table';
+                    // (Or in a nested table's last row: a chart's table, see splitAtCharts.)
+                    const endsInTable = node.children?.[node.children.length - 1]?.type === 'table' || childrenOutput.endsWith('{\\nonesttables\\par}\n');
                     return `${this.pard()}\\sb60\\sa60 ${childrenOutput}${endsInTable ? `${this.pard()} ${end}` : end}\n`;
                 }
 
@@ -385,15 +516,54 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
 
                     let pict = '';
                     const attachment = this.getAttachment(meta?.attachmentName);
+                    // A GIF or BMP, which RTF has no word for (known by the start of its data), is turned into
+                    // a PNG before it is charged, and charged the PNG it is written as. (Each attachment converted
+                    // once: decoding is the picture's pixels' work, and it may show many times. A TIFF is not
+                    // converted: it is refused below.)
+                    let converted: ReturnType<typeof rasterAsPng> | undefined;
+                    if (attachment?.data && RTF_AS_PNG.has(pictureKindOfBase64(attachment.data))) {
+                        let entry = this.picturesAsPng.get(attachment);
+                        if (entry === undefined) {
+                            let bytes: Uint8Array | undefined;
+                            try { bytes = decodeBase64(attachment.data); } catch { /* reported below, at each showing */ }
+                            const kind = bytes && pictureSignature(bytes);
+                            // (A start that names one of them without its signature: written as any other picture.)
+                            entry = !bytes ? { reason: 'its data could not be decoded' } : kind && RTF_AS_PNG.has(kind) ? rasterAsPng(bytes, kind) : null;
+                            this.picturesAsPng.set(attachment, entry);
+                        }
+                        converted = entry ?? undefined;
+                        // (One that cannot be read is written nowhere, so charged nothing: reported, and its alt text written.)
+                        if (converted && 'reason' in converted) this.warn(OfficeWarningType.IMAGE_PROCESSING_FAILED, { name: meta?.attachmentName, reason: converted.reason });
+                    }
+                    const png = converted && 'png' in converted ? converted.png : undefined;
                     // (Within the document's budget of picture data: see inlineWithinBudget. Past it, the
-                    // picture is its alt text or name, as one RTF cannot carry.)
-                    const withinBudget = !!attachment?.data && this.inlineWithinBudget(base64ByteLength(attachment.data), meta?.attachmentName);
-                    if (attachment && attachment.data && !withinBudget) pict = this.escapeRtf(meta?.altText || `[Image: ${meta?.attachmentName}]`);
-                    if (attachment && attachment.data && withinBudget) {
-                        const type = attachment.extension === 'png' ? 'pngblip' : 'jpegblip';
+                    // picture is its alt text or name, as one RTF cannot carry. Charged the bytes it is written as.)
+                    const withinBudget = !!attachment?.data && (!converted || !!png) && this.inlineWithinBudget(png ? png.length : base64ByteLength(attachment.data), meta?.attachmentName);
+                    if (attachment && attachment.data && (!converted || png) && !withinBudget) pict = this.escapeRtf(meta?.altText || `[Image: ${meta?.attachmentName}]`);
+                    // The picture in its own format, by its bytes: PNG, JPEG, EMF, or a WMF without its
+                    // placeable header (RTF gives the size in \picw and the goals instead). Any other is
+                    // reported and written as its alt text: written as JPEG data, no reader could open it.
+                    let decoded: Uint8Array | undefined = withinBudget ? png : undefined;
+                    // (Data that is not base64 is reported and the picture written as its alt text: the decoding
+                    // threw, and the whole document failed with it.)
+                    if (attachment && attachment.data && withinBudget && !converted) {
+                        try { decoded = decodeBase64(attachment.data); } catch {
+                            this.warn(OfficeWarningType.IMAGE_PROCESSING_FAILED, { name: meta?.attachmentName, reason: 'its data could not be decoded' });
+                        }
+                    }
+                    // (By its signature alone: a picture named by its type or extension was written in a format its
+                    // bytes are not.)
+                    const signature = decoded ? pictureSignature(decoded) : undefined;
+                    const type = decoded && signature ? RTF_PICTURE_TYPES[signature] : undefined;
+                    if (decoded && !type) {
+                        const kind = signature ?? pictureKindOf(decoded, attachment!.mimeType, attachment!.extension);
+                        this.warn(OfficeWarningType.IMAGE_PROCESSING_FAILED, { name: meta?.attachmentName, reason: `RTF output does not take ${picturesOfKind(kind)} (it takes PNG, JPEG, EMF and WMF, and GIF and BMP as PNG)` });
+                    }
+                    if (decoded && type) {
+                        const wmf = type === 'wmetafile8' ? rtfWmf(decoded) : undefined;
                         // The picture as hex, 64 bytes a line, each line built and then joined: added a
                         // character at a time to one string, a large picture ran out of memory.
-                        const bytes = decodeBase64(attachment.data);
+                        const bytes = wmf ? wmf.data : decoded;
                         const lines: string[] = [];
                         for (let i = 0; i < bytes.length; i += 64) {
                             let line = '';
@@ -401,8 +571,13 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
                             lines.push(line);
                         }
                         const hex = lines.join('\n') + (bytes.length > 0 && bytes.length % 64 === 0 ? '\n' : '');
-                        // Default goals (approx 3 inches wide at 1440 twips per inch)
-                        pict = `{\\pict\\${type}\\picwgoal4320\\pichgoal3240\n${hex}\n}\n`;
+                        // Each picture at the size its own header gives, cut to the width available: a WMF's from
+                        // its placeable header (its \picw and \pich in HIMETRIC, mapping mode 8), the others' from
+                        // theirs (pictureSize); 3 by 2.25 inches where the header gives none.
+                        const size = wmf
+                            ? `\\picw${wmf.picw ?? 7620}\\pich${wmf.pich ?? 5715}${this.pictureGoals(wmf.goalWidth !== undefined && wmf.goalHeight !== undefined ? { w: wmf.goalWidth / 1440, h: wmf.goalHeight / 1440 } : undefined)}`
+                            : this.pictureSize(type as 'pngblip' | 'jpegblip' | 'emfblip', decoded);
+                        pict = `{\\pict\\${type}${size}\n${hex}\n}\n`;
                         // A picture that is a link is the result of a HYPERLINK field, as linked text is.
                         if (meta?.link && (!this.config.ignoreInternalLinks || meta.linkType === 'external')) {
                             const safeLink = sanitizeRtfUrl(meta.link);
@@ -446,6 +621,10 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
                 case 'code': {
                     // A code block, or an equation (as its LaTeX source: RTF has no math of its own), in
                     // the monospace font, its lines kept; inline math sits in its line. Both were dropped.
+                    // An equation with its document's own picture is that picture: in its line, or a
+                    // paragraph of its own among the blocks (the image case's rule).
+                    const picture = this.mathPicture(node);
+                    if (picture) return render(picture, '');
                     const meta = node.metadata as CodeMetadata | undefined;
                     if (meta?.math && !this.mathWarned) {
                         this.mathWarned = true;
@@ -497,7 +676,22 @@ export class RtfGenerator extends BaseGenerator<'rtf'> {
                 // Rendered through their children only (RTF has no native form for these). Listed
                 // explicitly, with no `default`, so that under `noImplicitReturns` a new
                 // OfficeContentNodeType fails to compile until it is classified here.
-                case 'chart':
+                case 'chart': {
+                    // Its data's table (see BaseGenerator.chartTableWritten), under its title, as DOCX writes one.
+                    // It was left out with no word.
+                    if (this.config.includeCharts === false) return '';
+                    const meta = node.metadata as { attachmentName?: string } | undefined;
+                    const data = this.getAttachment(meta?.attachmentName)?.chartData;
+                    // Without its data: its text, else its reference, written again within the chart-copy budget (see
+                    // chartLineWritten).
+                    if (!data) return `${this.pard()}\\sa120 ${this.chartLineWritten(node, text => this.escapeRtf(text))}\\par\n`;
+                    const cell = (text: string): OfficeContentNode => ({ type: 'cell', children: [{ type: 'paragraph', children: [{ type: 'text', text }] }] } as OfficeContentNode);
+                    const title = this.chartTitle(data).trim();
+                    const caption = title ? `${this.pard()}\\sa120 {\\b ${this.escapeRtf(title)}}\\par\n` : '';
+                    const table = await this.chartTableWritten(data, cell, async t => this.chartWritten(await this.processNodeRecursive(t, this.processor!)));
+                    if (table === undefined) return `${caption}${this.pard()}\\sa120 ${this.escapeRtf(this.chartReference(data, meta?.attachmentName))}\\par\n`;
+                    return caption + table;
+                }
                 case 'drawing':
                 case 'slide':
                 case 'note':

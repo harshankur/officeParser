@@ -5,6 +5,8 @@ import { BaseGenerator } from './BaseGenerator.js';
 import { HtmlGenerator } from './HtmlGenerator.js';
 import { renderNativePdf } from './pdf/nativePdfEngine.js';
 import { withoutHiddenSheetContent, withoutHiddenSlides, withoutSpeakerNotes, withShownCellText } from '../utils/officeGenUtils.js';
+import { repeatedContentOfAst } from '../utils/repeatUtils.js';
+import { appendAll } from '../utils/nodeListUtils.js';
 
 /**
  * Generates high-fidelity PDF documents using a headless browser engine.
@@ -31,7 +33,8 @@ export class PdfGenerator extends BaseGenerator<'pdf'> {
         if (this.config.pdfConfig.engine === 'native') {
             if (this.config.abortSignal?.aborted) throw getAbortError();
             try {
-                const value = await renderNativePdf(ast, this.config, this.effectiveMetadata, (t, i) => this.warn(t, i));
+                // (The chart-copy budget from its own AST, which carries the document's bytes: the filtered copy does not.)
+                const value = await renderNativePdf(ast, this.config, this.effectiveMetadata, (t, i) => this.warn(t, i), repeatedContentOfAst(this.ast));
                 return { value, messages: this.messages };
             } catch (err: any) {
                 if (this.config.abortSignal?.aborted) throw getAbortError();
@@ -53,11 +56,14 @@ export class PdfGenerator extends BaseGenerator<'pdf'> {
             // structured consumers and change the mermaid shape's rendered appearance, neither of
             // which belongs in a printed PDF.
             htmlConfig: { ...this.config.htmlConfig, standalone: true, sourceAttributes: false },
-        // Invisible text drawn unseen, as the native engine draws it (a scan's recognised words, there to search).
-        }, { drawsInvisibleText: true });
+        // Invisible text drawn unseen, as the native engine draws it (a scan's recognised words, there to search);
+        // an equation with its document's own picture as that picture, since a printout typesets no LaTeX.
+        }, { drawsInvisibleText: true, drawsMathPictures: true, configResolved: true });
 
 
         const htmlResult = await htmlGenerator.generate();
+        // What writing the page reported is the PDF's too (onWarning heard it; the result's messages did not hold it).
+        appendAll(this.messages, htmlResult.messages);
         const html = typeof htmlResult.value === 'string' ? htmlResult.value : '';
 
         // Step 2: Render to PDF based on environment

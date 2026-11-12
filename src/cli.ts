@@ -43,6 +43,7 @@ import { OfficeGenerator } from './OfficeGenerator.js';
 import { OfficeParserAST, OfficeParserConfig, OfficeWarningType, UniversalGeneratorFormat } from './types.js';
 import * as fs from 'fs';
 import { lookupTable } from './utils/lookupUtils.js';
+import { isWorkbookChartsNotRead } from './parsers/ExcelParser.js';
 import { DEFAULT_GENERATOR_CONFIG, DEFAULT_OFFICE_PARSER_CONFIG } from './defaults.js';
 
 const args = process.argv.slice(2);
@@ -316,7 +317,11 @@ if (fileArg && !showHelp) {
     // up silently doing nothing.
     const CONFIG_MISTAKES = new Set<string>([OfficeWarningType.UNRECOGNIZED_CONFIG_OPTION, OfficeWarningType.INVALID_CONFIG_VALUE, OfficeWarningType.INVALID_CONTAINER_WIDTH]);
     const originalOnWarning = config.onWarning;
+    // A conversion that leaves charts out (--includeCharts=false) has no chart in its output: a workbook's charts not read
+    // without --extractAttachments are not reported (see isWorkbookChartsNotRead), as OfficeConverter does.
+    const chartsLeftOut = !!outputFormat && outputFormat !== 'json' && generatorConfig.includeCharts === false;
     config.onWarning = (issue) => {
+        if (chartsLeftOut && isWorkbookChartsNotRead(issue)) return;
         if (verbose || CONFIG_MISTAKES.has(issue.code)) {
             const severity = issue.type === 'error' ? 'Error' : 'Warning';
             console.error(`[OfficeParser ${severity}] [${issue.code}]: ${issue.message}`);

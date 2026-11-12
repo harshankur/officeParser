@@ -1,9 +1,10 @@
 import { AdmonitionMetadata, CellMetadata, CodeMetadata, ConversionResult, DisclosureMetadata, EmbedMetadata, GeneratorConfig, HeadingMetadata, ImageMetadata, ListMetadata, NoteMetadata, OfficeAttachment, OfficeContentNode, OfficeParserAST, OfficeWarningType, PageMetadata, SheetMetadata, SlideMetadata, StandaloneConfig, TableMetadata, TextMetadata } from '../types.js';
 import { captionOf } from '../utils/figureCaptions.js';
-import { chartPositions } from '../utils/chartUtils.js';
+import { chartPositions, isXyChart, outerLabelRows, xyPositions } from '../utils/chartUtils.js';
 import { summaryLine } from '../utils/disclosures.js';
 import { quoteIdOf, sameQuote } from '../utils/quoteGroups.js';
 import { BaseGenerator } from './BaseGenerator.js';
+import { utf8Length } from '../utils/repeatUtils.js';
 import { checkAbortSignal } from '../utils/errorUtils.js';
 import { base64ByteLength, documentLanguage, fillSheetRowGaps, isHeaderRow, resolveEmbed, writableSpacing } from '../utils/officeGenUtils.js';
 import { escapeHtml, isSafeHtmlAttributeName, isSafeStyleMapTag, sanitizeCommentText, sanitizeCssValue, sanitizeUrl, sanitizeImageUrl, serializeForInlineScript } from '../utils/sanitize.js';
@@ -246,6 +247,10 @@ function isNearDefaultColor(color: string): boolean {
  * Generates semantic, high-fidelity HTML from an AST.
  */
 export class HtmlGenerator extends BaseGenerator<'html'> {
+    /** What `text` weighs in a chart's caption or cell: escaped, as the text case writes it (see BaseGenerator.chartTextWeight). */
+    protected override chartTextWeight(text: string): number {
+        return utf8Length(this.escape(text));
+    }
     /**
      * Where a packager keeps an attachment's picture (EPUB: a file in the package), so an `<img>` points
      * at it rather than carrying its data; undefined leaves the picture inlined as usual.
@@ -297,12 +302,32 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
      * transparent, in its place, there to select and search. HTML output itself shows it, as the content it is.
      */
     private readonly drawsInvisibleText: boolean;
+    /**
+     * Whether an equation with its document's own picture is that picture (mathPicture): in a printout, which
+     * typesets no LaTeX; HTML output keeps the LaTeX for a math renderer.
+     */
+    private readonly drawsMathPictures: boolean;
     /** Whether invisible text was drawn unseen, so the page needs the rule that hides it. */
     private invisibleTextDrawn = false;
+    /**
+     * Whether every chart is written as its data's table under its title, as DOCX writes one (EPUB: a reading system
+     * runs no script, so a Chart.js canvas showed nothing), without the CONTENT_NOT_REPRESENTABLE that HTML output
+     * gives for a chart it has no script to draw (htmlConfig.chartJsSrc '').
+     */
+    private readonly chartsAsTables: boolean;
 
-    constructor(ast: OfficeParserAST, config?: GeneratorConfig<'html'>, options: { drawsInvisibleText?: boolean } = {}) {
-        super('html', ast, config);
+    /**
+     * @param ast - The document written.
+     * @param config - The generator configuration.
+     * @param options - How a writer writing through this one has it write: `drawsInvisibleText`, `drawsMathPictures` and
+     *   `chartsAsTables` (see those fields); `configResolved`: the config is the resolved one of the writer writing
+     *   through this one (see BaseGenerator's constructor).
+     */
+    constructor(ast: OfficeParserAST, config?: GeneratorConfig<'html'>, options: { drawsInvisibleText?: boolean; drawsMathPictures?: boolean; chartsAsTables?: boolean; configResolved?: boolean } = {}) {
+        super('html', ast, config, !!options.configResolved);
         this.drawsInvisibleText = !!options.drawsInvisibleText;
+        this.drawsMathPictures = !!options.drawsMathPictures;
+        this.chartsAsTables = !!options.chartsAsTables;
     }
 
 
@@ -1496,15 +1521,19 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                 const chartAttName = meta?.attachmentName;
                 const chartAttachment = this.getAttachment(chartAttName);
 
-                if (chartAttachment && (chartAttachment as any).chartData && !this.config.htmlConfig.chartJsSrc) {
+                if (chartAttachment && (chartAttachment as any).chartData && (this.chartsAsTables || !this.config.htmlConfig.chartJsSrc)) {
                     // No chart script to draw with (allowRemoteAssets: false, or chartJsSrc set to ''): the
                     // chart is written as its data, a table as DOCX writes it, and reported. Drawn on a
                     // canvas with no script, it showed nothing and its data sat hidden in the page.
+                    // (EPUB, chartsAsTables: always, as the form a chart takes there, not reported.)
                     const data = (chartAttachment as any).chartData;
-                    this.warn(OfficeWarningType.CONTENT_NOT_REPRESENTABLE, { format: 'html', feature: 'chart', reason: 'chart' });
+                    if (!this.chartsAsTables) this.warn(OfficeWarningType.CONTENT_NOT_REPRESENTABLE, { format: 'html', feature: 'chart', reason: 'chart' });
                     const cell = (text: string): OfficeContentNode => ({ type: 'cell', children: [{ type: 'text', text } as OfficeContentNode] } as OfficeContentNode);
-                    const caption = data.title ? `<p><strong>${this.escape(String(data.title))}</strong></p>` : '';
-                    return `${extraAnchors}${caption}${await this.processNodeRecursive(this.chartTable(data, cell), this.boundNodeProcessor)}`;
+                    const title = this.chartTitle(data);
+                    const caption = title ? `<p><strong>${this.escape(title)}</strong></p>` : '';
+                    const table = await this.chartTableWritten(data, cell, async t => this.chartWritten(await this.processNodeRecursive(t, this.boundNodeProcessor)));
+                    if (table === undefined) return `${extraAnchors}${caption}<p>${this.escape(this.chartReference(data, chartAttName))}</p>`;
+                    return `${extraAnchors}${caption}${table}`;
                 }
                 if (chartAttachment && (chartAttachment as any).chartData) {
                     const chartData = (chartAttachment as any).chartData;
@@ -1512,9 +1541,20 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                     let data = '';
                     if (dataId === undefined) {
                         this.chartDataIds.set(chartAttachment, dataId = `${chartId}-data`);
-                        // The script below draws one bar group per point index in `positions`.
-                        const positions = chartPositions(chartData);
-                        data = `<script type="application/json" id="${dataId}">${serializeForInlineScript(positions ? { ...chartData, positions } : chartData)}</script>`;
+                        // The script below draws one bar group (or, for a scatter or bubble chart, one point of
+                        // each series) per point index in `positions`.
+                        const xy = isXyChart(chartData);
+                        const positions = xy ? xyPositions(chartData) : chartPositions(chartData);
+                        // Each outer category label's group (`outerRows`, see outerLabelRows), placed as every chart
+                        // table places it; one with no group is not drawn, and reported as the tables report it.
+                        let outerRows: number[][] | undefined;
+                        if (!xy && Array.isArray(chartData.labelLevels) && chartData.labelLevels.length > 1) {
+                            const labels = Array.isArray(chartData.labels) ? chartData.labels : [];
+                            const placed = outerLabelRows(chartData, positions ? positions.length : labels.length, positions);
+                            outerRows = placed.rows;
+                            if (!placed.whole) this.warn(OfficeWarningType.CONTENT_NOT_REPRESENTABLE, { feature: 'chart category label with no point', format: this.destination });
+                        }
+                        data = `<script type="application/json" id="${dataId}">${serializeForInlineScript({ ...chartData, ...(positions && { positions }), ...(outerRows && { outerRows }) })}</script>`;
                     }
                     const canvas = `<div class="chart-container"><canvas id="${chartId}"></canvas></div>`;
                     const script = `
@@ -1544,26 +1584,104 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                     (indexes || []).forEach((position, i) => byPosition.set(position, list[i]));
                     return positions.map(position => byPosition.get(position));
                 };
-                const datasets = chartData.dataSets.map((ds, index) => ({
-                    label: ds.name || 'Series ' + (index + 1),
-                    data: positions ? atPoints(ds.values, ds.valueIndexes).map(v => v === undefined ? null : Number(v)) : ds.values.map(Number),
-                    backgroundColor: getRandomColor(index, 0.5),
-                    borderColor: getRandomColor(index, 1),
-                    borderWidth: 1
-                }));
+                // A label or value as the chart shows it (shownLabels, shownValues), where it keeps that text.
+                const shownOr = (shown, list) => Array.isArray(shown) && shown.length === list.length ? shown : list;
+                const labels = shownOr(chartData.shownLabels, chartData.labels);
+                // A series drawn as a line (a combo chart's chartType), and one on a value axis at the right
+                // (its axisIds), on a second axis there. Each axis is titled as the axis its series are drawn
+                // on: with two, the left one by the first series at the left that names its axis (yAxisTitle,
+                // the primary axis's, can be the right one's), else yAxisTitle.
+                const axisById = new Map((chartData.axes || []).map(axis => [axis.id, axis]));
+                const valueAxisOf = ds => axisById.get((ds.axisIds || [])[1]);
+                const onRight = chartData.dataSets.map(ds => (valueAxisOf(ds) || {}).position === 'right');
+                const twoAxes = onRight.some(Boolean) && onRight.some(right => !right);
+                const rightAxis = twoAxes ? valueAxisOf(chartData.dataSets[onRight.indexOf(true)]) : undefined;
+                const leftAxis = twoAxes ? chartData.dataSets.map((ds, i) => onRight[i] ? undefined : valueAxisOf(ds)).find(Boolean) : undefined;
+                const leftTitle = leftAxis ? leftAxis.title : chartData.yAxisTitle;
+                // A scatter or bubble chart (its series hold X values or bubble sizes of their own): each series its points,
+                // { x, y } or { x, y, r }, the radius from 3 to 20 px by the largest bubble size.
+                const xy = chartData.dataSets.some(ds => (ds.xValues || []).length > 0 || (ds.bubbleSizes || []).length > 0);
+                const bubble = xy && chartData.dataSets.some(ds => (ds.bubbleSizes || []).length > 0);
+                let largest = 0;
+                if (bubble) chartData.dataSets.forEach(ds => (ds.bubbleSizes || []).forEach(v => { const n = Math.abs(Number(v)); if (n > largest) largest = n; }));
+                const pointsOf = (ds, shown) => {
+                    const at = (list, indexes) => positions ? atPoints(list || [], indexes) : (list || []);
+                    const xs = at(ds.xValues, ds.xValueIndexes), ys = at(ds.values, ds.valueIndexes), rs = at(ds.bubbleSizes, ds.bubbleSizeIndexes), texts = at(shown, ds.valueIndexes);
+                    const points = [], pointTexts = [];
+                    for (let i = 0; i < Math.max(xs.length, ys.length); i++) {
+                        if (ys[i] === undefined) continue;
+                        const point = { x: xs[i] === undefined ? (positions ? positions[i] : i) + 1 : Number(xs[i]), y: Number(ys[i]) };
+                        if (bubble) point.r = largest > 0 && rs[i] !== undefined ? 3 + 17 * Math.abs(Number(rs[i])) / largest : 3;
+                        points.push(point);
+                        pointTexts.push(texts[i]);
+                    }
+                    return { points, pointTexts };
+                };
+                const datasets = chartData.dataSets.map((ds, index) => {
+                    const shown = shownOr(ds.shownValues, ds.values);
+                    if (xy) {
+                        const { points, pointTexts } = pointsOf(ds, shown);
+                        return {
+                            type: bubble ? 'bubble' : 'scatter',
+                            yAxisID: twoAxes && onRight[index] ? 'y1' : 'y',
+                            label: ds.name || 'Series ' + (index + 1),
+                            data: points,
+                            shown: pointTexts,
+                            backgroundColor: getRandomColor(index, 0.5),
+                            borderColor: getRandomColor(index, 1),
+                            borderWidth: 1
+                        };
+                    }
+                    return {
+                        type: ds.chartType === 'line' ? 'line' : 'bar',
+                        yAxisID: twoAxes && onRight[index] ? 'y1' : 'y',
+                        label: ds.name || 'Series ' + (index + 1),
+                        data: positions ? atPoints(ds.values, ds.valueIndexes).map(v => v === undefined ? null : Number(v)) : ds.values.map(Number),
+                        shown: positions ? atPoints(shown, ds.valueIndexes) : shown,
+                        backgroundColor: getRandomColor(index, 0.5),
+                        borderColor: getRandomColor(index, 1),
+                        borderWidth: 1
+                    };
+                });
+                let axisLabels = positions ? atPoints(labels, chartData.labelIndexes).map(label => label === undefined ? '' : label) : labels;
+                // Categories of several levels (labelLevels, innermost first): each point's label a line for
+                // each level, an outer label on the group of the point it starts at (outerRows: each label's
+                // group, as every chart table places it; -1 for one with no group).
+                const outer = Array.isArray(chartData.labelLevels) ? chartData.labelLevels.slice(1) : [];
+                const outerRows = chartData.outerRows || [];
+                if (outer.length) {
+                    const byGroup = outer.map((level, l) => {
+                        const map = new Map();
+                        (outerRows[l] || []).forEach((group, i) => { if (group >= 0) map.set(group, (level.labels || [])[i]); });
+                        return map;
+                    });
+                    axisLabels = axisLabels.map((label, i) => [label, ...byGroup.map(map => {
+                        const outerLabel = map.get(i);
+                        return outerLabel === undefined ? '' : outerLabel;
+                    })]);
+                }
                 new Chart(canvas, {
-                    type: 'bar',
-                    data: {
-                        labels: positions ? atPoints(chartData.labels, chartData.labelIndexes).map(label => label === undefined ? '' : label) : chartData.labels,
-                        datasets: datasets
-                    },
+                    type: xy ? (bubble ? 'bubble' : 'scatter') : 'bar',
+                    data: Object.assign({ datasets: datasets }, xy ? {} : { labels: axisLabels }),
                     options: {
                         responsive: true,
                         maintainAspectRatio: false,
+                        scales: Object.assign({
+                            x: Object.assign({ title: { display: !!chartData.xAxisTitle, text: chartData.xAxisTitle } }, xy ? { type: 'linear', position: 'bottom' } : {}),
+                            y: { position: 'left', title: { display: !!leftTitle, text: leftTitle } }
+                        }, rightAxis ? { y1: { position: 'right', grid: { drawOnChartArea: false }, title: { display: !!rightAxis.title, text: rightAxis.title } } } : {}),
                         plugins: {
                             title: {
                                 display: !!chartData.title,
                                 text: chartData.title
+                            },
+                            tooltip: {
+                                callbacks: {
+                                    label: item => {
+                                        const shown = item.dataset.shown && item.dataset.shown[item.dataIndex];
+                                        return (item.dataset.label ? item.dataset.label + ': ' : '') + (shown !== undefined && shown !== null ? shown : item.formattedValue);
+                                    }
+                                }
                             }
                         }
                     }
@@ -1592,7 +1710,11 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                     this.chartsDrawn++;
                     return `${extraAnchors}${canvas}${data}${script}`;
                 }
-                return '';
+                // A chart without its data (a parse without extractAttachments): its text, a line each, as Markdown and
+                // plain text write it, else a reference to it; written again within the chart-copy budget (see
+                // chartLineWritten). It was left out with no word. A line break is `<br/>`, as EPUB writes it (toXhtml
+                // self-closes void tags): each copy is charged what either output writes.
+                return `${extraAnchors}${this.chartLineWritten(node, text => `<p>${this.escape(text).replace(/\r?\n/g, '<br/>')}</p>`)}`;
             }
 
             case 'break': {
@@ -1614,6 +1736,9 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
             case 'code': {
                 const meta = node.metadata as CodeMetadata;
                 if (meta?.math) {
+                    // In a printout, an equation with its document's own picture is that picture.
+                    const picture = this.drawsMathPictures ? this.mathPicture(node) : undefined;
+                    if (picture) return this.nodeProcessor(picture, '');
                     const tag = meta.math === 'block' ? 'div' : 'span';
                     if (this.config.htmlConfig.sourceAttributes) {
                         // Attribute-driven emission: the raw (undelimited) LaTeX lives in both
@@ -1970,8 +2095,9 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                 // Normalize empty paragraphs so DOCX and PPTX empty cells render with consistent height
                 // Strip tags to check if it's purely empty or just contains non-breaking spaces (like PPTX)
                 const textOnly = childrenOutput.replace(/<[^<>]+>/g, '').trim();
-                // A block written inside it (a quote holding only a rule) is its content, not emptiness.
-                if (!textOnly && !node.children?.some(c => c.type === 'image' || c.type === 'chart' || isBlockInParagraph(c))) {
+                // A block written inside it (a quote holding only a rule) is its content, not emptiness; so is an
+                // equation drawn as its picture.
+                if (!textOnly && !node.children?.some(c => c.type === 'image' || c.type === 'chart' || isBlockInParagraph(c) || (this.drawsMathPictures && !!this.mathPicture(c)))) {
                     const extraClass = className ? ` class="${className.replace('class="', '').replace('"', '')} empty-paragraph"` : ' class="empty-paragraph"';
                     return `${extraAnchors}<${tag}${idAttr}${extraClass}${mappedAttrs}${styleAttr}><br></${tag}>`;
                 }

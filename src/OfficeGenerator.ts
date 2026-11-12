@@ -23,7 +23,8 @@ import { withKnownNodeTypes } from './utils/nodeTypeUtils.js';
 import { withBoundedSheetGrids } from './utils/sheetGridUtils.js';
 import { withWellTypedValues } from './utils/valueTypeUtils.js';
 import { getOfficeError } from './utils/errorUtils.js';
-import { documentBytesOf, noteDocumentBytes, REPEATED_CHARACTERS_PER_BYTE } from './utils/budgetUtils.js';
+import { documentBytesOf, noteDocumentBytes } from './utils/budgetUtils.js';
+import { repeatedContentOfAst } from './utils/repeatUtils.js';
 
 /** Nodes a writer may meet more than once along the AST's paths, beyond what repeated content allows (see sharedNodeVisits). */
 const MAX_SHARED_NODE_VISITS = 4_000_000;
@@ -93,9 +94,7 @@ export class OfficeGenerator {
             // code carries a config of its own, and a limit of Infinity (or text) in it turned the check off.
             // So does the allowance the repeat budget gave for the size of the document parsed (see
             // budgetUtils): a large workbook repeats what a small one may not.
-            const configured: unknown = ast.config?.decompressionLimits?.maxRepeatedContent;
-            const repeatedContent = (typeof configured === 'number' && configured >= 0 ? Math.min(configured, 1024 * 1024 * 1024) : 16 * 1024 * 1024)
-                + REPEATED_CHARACTERS_PER_BYTE * documentBytesOf(ast);
+            const repeatedContent = repeatedContentOfAst(ast);
             const maxVisits = MAX_SHARED_NODE_VISITS + repeatedContent / 16;
             const tooLarge = (): never => { throw getOfficeError(OfficeErrorType.OUTPUT_TOO_LARGE, config?.onWarning ? config : ast.config ?? config); };
             // Parsers share records (a spreadsheet's style is one record for every cell given it), which

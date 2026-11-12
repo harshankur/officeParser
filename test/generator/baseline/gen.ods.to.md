@@ -325,10 +325,71 @@ TestBool: true
 
 ---
 
-| Charts |  |  |  |  |  |
-| --- | --- | --- | --- | --- | --- |
-|  |  |  | Series 1 | Series 2 | Series 3 |
-|  |  | Category 1 | 4.3 | 2.4 | 2 |
-|  |  | Category 2 | 2.5 | 4.4 | 2 |
-|  |  | Category 3 | 3.5 | 1.8 | 3 |
-|  |  | Category 4 | 4.5 | 2.8 | 5 |
+<table>
+  <tr>
+    <td><b>Charts</b></td>
+  </tr>
+  <tr>
+    <td></td>
+    <td>Series 1</td>
+    <td>Series 2</td>
+    <td>Series 3</td>
+  </tr>
+  <tr>
+    <td>Category 1</td>
+    <td>4.3</td>
+    <td>2.4</td>
+    <td>2</td>
+  </tr>
+  <tr>
+    <td><p><b>Chart Title</b></p><table>
+  <tr>
+    <td></td>
+    <td>Series D2</td>
+    <td>Series E2</td>
+    <td>Series F2</td>
+  </tr>
+  <tr>
+    <td>Category 1</td>
+    <td>4.3</td>
+    <td>2.4</td>
+    <td>2</td>
+  </tr>
+  <tr>
+    <td>Category 2</td>
+    <td>2.5</td>
+    <td>4.4</td>
+    <td>2</td>
+  </tr>
+  <tr>
+    <td>Category 3</td>
+    <td>3.5</td>
+    <td>1.8</td>
+    <td>3</td>
+  </tr>
+  <tr>
+    <td>Category 4</td>
+    <td>4.5</td>
+    <td>2.8</td>
+    <td>5</td>
+  </tr>
+</table>
+</td>
+    <td>Category 2</td>
+    <td>2.5</td>
+    <td>4.4</td>
+    <td>2</td>
+  </tr>
+  <tr>
+    <td>Category 3</td>
+    <td>3.5</td>
+    <td>1.8</td>
+    <td>3</td>
+  </tr>
+  <tr>
+    <td>Category 4</td>
+    <td>4.5</td>
+    <td>2.8</td>
+    <td>5</td>
+  </tr>
+</table>

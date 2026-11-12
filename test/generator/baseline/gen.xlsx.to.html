@@ -889,7 +889,7 @@ come in handy. You can use hanging indents to ensure that a line of poetry reta
 <tr class="excel-row"><td class="excel-row-num">4</td><td class="excel-cell-empty"></td><td class="excel-cell-empty"></td><td><span style="color: #000000; font-size: 11pt; font-family: Aptos Narrow, sans-serif">Category 2</span></td><td><span style="color: #000000; font-size: 11pt; font-family: Aptos Narrow, sans-serif">2.5</span></td><td><span style="color: #000000; font-size: 11pt; font-family: Aptos Narrow, sans-serif">4.4000000000000004</span></td><td><span style="color: #000000; font-size: 11pt; font-family: Aptos Narrow, sans-serif">2</span></td></tr>
 <tr class="excel-row"><td class="excel-row-num">5</td><td class="excel-cell-empty"></td><td class="excel-cell-empty"></td><td><span style="color: #000000; font-size: 11pt; font-family: Aptos Narrow, sans-serif">Category 3</span></td><td><span style="color: #000000; font-size: 11pt; font-family: Aptos Narrow, sans-serif">3.5</span></td><td><span style="color: #000000; font-size: 11pt; font-family: Aptos Narrow, sans-serif">1.8</span></td><td><span style="color: #000000; font-size: 11pt; font-family: Aptos Narrow, sans-serif">3</span></td></tr>
 <tr class="excel-row"><td class="excel-row-num">6</td><td class="excel-cell-empty"></td><td class="excel-cell-empty"></td><td><span style="color: #000000; font-size: 11pt; font-family: Aptos Narrow, sans-serif">Category 4</span></td><td><span style="color: #000000; font-size: 11pt; font-family: Aptos Narrow, sans-serif">4.5</span></td><td><span style="color: #000000; font-size: 11pt; font-family: Aptos Narrow, sans-serif">2.8</span></td><td><span style="color: #000000; font-size: 11pt; font-family: Aptos Narrow, sans-serif">5</span></td></tr>
-</tbody></table><div class="chart-container"><canvas id="chart-1"></canvas></div><script type="application/json" id="chart-1-data">{"title":"Chart Title","dataSets":[{"name":"Series 1","values":["4.3","2.5","3.5","4.5"],"valueIndexes":[0,1,2,3],"pointLabels":[]},{"name":"Series 2","values":["2.4","4.4000000000000004","1.8","2.8"],"valueIndexes":[0,1,2,3],"pointLabels":[]},{"name":"Series 3","values":["2","2","3","5"],"valueIndexes":[0,1,2,3],"pointLabels":[]}],"labels":["Category 1","Category 2","Category 3","Category 4"],"labelIndexes":[0,1,2,3],"pointCount":4,"rawTexts":["Category 1","Category 2","Category 3","Category 4","Series 1","4.3","2.5","3.5","4.5","Series 2","2.4","4.4000000000000004","1.8","2.8","Series 3","2","2","3","5"],"positions":[0,1,2,3]}</script>
+</tbody></table><div class="chart-container"><canvas id="chart-1"></canvas></div><script type="application/json" id="chart-1-data">{"title":"Chart Title","dataSets":[{"chartType":"bar","axisIds":["1402597383","1291682311"],"name":"Series 1","values":["4.3","2.5","3.5","4.5"],"valueIndexes":[0,1,2,3],"pointLabels":[]},{"chartType":"bar","axisIds":["1402597383","1291682311"],"name":"Series 2","values":["2.4","4.4000000000000004","1.8","2.8"],"valueIndexes":[0,1,2,3],"pointLabels":[]},{"chartType":"bar","axisIds":["1402597383","1291682311"],"name":"Series 3","values":["2","2","3","5"],"valueIndexes":[0,1,2,3],"pointLabels":[]}],"labels":["Category 1","Category 2","Category 3","Category 4"],"labelIndexes":[0,1,2,3],"pointCount":4,"axes":[{"id":"1402597383","kind":"category","position":"bottom","deleted":false},{"id":"1291682311","kind":"value","position":"left","deleted":false}],"rawTexts":["Category 1","Category 2","Category 3","Category 4","Series 1","4.3","2.5","3.5","4.5","Series 2","2.4","4.4000000000000004","1.8","2.8","Series 3","2","2","3","5"],"positions":[0,1,2,3]}</script>
 <script>
     (function() {
         const initChart = () => {
@@ -916,26 +916,104 @@ come in handy. You can use hanging indents to ensure that a line of poetry reta
                     (indexes || []).forEach((position, i) => byPosition.set(position, list[i]));
                     return positions.map(position => byPosition.get(position));
                 };
-                const datasets = chartData.dataSets.map((ds, index) => ({
-                    label: ds.name || 'Series ' + (index + 1),
-                    data: positions ? atPoints(ds.values, ds.valueIndexes).map(v => v === undefined ? null : Number(v)) : ds.values.map(Number),
-                    backgroundColor: getRandomColor(index, 0.5),
-                    borderColor: getRandomColor(index, 1),
-                    borderWidth: 1
-                }));
+                // A label or value as the chart shows it (shownLabels, shownValues), where it keeps that text.
+                const shownOr = (shown, list) => Array.isArray(shown) && shown.length === list.length ? shown : list;
+                const labels = shownOr(chartData.shownLabels, chartData.labels);
+                // A series drawn as a line (a combo chart's chartType), and one on a value axis at the right
+                // (its axisIds), on a second axis there. Each axis is titled as the axis its series are drawn
+                // on: with two, the left one by the first series at the left that names its axis (yAxisTitle,
+                // the primary axis's, can be the right one's), else yAxisTitle.
+                const axisById = new Map((chartData.axes || []).map(axis => [axis.id, axis]));
+                const valueAxisOf = ds => axisById.get((ds.axisIds || [])[1]);
+                const onRight = chartData.dataSets.map(ds => (valueAxisOf(ds) || {}).position === 'right');
+                const twoAxes = onRight.some(Boolean) && onRight.some(right => !right);
+                const rightAxis = twoAxes ? valueAxisOf(chartData.dataSets[onRight.indexOf(true)]) : undefined;
+                const leftAxis = twoAxes ? chartData.dataSets.map((ds, i) => onRight[i] ? undefined : valueAxisOf(ds)).find(Boolean) : undefined;
+                const leftTitle = leftAxis ? leftAxis.title : chartData.yAxisTitle;
+                // A scatter or bubble chart (its series hold X values or bubble sizes of their own): each series its points,
+                // { x, y } or { x, y, r }, the radius from 3 to 20 px by the largest bubble size.
+                const xy = chartData.dataSets.some(ds => (ds.xValues || []).length > 0 || (ds.bubbleSizes || []).length > 0);
+                const bubble = xy && chartData.dataSets.some(ds => (ds.bubbleSizes || []).length > 0);
+                let largest = 0;
+                if (bubble) chartData.dataSets.forEach(ds => (ds.bubbleSizes || []).forEach(v => { const n = Math.abs(Number(v)); if (n > largest) largest = n; }));
+                const pointsOf = (ds, shown) => {
+                    const at = (list, indexes) => positions ? atPoints(list || [], indexes) : (list || []);
+                    const xs = at(ds.xValues, ds.xValueIndexes), ys = at(ds.values, ds.valueIndexes), rs = at(ds.bubbleSizes, ds.bubbleSizeIndexes), texts = at(shown, ds.valueIndexes);
+                    const points = [], pointTexts = [];
+                    for (let i = 0; i < Math.max(xs.length, ys.length); i++) {
+                        if (ys[i] === undefined) continue;
+                        const point = { x: xs[i] === undefined ? (positions ? positions[i] : i) + 1 : Number(xs[i]), y: Number(ys[i]) };
+                        if (bubble) point.r = largest > 0 && rs[i] !== undefined ? 3 + 17 * Math.abs(Number(rs[i])) / largest : 3;
+                        points.push(point);
+                        pointTexts.push(texts[i]);
+                    }
+                    return { points, pointTexts };
+                };
+                const datasets = chartData.dataSets.map((ds, index) => {
+                    const shown = shownOr(ds.shownValues, ds.values);
+                    if (xy) {
+                        const { points, pointTexts } = pointsOf(ds, shown);
+                        return {
+                            type: bubble ? 'bubble' : 'scatter',
+                            yAxisID: twoAxes && onRight[index] ? 'y1' : 'y',
+                            label: ds.name || 'Series ' + (index + 1),
+                            data: points,
+                            shown: pointTexts,
+                            backgroundColor: getRandomColor(index, 0.5),
+                            borderColor: getRandomColor(index, 1),
+                            borderWidth: 1
+                        };
+                    }
+                    return {
+                        type: ds.chartType === 'line' ? 'line' : 'bar',
+                        yAxisID: twoAxes && onRight[index] ? 'y1' : 'y',
+                        label: ds.name || 'Series ' + (index + 1),
+                        data: positions ? atPoints(ds.values, ds.valueIndexes).map(v => v === undefined ? null : Number(v)) : ds.values.map(Number),
+                        shown: positions ? atPoints(shown, ds.valueIndexes) : shown,
+                        backgroundColor: getRandomColor(index, 0.5),
+                        borderColor: getRandomColor(index, 1),
+                        borderWidth: 1
+                    };
+                });
+                let axisLabels = positions ? atPoints(labels, chartData.labelIndexes).map(label => label === undefined ? '' : label) : labels;
+                // Categories of several levels (labelLevels, innermost first): each point's label a line for
+                // each level, an outer label on the group of the point it starts at (outerRows: each label's
+                // group, as every chart table places it; -1 for one with no group).
+                const outer = Array.isArray(chartData.labelLevels) ? chartData.labelLevels.slice(1) : [];
+                const outerRows = chartData.outerRows || [];
+                if (outer.length) {
+                    const byGroup = outer.map((level, l) => {
+                        const map = new Map();
+                        (outerRows[l] || []).forEach((group, i) => { if (group >= 0) map.set(group, (level.labels || [])[i]); });
+                        return map;
+                    });
+                    axisLabels = axisLabels.map((label, i) => [label, ...byGroup.map(map => {
+                        const outerLabel = map.get(i);
+                        return outerLabel === undefined ? '' : outerLabel;
+                    })]);
+                }
                 new Chart(canvas, {
-                    type: 'bar',
-                    data: {
-                        labels: positions ? atPoints(chartData.labels, chartData.labelIndexes).map(label => label === undefined ? '' : label) : chartData.labels,
-                        datasets: datasets
-                    },
+                    type: xy ? (bubble ? 'bubble' : 'scatter') : 'bar',
+                    data: Object.assign({ datasets: datasets }, xy ? {} : { labels: axisLabels }),
                     options: {
                         responsive: true,
                         maintainAspectRatio: false,
+                        scales: Object.assign({
+                            x: Object.assign({ title: { display: !!chartData.xAxisTitle, text: chartData.xAxisTitle } }, xy ? { type: 'linear', position: 'bottom' } : {}),
+                            y: { position: 'left', title: { display: !!leftTitle, text: leftTitle } }
+                        }, rightAxis ? { y1: { position: 'right', grid: { drawOnChartArea: false }, title: { display: !!rightAxis.title, text: rightAxis.title } } } : {}),
                         plugins: {
                             title: {
                                 display: !!chartData.title,
                                 text: chartData.title
+                            },
+                            tooltip: {
+                                callbacks: {
+                                    label: item => {
+                                        const shown = item.dataset.shown && item.dataset.shown[item.dataIndex];
+                                        return (item.dataset.label ? item.dataset.label + ': ' : '') + (shown !== undefined && shown !== null ? shown : item.formattedValue);
+                                    }
+                                }
                             }
                         }
                     }

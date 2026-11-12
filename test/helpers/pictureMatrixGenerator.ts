@@ -12,10 +12,9 @@
  * With captions, the checks are: no joined words (a `w\d` token that is not a word alone), no lost words
  * (text; a caption always; alt text where the image is written; recognized text where it is written),
  * no markup read as text (after pass 1 and pass 3), and Markdown settled by pass 3 (md2 === md3). The
- * 8.6.0 constructs in the next-release ledger are left out (`clean`): multi-line recognized text on a
+ * constructs the readers do not settle are left out (`clean`): multi-line recognized text on a
  * picture without a caption, a table in a definition, a footnote in a table cell, a space at the end of
- * link text. A pass difference that is only a `data:` picture's `<img>` id (the HTML reader drops it,
- * 8.6.0, ledger) is counted apart, not as unsettled.
+ * link text. A pass difference that is only a `data:` picture's `<img>` id (the HTML reader drops it) is counted apart, not as unsettled.
  *
  * Without captions, each document's three passes of Markdown and its HTML fragment are fingerprinted, to
  * be compared with the fingerprints of the writers before the round 12 change (pictureMatrixFingerprints.json).
@@ -45,7 +44,7 @@ export interface PictureMatrixResult {
     configCombos: number;
     figureDocs: number;
     figures: number;
-    /** Pass differences that are only a `data:` picture's `<img>` id (ledger), not counted as unsettled. */
+    /** Pass differences that are only a `data:` picture's `<img>` id (the HTML reader drops it), not counted as unsettled. */
     readerDataImgId: number;
     failures: Record<string, number>;
     examples: Record<string, string[]>;
@@ -67,7 +66,7 @@ const SMALL = Buffer.alloc(150, 9).toString('base64');
 
 /**
  * Runs `count` documents from `seed`. `captions`: pictures carry captions (60%) and are checked; else none
- * do and each document is fingerprinted. `clean`: the ledger's 8.6.0 constructs are left out.
+ * do and each document is fingerprinted. `clean`: the constructs the readers do not settle are left out.
  */
 export async function runPictureMatrix(io: PictureMatrixIo, options: { count: number; seed: number; captions: boolean; clean: boolean }): Promise<PictureMatrixResult> {
     const { count, captions, clean } = options;

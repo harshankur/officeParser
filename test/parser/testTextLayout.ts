@@ -127,7 +127,7 @@ export async function testTextLayout(): Promise<LayoutTest[]> {
     const add = (feature: string, pass: boolean, expected: any, actual: any, details = '') =>
         results.push({ category, feature, fileType: 'pdf', result: { status: pass ? 'PASS' : 'FAIL', expected, actual, details } });
 
-    // ── H6: hanging indents, tight lists, symbol-font bullets ───────────────
+    // ── Hanging indents, tight lists, symbol-font bullets ───────────────
     {
         const shape = shapeOf(nodesOf(bulletList(14.4)));
         const ok = shape.length === 3 && shape.every(s => s.startsWith('list:'))
@@ -291,7 +291,7 @@ export async function testTextLayout(): Promise<LayoutTest[]> {
         add('Multi-column article yields no tables', tablesOf(runs).length === 0, 0, tablesOf(runs).length);
     }
 
-    // ── M4: tables need vertically adjacent rows ────────────────────────────
+    // ── Tables need vertically adjacent rows ────────────────────────────
     {
         const runs: RawRun[] = [];
         const row = (y: number, cells: [string, number][]) => { for (const [t, x] of cells) runs.push(run(t, x, y, 10)); };
@@ -317,7 +317,7 @@ export async function testTextLayout(): Promise<LayoutTest[]> {
         add('Genuine grid is still a table', tables.length === 1 && rows === 4, '1 table of 4 rows', `${tables.length} table(s), ${rows} rows`);
     }
 
-    // ── M5: hybrid grid recovery over tag-derived paragraphs ────────────────
+    // ── Hybrid grid recovery over tag-derived paragraphs ────────────────
     // Builds paragraph NODES (what the tagged path emits), one per grid cell, and asserts
     // recoverTaggedGrids folds the calendar into a table while leaving the title paragraph, and never
     // invents a table on prose or on a too-narrow layout.
@@ -412,7 +412,7 @@ export async function testTextLayout(): Promise<LayoutTest[]> {
             'two separate lines', `${text} (${lines.length} line(s))`);
     }
 
-    // ── H7: line building stays linear in the number of runs ────────────────
+    // ── Line building stays linear in the number of runs ────────────────
     {
         let lines: ReturnType<typeof buildLines> = [];
         const grows = scalesLinearly(share => {

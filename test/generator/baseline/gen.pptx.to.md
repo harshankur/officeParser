@@ -373,3 +373,12 @@ An interruption in our regularly scheduled listing, for this essential and very
 ---
 
 # Charts {#charts}
+
+**Chart Title**
+
+|  | Series 1 | Series 2 | Series 3 |
+| --- | --- | --- | --- |
+| Category 1 | 4.3 | 2.4 | 2 |
+| Category 2 | 2.5 | 4.4000000000000004 | 2 |
+| Category 3 | 3.5 | 1.8 | 3 |
+| Category 4 | 4.5 | 2.8 | 5 |

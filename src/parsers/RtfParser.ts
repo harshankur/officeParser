@@ -40,11 +40,15 @@
  * @see https://latex2rtf.sourceforge.net/RTF-Spec-1.2.pdf RTF 1.2 Specification
  */
 
-import { BreakMetadata, CellMetadata, FullOfficeParserConfig, HeaderFooterMetadata, ImageMetadata, ShapeMetadata, PageNumberFormat, IndentationMetadata, ListMetadata, ParagraphSpacing, NoteMetadata, OfficeAttachment, OfficeContentNode, OfficeErrorType, OfficeMimeType, OfficeParserAST, OfficeParserConfig, PageSetup, TextFormatting } from '../types.js';
+import { BreakMetadata, CellMetadata, CodeMetadata, FullOfficeParserConfig, HeaderFooterMetadata, ImageMetadata, ShapeMetadata, PageNumberFormat, IndentationMetadata, ListMetadata, ParagraphSpacing, NoteMetadata, OfficeAttachment, OfficeContentNode, OfficeErrorType, OfficeMimeType, OfficeParserAST, OfficeParserConfig, OfficeWarningType, PageSetup, TextFormatting } from '../types.js';
 import { MAX_PAGE_PT } from '../utils/pageLimits.js';
 import { titlePagesTakeHiddenFirsts } from '../utils/officeGenUtils.js';
 import { createAST } from '../utils/astUtils.js';
-import { checkAbortSignal, getOfficeError } from '../utils/errorUtils.js';
+import { checkAbortSignal, getOfficeError, logWarning } from '../utils/errorUtils.js';
+import { placeableWmf } from '../utils/metafileUtils.js';
+import { isEmptyMath } from '../utils/mathUtils.js';
+import { rtfMathToLatex } from '../utils/rtfMath.js';
+import { embeddedObjectKind, embeddedObjectPart, progIdOf } from '../utils/oleUtils.js';
 import { ocrDuringParse } from '../utils/ocrUtils.js';
 import { lookupTable } from '../utils/lookupUtils.js';
 import { chargeRawContent } from '../utils/xmlUtils.js';
@@ -236,7 +240,9 @@ type RtfImageFormat =
     | 'jpeg'
     | 'gif'
     | 'tiff'
-    | 'bmp';
+    | 'bmp'
+    | 'emf'
+    | 'wmf';
 
 /**
  * Lookup table mapping RTF control words to internal formats.
@@ -250,6 +256,18 @@ const RTF_BLIP_MAP: Record<string, RtfImageFormat> = lookupTable({
     tiffblip: 'tiff',
     dibitmap: 'bmp',
     wbitmap: 'bmp',
+    // Windows metafiles: an EMF as it is, a WMF given its placeable header (see extractPictAttachment)
+    emfblip: 'emf',
+    wmetafile: 'wmf',
+});
+
+/**
+ * The picture formats RTF names that are not read, as a warning names them (a picture in one is
+ * reported, never dropped silently).
+ */
+const RTF_UNREAD_PICTURES: Record<string, string> = lookupTable({
+    macpict: 'a QuickDraw picture, \\macpict',
+    pmmetafile: 'an OS/2 metafile, \\pmmetafile',
 });
 
 /**
@@ -262,6 +280,8 @@ const IMAGE_MIME_MAP: Record<RtfImageFormat, OfficeMimeType> = lookupTable({
     gif: 'image/gif',
     tiff: 'image/tiff',
     bmp: 'image/bmp',
+    emf: 'image/emf',
+    wmf: 'image/wmf',
 });
 
 /**
@@ -525,7 +545,9 @@ export class SimpleRtfParser {
         if (name === 'bin' && param !== undefined && param > 0) {
             // Skip N bytes of binary data
             this.index += param;
-            // \binN is not added to content as we want to ignore it
+            // The data is not kept; the word is, without it, so a picture held this way is known to be
+            // one (and reported: its data is not read).
+            group.content.push({ type: 'control', value: 'bin', param });
             return;
         }
 
@@ -1506,14 +1528,22 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
 
     /**
      * Extracts an image attachment from an RTF \pict group.
-     * Uses lookup tables for clean and safe handling of all formats.
+     * Uses lookup tables for clean and safe handling of all formats. A WMF (`\wmetafileN`, a METAFILE
+     * with no placeable header) is given the header DOCX and ODT packages hold, from its window and the
+     * picture's size (`\picwgoal`, else `\picw` in the mapping mode N's units); an EMF is kept as it is.
      *
      * @param pictGroup The RtfGroup node that represents a \pict group.
-     * @returns An OfficeAttachment or undefined when unsupported or invalid.
+     * @returns The attachment; or, for a picture that is not read (a format not read, no format, data
+     *   held as `\binN`), what to report; or undefined for a picture of no data.
      */
-    const extractPictAttachment = (pictGroup: RtfGroup): OfficeAttachment | undefined => {
+    const extractPictAttachment = (pictGroup: RtfGroup): { attachment: OfficeAttachment } | { notRead: { part: string; reason: string } } | undefined => {
         /** Internal format detected from the RTF pict group */
         let imageFormat: RtfImageFormat | undefined;
+        /** A format RTF names that is not read, and whether the data is held as binary (`\binN`). */
+        let unreadFormat: string | undefined;
+        let binary = false;
+        /** The picture's size words, and `\wmetafile`'s mapping mode. */
+        const size: { mapMode?: number; picw?: number; pich?: number; goalWidth?: number; goalHeight?: number } = {};
 
         /** Hexadecimal string chunks extracted from the pict binary section */
         const hexDataChunks: string[] = [];
@@ -1528,6 +1558,14 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
                 const mapped = RTF_BLIP_MAP[child.value];
                 if (mapped) {
                     imageFormat = mapped;
+                    if (mapped === 'wmf') size.mapMode = child.param;
+                } else if (RTF_UNREAD_PICTURES[child.value]) unreadFormat = RTF_UNREAD_PICTURES[child.value];
+                else if (child.value === 'bin') binary = true;
+                else if (child.param !== undefined) {
+                    if (child.value === 'picw') size.picw = child.param;
+                    else if (child.value === 'pich') size.pich = child.param;
+                    else if (child.value === 'picwgoal') size.goalWidth = child.param;
+                    else if (child.value === 'pichgoal') size.goalHeight = child.param;
                 }
             }
             else if (child.type === 'text') {
@@ -1539,8 +1577,11 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
             }
         }
 
-        // Missing or unknown format → stop
+        // A picture this reader cannot read is reported, never dropped silently.
+        if (binary) return { notRead: { part: 'a picture held as binary data, \\bin', reason: 'its data is not read' } };
         const hexData = hexDataChunks.join('');
+        if (!imageFormat && unreadFormat) return { notRead: { part: unreadFormat, reason: 'pictures in that format are not read' } };
+        if (!imageFormat && hexData.length > 0) return { notRead: { part: 'a picture of no format RTF names', reason: 'it names no format it could be read in' } };
         if (!imageFormat || hexData.length === 0) {
             return undefined;
         }
@@ -1555,8 +1596,9 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
         // Convert hex → binary and construct the attachment object
         // -------------------------------------------------------------
         try {
-            // Convert hex into a raw buffer
-            const buffer = Buffer.from(hexData, 'hex');
+            // Convert hex into a raw buffer (a WMF given its placeable header, as packages hold one)
+            const data = Buffer.from(hexData.length % 2 ? hexData.slice(0, -1) : hexData, 'hex');
+            const buffer = imageFormat === 'wmf' ? Buffer.from(placeableWmf(data, size)) : data;
 
             // Derive file extension directly from format
             const extension = imageFormat;
@@ -1566,11 +1608,13 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
 
             // Build and return final attachment
             return {
-                type: 'image',
-                mimeType: mimeType,
-                data: buffer.toString('base64'),
-                name: name,
-                extension: extension
+                attachment: {
+                    type: 'image',
+                    mimeType: mimeType,
+                    data: buffer.toString('base64'),
+                    name: name,
+                    extension: extension
+                }
             };
         }
         catch {
@@ -1581,6 +1625,8 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
 
     // Helper to serialize RTF control word
     const serializeRtfControl = (node: RtfControl): string => {
+        // `\binN`'s data is not kept, so neither is the word that says N bytes follow.
+        if (node.value === 'bin') return '';
         // Symbol control words (non-alpha)
         if (!/^[a-zA-Z]/.test(node.value)) {
             return `\\${node.value}`;
@@ -1614,24 +1660,116 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
         return node.value.replace(/([\\{}])/g, '\\$1');
     };
 
+    /** A group as RTF, braces included, into the paragraph's raw content (read apart from the flow). */
+    const rawGroup = (group: RtfGroup) => {
+        currentParagraphRawChunks.push('{');
+        for (const child of group.content) {
+            if (child.type === 'control') currentParagraphRawChunks.push(serializeRtfControl(child));
+            else if (child.type === 'text') currentParagraphRawChunks.push(serializeRtfText(child));
+            else rawGroup(child);
+        }
+        currentParagraphRawChunks.push('}');
+    };
+
+    /** The destinations the reader skips whole (their text is not the document's). */
+    const IGNORED_DESTINATIONS: ReadonlySet<string> = new Set([
+        'fonttbl', 'colortbl', 'stylesheet', 'info', 'macpict',
+        'pmmetafile', 'wmetafile', 'dibitmap', 'bitmap',
+        'nextGenerator', 'nonshppict', 'xml', 'private',
+        'upnp', 'ud', 'filetbl', 'operator', 'author', 'creatim', 'revtim', 'printim', 'comment',
+        'fldinst', 'listtext', 'pntext', // Ignore list marker text (handled separately)
+        // What a writer puts in place of a nested table for readers without nesting (a `\par`
+        // after each nested cell and row), which this reader has.
+        'nonesttables',
+    ]);
+    /**
+     * The destinations the reader reads as what they are, not as text: a picture, a note, a field, an embedded
+     * object, a shape, a comment, a header or footer (and every destination it skips).
+     */
+    const READ_APART: ReadonlySet<string> = new Set([...IGNORED_DESTINATIONS, 'pict', 'shppict', 'object', 'footnote', 'field', 'shp', 'shpgrp',
+        'shpinst', 'shptxt', 'annotation', 'header', 'headerl', 'headerr', 'headerf', 'footer', 'footerl', 'footerr', 'footerf']);
+    /**
+     * Whether a group in an `\mmath` with no `\moMath` is not its math, and is read as it is read anywhere else: one of
+     * READ_APART, or an ignorable group (`\*`) whose word is not a math one (`\mXyz`, as rtfMathToLatex reads them).
+     * (READ_APART first: `\macpict` begins with `m` but is no math word.)
+     */
+    const apartFromMath = (node: RtfNode): node is RtfGroup => node.type === 'group' && !!node.destination && (READ_APART.has(node.destination)
+        || (node.content[0]?.type === 'control' && node.content[0].value === '*' && !/^m[a-zA-Z]+$/.test(node.destination)));
+
+    /** A group's direct child group of the destination given. */
+    const childGroup = (group: RtfGroup | undefined, destination: string): RtfGroup | undefined =>
+        group?.content.find((c): c is RtfGroup => c.type === 'group' && c.destination === destination);
+
+    /**
+     * An equation (`{\mmath {\*\moMath ...}}`, `\moMathPara` for a display one), read as DOCX's OMML is:
+     * a `code` node of its LaTeX in the paragraph, its LaTeX in the paragraph's text. The document's own
+     * picture of it (`\mmathPict`, inside `\mmath` or, as Word may write it, an ignorable group after
+     * it, `after`) is an attachment the node names (`fallbackAttachmentName`). An equation of no text is
+     * that picture, as before; one with neither is reported, unless it holds nothing at all.
+     */
+    const readEquation = (group: RtfGroup, after: RtfGroup | undefined, formatting: TextFormatting, depth: number) => {
+        // An \mmath with no \moMath of its own (no writer known writes one: its text was read as text) is its own
+        // \moMath, of its math alone: its picture (\mmathPict) is the equation's, and a group that is not math (a
+        // picture, a note, a field, an ignorable group) is read after it as it is read anywhere (apartFromMath).
+        // Read as math, a picture's data was the equation's text, and a note's text too.
+        const own = childGroup(group, 'moMathPara') ?? childGroup(group, 'moMath');
+        const apart = own ? [] : group.content.filter(apartFromMath);
+        const math = own ?? { type: 'group', destination: 'moMath', content: group.content.filter(c => !(c.type === 'group' && c.destination === 'mmathPict') && !apartFromMath(c)) } as RtfGroup;
+        const readApart = () => { for (const child of apart) traverse(child, { ...formatting }, depth + 1); };
+        // (Its raw content without them: they give theirs as they are read.)
+        const raw = apart.length ? { ...group, content: group.content.filter(c => !apartFromMath(c)) } : group;
+        const { latex, block } = rtfMathToLatex(math, config);
+        const picture = childGroup(group, 'mmathPict') ?? after;
+        if (!isEmptyMath(latex)) {
+            flushRun();
+            rawGroup(raw);
+            if (after) rawGroup(after);
+            // The picture: in \shppict, else a bare \pict, else the one for older readers (\nonshppict).
+            const pict = childGroup(childGroup(picture, 'shppict'), 'pict') ?? childGroup(picture, 'pict') ?? childGroup(childGroup(picture, 'nonshppict'), 'pict');
+            const read = config.extractAttachments && pict ? extractPictAttachment(pict) : undefined;
+            const fallback = read && 'attachment' in read ? read.attachment : undefined;
+            if (fallback) attachments.push(fallback);
+            currentParagraphChildren.push({ type: 'code', text: latex, metadata: { math: block ? 'block' : 'inline', ...(fallback ? { fallbackAttachmentName: fallback.name } : {}) } as CodeMetadata });
+            currentParagraphTextChunks.push(latex);
+            readApart();
+            return;
+        }
+        const pictured = !!picture && config.extractAttachments && !!(childGroup(childGroup(picture, 'shppict'), 'pict') ?? childGroup(picture, 'pict'));
+        if (pictured) {
+            // (Read as any picture: its \shppict, or a bare \pict; \nonshppict is the same picture again.)
+            for (const child of picture!.content) traverse(child, { ...formatting }, depth + 1);
+            readApart();
+            return;
+        }
+        rawGroup(raw);
+        readApart();
+        if (math.content.some(c => c.type === 'group' || (c.type === 'text' && c.value.trim().length > 0))) {
+            logWarning(OfficeWarningType.CONTENT_PART_NOT_READ, config, { part: 'an equation, \\moMath', reason: 'its math has no text to read, and the document gives no picture of it (\\mmathPict)' });
+        }
+    };
+
+    /**
+     * Whether the text being read is a tracked deletion (`\deleted`, a character property: it holds to
+     * the end of its group, until `\plain` or `\deleted0`). Deleted text is not the document's text, as
+     * DOCX's `w:del` is not: its characters are not read, and a picture, object, equation, note or
+     * comment in it is skipped whole. Paragraphs, cells, rows and sections stay as they are.
+     */
+    let deleted = false;
+    /** The kind of the embedded object whose `\result` is being read, for its picture's alt text. */
+    let objectAltText: string | undefined;
+    /** The groups a tracked deletion skips whole. */
+    const DELETED_SKIPPED = new Set(['pict', 'shppict', 'object', 'mmath', 'footnote', 'annotation']);
+
     // Recursive function to traverse the RTF tree
     const traverse = (node: RtfNode, formatting: TextFormatting, depth: number = 0) => {
         if (node.type === 'group') {
-            const ignoreList = [
-                'fonttbl', 'colortbl', 'stylesheet', 'info', 'macpict',
-                'pmmetafile', 'wmetafile', 'dibitmap', 'bitmap', 'object',
-                'nextGenerator', 'nonshppict', 'xml', 'private',
-                'upnp', 'ud', 'filetbl', 'operator', 'author', 'creatim', 'revtim', 'printim', 'comment',
-                'fldinst', 'listtext', 'pntext', // Ignore list marker text (handled separately)
-                // What a writer puts in place of a nested table for readers without nesting (a `\par`
-                // after each nested cell and row), which this reader has.
-                'nonesttables',
-            ];
-
+            if (deleted && node.destination && DELETED_SKIPPED.has(node.destination)) return;
             let isIgnored = false;
             let isFootnote = false;
             let isHyperlinkField = false, isPageField = false;
             let isPict = false;
+            // An embedded object (`\object`), read as the picture or text it shows (its `\result`).
+            let isObject = false;
             // Where a header's or footer's paragraphs go, and whether the group is an annotation (a
             // comment), a shape whose text box (`\shptxt`) alone is read, or that text box.
             let redirect: OfficeContentNode[] | undefined;
@@ -1727,9 +1865,11 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
                     isShapeInstance = true;
                     outerShapeFloat = currentShapeFloat;
                     currentShapeFloat = config.ignorePageGeometry ? undefined : rtfShapeFloat(node);
+                } else if (node.destination === 'object') {
+                    isObject = true;
                 } else if (node.destination === 'shptxt') {
                     isShapeText = true;
-                } else if (ignoreList.includes(node.destination)) {
+                } else if (IGNORED_DESTINATIONS.has(node.destination)) {
                     isIgnored = true;
                 } else if (node.content.length > 0 && node.content[0].type === 'control' && node.content[0].value === '*') {
                     // Ignorable destination, but allow certain ones for:
@@ -1793,12 +1933,34 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
 
             if (isIgnored) return;
 
+            // An embedded object: its kind (`\*\objclass`, a ProgID) names the picture its `\result` shows,
+            // read in place as content; its data (`\objdata`) is not read. One with no `\result` shows
+            // nothing: a picture of its kind alone, reported.
+            if (isObject) {
+                const progId = progIdOf(extractGroupText(childGroup(node, 'objclass') ?? { type: 'group', content: [] }));
+                const result = childGroup(node, 'result');
+                const kind = embeddedObjectKind(progId);
+                if (result) {
+                    const outer = objectAltText;
+                    objectAltText = kind;
+                    try { traverse(result, { ...formatting }, depth + 1); } finally { objectAltText = outer; }
+                } else if (config.extractAttachments) {
+                    flushParagraph();
+                    blockContainer().push({ type: 'image', text: '', ...(kind ? { metadata: { altText: kind } as ImageMetadata } : {}) });
+                    logWarning(OfficeWarningType.CONTENT_PART_NOT_READ, config, { part: embeddedObjectPart(progId), reason: 'it has no \\result, the picture of it RTF gives, and the object itself is not read', ...(progId ? { progId } : {}) });
+                }
+                return;
+            }
+
             // Append group start to raw content
             currentParagraphRawChunks.push('{');
 
             // Handle pict group: extract image and add to content tree
             if (isPict) {
-                const attachment = extractPictAttachment(node);
+                const read = extractPictAttachment(node);
+                const attachment = read && 'attachment' in read ? read.attachment : undefined;
+                // (A list's bullet picture is not content, and not reported.)
+                if (read && 'notRead' in read && !parsingListTable && !parsingListDefinition) logWarning(OfficeWarningType.CONTENT_PART_NOT_READ, config, read.notRead);
                 if (attachment) {
                     attachments.push(attachment);
                     // Only add image node to content if this is NOT a list definition picture
@@ -1812,6 +1974,8 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
                             text: '',
                             metadata: {
                                 attachmentName: attachment.name || `image_${attachments.length}`,
+                                // The picture of an embedded object: its alt text the object's kind.
+                                ...(objectAltText ? { altText: objectAltText } : {}),
                                 // A picture in a HYPERLINK field's result is that link.
                                 ...(currentLinkUrl ? { link: currentLinkUrl, linkType: classifyLinkType(currentLinkUrl) } : {})
                             }
@@ -1949,10 +2113,21 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
             const groupFormatting = { ...formatting };
             const isNestedTableProps = node.destination === 'nesttableprops';
             if (isNestedTableProps) nestedPropsDepth++;
+            // (A deletion stated in the group ends with it.)
+            const deletedAround = deleted;
 
-            for (const child of node.content) {
+            for (let index = 0; index < node.content.length; index++) {
+                const child = node.content[index];
                 // A shape's properties (`\sp` name and value pairs) are not text; its text box is.
                 if (isShapeInstance && !(child.type === 'group' && child.destination === 'shptxt')) continue;
+                // An equation, with the picture of it a group after it may give.
+                if (child.type === 'group' && child.destination === 'mmath') {
+                    const next = node.content[index + 1];
+                    const after = next?.type === 'group' && next.destination === 'mmathPict' ? next : undefined;
+                    if (after) index++;
+                    if (!deleted) readEquation(child, after, groupFormatting, depth);
+                    continue;
+                }
                 // Skip fldinst groups (we already extracted the URL)
                 if (child.type === 'group' && child.destination === 'fldinst') {
                     // We still want it in rawContent!
@@ -1984,6 +2159,7 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
                 }
                 traverse(child, groupFormatting, depth + 1);
             }
+            deleted = deletedAround;
             if (isNestedTableProps) nestedPropsDepth--;
 
             if (node.destination === 'listtable') {
@@ -2037,12 +2213,13 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
                 return;
             }
 
+            currentParagraphRawChunks.push(serializeRtfText(node));
+            if (deleted) return;
             if (formattingChanged(currentFormatting, formatting)) {
                 flushRun();
                 currentFormatting = { ...formatting };
             }
             currentRunTextChunks.push(node.value);
-            currentParagraphRawChunks.push(serializeRtfText(node));
         } else if (node.type === 'control') {
             // Append control to raw content
             currentParagraphRawChunks.push(serializeRtfControl(node));
@@ -2199,6 +2376,9 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
                 formatting.backgroundColor = undefined;
             }
             // Text flow control
+            else if (deleted && (node.value === 'tab' || node.value === 'line' || node.value === 'u' || RTF_SYMBOLS.has(node.value))) {
+                // A character of a tracked deletion: not read.
+            }
             else if (node.value === 'tab') {
                 if (formattingChanged(currentFormatting, formatting)) {
                     flushRun();
@@ -2244,8 +2424,11 @@ export const parseRtf = async (buffer: Buffer, config: FullOfficeParserConfig): 
                 formatting.underline = false;
             } else if (node.value === 'strike') {
                 formatting.strikethrough = (node.param !== 0);
+            } else if (node.value === 'deleted') {
+                deleted = node.param !== 0;
             } else if (node.value === 'plain') {
-                // Reset all character formatting
+                // Reset all character formatting (a tracked deletion among it)
+                deleted = false;
                 formatting.bold = false;
                 formatting.italic = false;
                 formatting.underline = false;

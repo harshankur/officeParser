@@ -904,6 +904,18 @@ async function runTests() {
     const remoteOk = res51remote.status === 1 && res51remote.stderr.includes('allowRemoteAssets') && res51remote.stderr.includes('ocrConfig.langPath');
     results.push({ name: 'CLI: allowRemoteAssets=false refuses fetching OCR files from a CDN', status: remoteOk ? 'PASS' : 'FAIL', details: remoteOk ? 'exit 1 naming ocrConfig.langPath' : `exit ${res51remote.status}, stderr: ${res51remote.stderr.slice(0, 200)}`, duration: 0 });
 
+    // 52. A workbook's charts not read (a parse without --extractAttachments) are reported (CONTENT_PART_NOT_READ),
+    //     but not by a conversion that leaves charts out (--includeCharts=false): its output holds no chart.
+    console.log('Test 52: --includeCharts=false and a workbook\'s charts not read');
+    const t52 = Date.now();
+    const sampleXlsx = fsPath.join(ROOT, 'test', 'files', 'test.xlsx');
+    const res52out = runCliRaw([sampleXlsx, '--to=text', '--includeCharts=false', '--verbose=true']);
+    const leftOutOk = res52out.status === 0 && res52out.stdout.length > 0 && !res52out.stderr.includes('CONTENT_PART_NOT_READ');
+    results.push({ name: 'CLI: --includeCharts=false does not report a workbook\'s charts as not read', status: leftOutOk ? 'PASS' : 'FAIL', details: leftOutOk ? 'no CONTENT_PART_NOT_READ' : `exit ${res52out.status}, stderr: ${res52out.stderr.slice(0, 200)}`, duration: Date.now() - t52 });
+    const res52in = runCliRaw([sampleXlsx, '--to=text', '--verbose=true']);
+    const wantedOk = res52in.status === 0 && res52in.stderr.includes('[CONTENT_PART_NOT_READ]') && res52in.stderr.includes('xl/charts/chart1.xml');
+    results.push({ name: 'CLI: charts wanted, a workbook\'s charts not read are reported', status: wantedOk ? 'PASS' : 'FAIL', details: wantedOk ? 'CONTENT_PART_NOT_READ naming xl/charts/chart1.xml' : `exit ${res52in.status}, stderr: ${res52in.stderr.slice(0, 200)}`, duration: 0 });
+
     // Print summary report
     const logger = new DualLogger();
     const failedCount = generateReport(results, logger);

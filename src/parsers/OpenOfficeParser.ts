@@ -365,7 +365,7 @@ const toRepeatCount = (attr: string | null): number => {
     const n = parseInt(attr || "1");
     return Number.isFinite(n) && n > 0 ? n : 1;
 };
-import { createAttachment } from '../utils/imageUtils.js';
+import { createAttachment, pictureKindOf } from '../utils/imageUtils.js';
 import { ocrDuringParse } from '../utils/ocrUtils.js';
 import { contentWeigher, flagsWeight, repeatPreview, takeRepeats } from '../utils/repeatUtils.js';
 import { documentBytesOf, TABLE_CELLS_PER_BYTE } from '../utils/budgetUtils.js';
@@ -384,6 +384,11 @@ const cleanAttachmentName = (href: string): string => {
     const cleaned = href.replace(/^\.\//, '').replace(/\/$/, '');
     return cleaned.split('/').pop() || '';
 };
+
+/** The extension of a replacement picture of each kind its bytes can be (see replacementName). */
+const REPLACEMENT_EXTENSIONS: Record<string, string> = lookupTable({
+    PNG: 'png', JPEG: 'jpg', GIF: 'gif', BMP: 'bmp', TIFF: 'tiff', WebP: 'webp', PDF: 'pdf', EMF: 'emf', WMF: 'wmf', SVG: 'svg', SVM: 'svm',
+});
 
 /** The ODF document types this parser handles, used to validate a caller-supplied file type. */
 const ODF_FILE_TYPES: SupportedFileType[] = ['odt', 'odp', 'ods', 'odg'];
@@ -465,7 +470,8 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
             !!x.match(metaFileRegex) ||
             !!x.match(stylesFileRegex) ||
             !!x.match(mimetypeFileRegex) ||
-            (!!config.extractAttachments && !!x.match(mediaFileRegex)),
+            // (An object frame's replacement picture, for an object of a kind not read: see replacementName.)
+            (!!config.extractAttachments && (!!x.match(mediaFileRegex) || /^ObjectReplacements\/[^/]+$/.test(x))),
         config.decompressionLimits,
         config
     );
@@ -480,7 +486,7 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
     // Spaces `text:s` elements may make in all (see its reader).
     let spaceBudget = 16 * 1024 * 1024;
     let repeatedObjectText = REPEATED_OBJECT_TEXT;
-    const embeddedObjects = new Map<string, { formula?: string; chartData?: ChartData; chartText?: string; uses: number } | null>();
+    const embeddedObjects = new Map<string, { formula?: string; chartData?: ChartData; chartText?: string; other?: true; uses: number } | null>();
     // The package's files by path, and by each tail of their path one of its last 16 folders starts
     // (`Object 1/content.xml` of `Pictures/Object 1/content.xml`), the first of each: a scan of every
     // file per object took objects x files, and a tail at every folder of a long path read the rest of
@@ -502,27 +508,101 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
         }
         return filesByPath.get(path);
     };
-    const readEmbeddedObject = (attachmentName: string): { formula?: string; chartData?: ChartData; chartText?: string } | null => {
+    // What an embedded object is: a formula (its LaTeX), a chart (its data and text), or another kind of
+    // object (`other`: an embedded Calc table, a Writer or Draw object), whose content is not read; null
+    // when its part is missing. (Every object that was not a formula was read as a chart, an empty one.)
+    const readEmbeddedObject = (attachmentName: string): { formula?: string; chartData?: ChartData; chartText?: string; other?: true } | null => {
         let entry = embeddedObjects.get(attachmentName);
         if (entry === undefined) {
             const objectPath = `${attachmentName}/content.xml`;
             const objectFile = fileAt(objectPath);
             entry = null;
             if (objectFile) {
-                const mathNode = getFirstElementByTagName(parseXmlString(objectFile.content.toString(), { config }), "math");
+                const objectXml = parseXmlString(objectFile.content.toString(), { config });
+                const mathNode = getFirstElementByTagName(objectXml, "math");
                 if (mathNode) entry = { formula: mathmlToLatex(mathNode).trim(), uses: 0 };
-                else {
+                // (The test the chart attachments are made by, below.)
+                else if (getElementsByTagName(objectXml, "chart:chart").length > 0) {
                     const chartData = extractChartData(objectFile.content, config);
                     entry = { chartData, chartText: chartData.rawTexts.join(" "), uses: 0 };
-                }
+                } else entry = { other: true, uses: 0 };
             }
             embeddedObjects.set(attachmentName, entry);
         }
         if (!entry) return null;
+        if (entry.other) return entry;
         if (entry.uses++ === 0) return entry;
         const size = (entry.formula ?? entry.chartText ?? '').length;
         if (size <= repeatedObjectText) { repeatedObjectText -= size; return entry; }
         return { chartData: entry.chartData, chartText: entry.chartData ? '' : undefined, formula: entry.formula === undefined ? undefined : '' };
+    };
+
+    // An object frame's replacement picture (`ObjectReplacements/Object 3`, the picture LibreOffice shows
+    // for an object it cannot draw), as an attachment of its own: named after the object with the
+    // extension its bytes say (`Object 3.png`, `Object 3.emf`, `Object 3.svm` for LibreOffice's StarView
+    // metafile, `Object 3.bin` for any other), so it never takes the name of the object itself (the
+    // chart `Object 2` and its picture were both `Object 2`, and the picture read the chart's XML). Only
+    // the replacements a frame shows become attachments (see replacementAttachments), and only with
+    // `extractAttachments` (their parts are extracted then); without it the name is the object's own
+    // with no extension.
+    const usedReplacements = new Map<string, { name: string; content: Buffer }>();
+    const replacementName = (href: string): string => {
+        const path = href.replace(/^\.\//, '');
+        const file = config.extractAttachments && /^ObjectReplacements\/[^/]+$/.test(path) ? fileAt(path) : undefined;
+        const base = cleanAttachmentName(href);
+        if (!file) return base;
+        const known = usedReplacements.get(path);
+        if (known) return known.name;
+        const kind = file.content.subarray(0, 6).toString('latin1') === 'VCLMTF' ? 'SVM' : pictureKindOf(file.content);
+        const extension = REPLACEMENT_EXTENSIONS[kind] ?? 'bin';
+        const name = `${base}.${extension}`;
+        usedReplacements.set(path, { name, content: file.content });
+        return name;
+    };
+    // An object of no kind read and no replacement picture, reported once per object.
+    const unreadObjects = new Set<string>();
+    /**
+     * The node an object frame stands for: its formula (a code node carrying `math`), its chart (a chart
+     * node named after the object, whose attachment holds chartData), or, for an object of any other kind
+     * or one whose part is missing, the replacement picture the frame carries (an image node naming that
+     * picture's own attachment, the frame's `svg:title` or `svg:desc` its alt text). An object with
+     * neither is reported (CONTENT_PART_NOT_READ). `inline` (a frame in a line or a cell, not among
+     * blocks) gives the formula's `math` kind; a chart among blocks keeps its data in its metadata too, as
+     * it did. `link`, a link the frame stands in.
+     */
+    const objectFrameNode = (frame: Element, object: Element, inline: boolean, sourceXml: string, link?: { link?: string; linkType?: 'internal' | 'external' }): OfficeContentNode | undefined => {
+        const objectName = cleanAttachmentName(object.getAttribute("xlink:href") || '');
+        const embedded = objectName ? readEmbeddedObject(objectName) : null;
+        const raw = (node: OfficeContentNode) => {
+            if (config.includeRawContent) node.rawContent = getRawContent(frame, sourceXml, config);
+            return node;
+        };
+        if (embedded?.formula !== undefined) {
+            return raw({ type: 'code', text: embedded.formula, metadata: { math: inline ? 'inline' : 'block', ...(link ?? {}) } as CodeMetadata });
+        }
+        if (embedded && !embedded.other) {
+            return raw({ type: 'chart', text: embedded.chartText ?? '', metadata: { attachmentName: objectName, ...(!inline && embedded.chartData ? { chartData: embedded.chartData } : {}) } as ChartMetadata });
+        }
+        const replacement = getDirectChildren(frame, "draw:image")[0]?.getAttribute("xlink:href");
+        if (replacement) {
+            const altText = frameChild(frame, "svg:title")?.textContent || frameChild(frame, "svg:desc")?.textContent || '';
+            return raw({
+                type: 'image', text: '', children: [],
+                metadata: {
+                    attachmentName: replacementName(replacement),
+                    ...(altText ? { altText } : {}),
+                    ...(link?.link ? { link: link.link, linkType: link.linkType } : {}),
+                } as ImageMetadata,
+            });
+        }
+        if (objectName && !unreadObjects.has(objectName)) {
+            unreadObjects.add(objectName);
+            logWarning(OfficeWarningType.CONTENT_PART_NOT_READ, config, {
+                part: objectName,
+                reason: embedded ? 'it is an embedded object that is not a chart or a formula, and has no replacement picture' : 'its part is missing, and it has no replacement picture',
+            });
+        }
+        return undefined;
     };
 
     // What a list style makes a list (ordered or not, and whether its marks show), from each styles
@@ -1549,68 +1629,13 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                             textBoxChildren.forEach((block, index) => boxShares.set(block, textBox.whole ? block.text || '' : index === 0 ? textBoxText : ''));
                         }
                     } else if (drawObject) {
-                        const href = drawObject.getAttribute("xlink:href");
-                        let isFormula = false;
-                        let formulaText = '';
-                        let attachmentName = '';
-                        if (href) {
-                            attachmentName = cleanAttachmentName(href);
-                            const object = readEmbeddedObject(attachmentName);
-                            if (object?.formula !== undefined) {
-                                isFormula = true;
-                                formulaText = object.formula;
-                            }
-                        }
-
-                        if (isFormula) {
-                            fullText += formulaText;
-                            // A `code` node carrying `math`, not a plain `text` node: the formula
-                            // is LaTeX, and marking it as such is what lets generators render it
-                            // as maths rather than emit it as prose that happens to contain
-                            // backslashes. Same node shape DOCX, PPTX, HTML and Markdown produce.
-                            const formulaNode: OfficeContentNode = {
-                                type: 'code',
-                                text: formulaText,
-                                metadata: { math: 'inline', ...(linkMetadata ?? {}) } as CodeMetadata
-                            };
-                            if (config.includeRawContent) {
-                                formulaNode.rawContent = getRawContent(frame, sourceXml, config);
-                            }
-                            children.push(formulaNode);
-                        } else {
-                            // Standard inline image extraction fallback if object is not a formula
-                            let altText = '';
-                            const svgTitle = frameChild(frame, "svg:title");
-                            const svgDesc = frameChild(frame, "svg:desc");
-                            if (svgTitle && svgTitle.textContent) {
-                                altText = svgTitle.textContent;
-                            } else if (svgDesc && svgDesc.textContent) {
-                                altText = svgDesc.textContent;
-                            }
-
-                            let imageHref = '';
-                            const drawImages = getDirectChildren(frame, "draw:image");
-                            if (drawImages.length > 0) {
-                                imageHref = drawImages[0].getAttribute("xlink:href") || '';
-                                if (imageHref) {
-                                    imageHref = cleanAttachmentName(imageHref);
-                                }
-                            }
-
-                            const imageNode: OfficeContentNode = {
-                                type: 'image',
-                                text: '',
-                                children: [],
-                                metadata: {
-                                    attachmentName: imageHref || attachmentName,
-                                    ...(altText ? { altText } : {}),
-                                    ...(linkMetadata?.link ? { link: linkMetadata.link, linkType: linkMetadata.linkType } : {})
-                                }
-                            };
-                            if (config.includeRawContent) {
-                                imageNode.rawContent = getRawContent(frame, sourceXml, config);
-                            }
-                            children.push(imageNode);
+                        // The object's formula (LaTeX, a `code` node carrying `math`, as DOCX, PPTX, HTML
+                        // and Markdown give one), its chart (a chart node standing in the line, where it
+                        // was a picture named like the chart), or its replacement picture.
+                        const objectNode = objectFrameNode(frame, drawObject, true, sourceXml, linkMetadata);
+                        if (objectNode) {
+                            if (objectNode.type === 'code') fullText += objectNode.text;
+                            children.push(objectNode);
                         }
                     } else {
                         // Standard inline image extraction fallback
@@ -2490,6 +2515,18 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                     const tableNode = parseTable(table, paragraphStyleMap, styleMap, config, sourceXml, cellBudget);
                     if (config.includeRawContent) tableNode.rawContent = getRawContent(table, sourceXml, config);
                     targetArray.push(tableNode);
+                } else if (object) {
+                    // An embedded object (a chart, a formula, or another kind shown by its replacement
+                    // picture), before the picture the frame carries beside it: a chart with a
+                    // replacement was read as that picture, named like the chart.
+                    const objectNode = objectFrameNode(node, object, false, sourceXml);
+                    if (objectNode?.type === 'code') {
+                        // A formula object at block level is a display equation, so the inner node is
+                        // `math: 'block'` where the inline site emits `math: 'inline'`.
+                        const formulaNode: OfficeContentNode = { type: 'paragraph', text: objectNode.text, children: [{ type: 'code', text: objectNode.text, metadata: objectNode.metadata }] };
+                        if (config.includeRawContent) formulaNode.rawContent = objectNode.rawContent;
+                        targetArray.push(formulaNode);
+                    } else if (objectNode) targetArray.push(objectNode);
                 } else if (image) {
                     // Extract alt text from svg:title or svg:desc
                     let altText = '';
@@ -2527,58 +2564,6 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                         imageNode.rawContent = getRawContent(node, sourceXml, config);
                     }
                     targetArray.push(imageNode);
-                } else if (object) {
-                    // Handle embedded objects like charts or math formulas
-                    const href = object.getAttribute("xlink:href");
-                    if (href) {
-                        const attachmentName = cleanAttachmentName(href);
-                        const embedded = readEmbeddedObject(attachmentName);
-
-                        if (embedded) {
-                            if (embedded.formula !== undefined) {
-                                // Math formula object at block level - a display equation, so the
-                                // inner node is `math: 'block'` where the inline site above emits
-                                // `math: 'inline'`.
-                                const formulaText = embedded.formula;
-                                const formulaNode: OfficeContentNode = {
-                                    type: 'paragraph',
-                                    text: formulaText,
-                                    children: [
-                                        {
-                                            type: 'code',
-                                            text: formulaText,
-                                            metadata: { math: 'block' } as CodeMetadata
-                                        }
-                                    ]
-                                };
-                                if (config.includeRawContent) {
-                                    formulaNode.rawContent = getRawContent(node, sourceXml, config);
-                                }
-                                targetArray.push(formulaNode);
-                            } else {
-                                const chartData = embedded.chartData!;
-
-                                const chartNode: OfficeContentNode = {
-                                    type: 'chart',
-                                    text: embedded.chartText ?? '',
-                                    metadata: {
-                                        attachmentName: attachmentName,
-                                        chartData
-                                    } as ChartMetadata
-                                };
-                                if (config.includeRawContent) chartNode.rawContent = getRawContent(node, sourceXml, config);
-                                targetArray.push(chartNode);
-                            }
-                        } else {
-                            const chartNode: OfficeContentNode = {
-                                type: 'chart',
-                                text: "",
-                                metadata: { attachmentName: attachmentName }
-                            };
-                            if (config.includeRawContent) chartNode.rawContent = getRawContent(node, sourceXml, config);
-                            targetArray.push(chartNode);
-                        }
-                    }
                 }
             } else if (node.tagName === "draw:a") {
                 // A frame that is a link (a clickable picture on a slide or drawing): its pictures carry the link.
@@ -2734,6 +2719,18 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                             // Each frame on its own (nested ones too), none reading another: all of them.
                             const drawFrames = getAllElementsByTagName(cell, "draw:frame");
                             for (const frame of drawFrames) {
+                                // An embedded object: its formula, its chart (a chart node, where a chart
+                                // with a replacement picture was that picture, named like the chart), or
+                                // its replacement picture.
+                                const drawObject = getDirectChildren(frame, "draw:object")[0];
+                                if (drawObject) {
+                                    const objectNode = objectFrameNode(frame, drawObject, true, xmlString);
+                                    if (objectNode?.type === 'code') cellText += objectNode.text;
+                                    if (objectNode) children.push(objectNode);
+                                    continue;
+                                }
+                                const drawImages = getDirectChildren(frame, "draw:image");
+                                if (drawImages.length === 0) continue;
                                 // Extract alt text from svg:title or svg:desc
                                 let altText = '';
                                 const svgTitle = frameChild(frame, "svg:title");
@@ -2743,74 +2740,20 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
                                 } else if (svgDesc && svgDesc.textContent) {
                                     altText = svgDesc.textContent;
                                 }
-
-                                // Extract image href
-                                let imageHref = '';
-                                const drawImages = getDirectChildren(frame, "draw:image");
-                                if (drawImages.length > 0) {
-                                    const rawHref = drawImages[0].getAttribute("xlink:href");
-                                    if (rawHref) {
-                                        imageHref = cleanAttachmentName(rawHref);
-                                    }
+                                const rawHref = drawImages[0].getAttribute("xlink:href");
+                                const imageNode: OfficeContentNode = {
+                                    type: 'image',
+                                    text: '', // Will be populated by assignAttachmentData
+                                    children: [],
+                                    metadata: {
+                                        attachmentName: rawHref ? cleanAttachmentName(rawHref) : '', // Might be empty, will resolve in assignAttachmentData
+                                        ...(altText ? { altText } : {})
+                                    } as ImageMetadata
+                                };
+                                if (config.includeRawContent) {
+                                    imageNode.rawContent = getRawContent(frame, xmlString, config);
                                 }
-
-                                // Extract chart or math object href
-                                let chartHref = '';
-                                let isFormula = false;
-                                let formulaText = '';
-                                const drawObjects = getDirectChildren(frame, "draw:object");
-                                if (drawObjects.length > 0) {
-                                    const href = drawObjects[0].getAttribute("xlink:href");
-                                    if (href) {
-                                        chartHref = cleanAttachmentName(href);
-                                        const embedded = readEmbeddedObject(chartHref);
-                                        if (embedded?.formula !== undefined) {
-                                            isFormula = true;
-                                            formulaText = embedded.formula;
-                                        }
-                                    }
-                                }
-
-                                if (isFormula) {
-                                    cellText += formulaText;
-                                    const formulaNode: OfficeContentNode = {
-                                        type: 'code',
-                                        text: formulaText,
-                                        metadata: { math: 'inline' } as CodeMetadata
-                                    };
-                                    if (config.includeRawContent) {
-                                        formulaNode.rawContent = getRawContent(frame, xmlString, config);
-                                    }
-                                    children.push(formulaNode);
-                                } else if (drawImages.length > 0) {
-                                    // logic for image node
-                                    const imageNode: OfficeContentNode = {
-                                        type: 'image',
-                                        text: '', // Will be populated by assignAttachmentData
-                                        children: [],
-                                        metadata: {
-                                            attachmentName: imageHref || chartHref, // Might be empty, will resolve in assignAttachmentData
-                                            ...(altText ? { altText } : {})
-                                        } as ImageMetadata
-                                    };
-                                    if (config.includeRawContent) {
-                                        imageNode.rawContent = getRawContent(frame, xmlString, config);
-                                    }
-                                    children.push(imageNode);
-                                } else if (chartHref) {
-                                    const chartNode: OfficeContentNode = {
-                                        type: 'chart',
-                                        text: '', // Will be populated by assignAttachmentData
-                                        children: [],
-                                        metadata: {
-                                            attachmentName: chartHref
-                                        } as ChartMetadata
-                                    };
-                                    if (config.includeRawContent) {
-                                        chartNode.rawContent = getRawContent(frame, xmlString, config);
-                                    }
-                                    children.push(chartNode);
-                                }
+                                children.push(imageNode);
                             }
 
                             // Add cell(s). The repeat count is attacker-influenced, so the loop
@@ -3125,8 +3068,10 @@ export const parseOpenOffice = async (buffer: Buffer, config: FullOfficeParserCo
     }
 
     if (config.extractAttachments) {
-        for (const media of mediaFiles) {
-            const attachment = createAttachment(media.path.split('/').pop() || 'image', media.content);
+        // (The replacement pictures frames show, under their own names: see replacementName.)
+        const pictures = [...mediaFiles.map(media => ({ name: media.path.split('/').pop() || 'image', content: media.content })), ...usedReplacements.values()];
+        for (const media of pictures) {
+            const attachment = createAttachment(media.name, media.content);
             attachments.push(attachment);
 
             if (config.ocr && attachment.mimeType.startsWith('image/')) {

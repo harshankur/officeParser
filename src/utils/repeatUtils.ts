@@ -10,7 +10,7 @@
  * string in 400 cells made 400 MB of CSV. Each use after the first is charged here.
  */
 
-import { OfficeAttachment, OfficeContentNode, OfficeParserConfig, OfficeWarningType } from '../types.js';
+import { OfficeAttachment, OfficeContentNode, OfficeParserAST, OfficeParserConfig, OfficeWarningType } from '../types.js';
 import { logWarning } from './errorUtils.js';
 import { documentBytesOf, REPEATED_CHARACTERS_PER_BYTE } from './budgetUtils.js';
 
@@ -34,6 +34,18 @@ export const CELL_REPEAT_ALLOWANCE = 128;
  */
 export const maxRepeatedContentOf = (config: OfficeParserConfig): number =>
     (config.decompressionLimits?.maxRepeatedContent ?? DEFAULT_MAX_REPEATED_CONTENT) + REPEATED_CHARACTERS_PER_BYTE * documentBytesOf(config);
+
+/**
+ * What one output may repeat in all, for the AST it writes: the AST's own
+ * `decompressionLimits.maxRepeatedContent` where it is a number of 0 or more (at most 1 GiB: an AST built in
+ * code carries a config of its own, and a limit of Infinity in it would turn the bound off), else 16 MiB;
+ * plus REPEATED_CHARACTERS_PER_BYTE for each byte of the document it was parsed from (see budgetUtils).
+ */
+export const repeatedContentOfAst = (ast: OfficeParserAST): number => {
+    const configured: unknown = ast.config?.decompressionLimits?.maxRepeatedContent;
+    return (typeof configured === 'number' && configured >= 0 ? Math.min(configured, 1024 * 1024 * 1024) : DEFAULT_MAX_REPEATED_CONTENT)
+        + REPEATED_CHARACTERS_PER_BYTE * documentBytesOf(ast);
+};
 
 /** What each parse (its config object) may still repeat. */
 const budgets = new WeakMap<object, { left: number; warned: boolean }>();
@@ -150,6 +162,27 @@ export const contentWeigher = (): ContentWeigher => {
         return total;
     };
     return weigh;
+};
+
+/**
+ * `text`'s length in UTF-8 bytes, what a writer's output of it weighs (a file of it, a zip part): one a character
+ * below U+0080, two below U+0800, four a surrogate pair, three otherwise (a lone surrogate is written as U+FFFD).
+ * Never less than `text.length`. One pass, no allocation.
+ */
+export const utf8Length = (text: string): number => {
+    let bytes = text.length;
+    for (let i = 0; i < text.length; i++) {
+        const code = text.charCodeAt(i);
+        if (code < 0x80) continue;
+        if (code < 0x800) { bytes += 1; continue; }
+        if (code >= 0xD800 && code <= 0xDBFF && i + 1 < text.length) {
+            const low = text.charCodeAt(i + 1);
+            // A pair: two code units, four bytes.
+            if (low >= 0xDC00 && low <= 0xDFFF) { bytes += 2; i++; continue; }
+        }
+        bytes += 2;
+    }
+    return bytes;
 };
 
 /** The start of `text` a copy past the budget keeps: REPEAT_ALLOWANCE characters, not splitting a surrogate pair. */

@@ -205,7 +205,26 @@ export function sharedNodeVisits(ast: OfficeParserAST, limit = Infinity, weigh?:
         const known = chartTotals.get(chart);
         if (known !== undefined) return known;
         chartTotals.set(chart, 0);
-        let total = entriesTotal(chart.labels) + entriesTotal(chart.labelIndexes) + entriesTotal(chart.rawTexts) + entriesTotal(chart.title) + entriesTotal(chart.xAxisTitle) + entriesTotal(chart.yAxisTitle);
+        let total = entriesTotal(chart.labels) + entriesTotal(chart.labelIndexes) + entriesTotal(chart.rawTexts) + entriesTotal(chart.title) + entriesTotal(chart.xAxisTitle) + entriesTotal(chart.yAxisTitle)
+            + entriesTotal(chart.labelFormatCode) + entriesTotal(chart.shownLabels);
+        const axes = chart.axes;
+        if (Array.isArray(axes)) {
+            if (axes.length > limit) { tooLong = true; return 0; }
+            total += axes.length;
+            held += axes.length;
+            for (const axis of axes) {
+                if (axis && typeof axis === 'object') total += entriesTotal((axis as Record<string, unknown>).id) + entriesTotal((axis as Record<string, unknown>).title);
+            }
+        }
+        const levels = chart.labelLevels;
+        if (Array.isArray(levels)) {
+            if (levels.length > limit) { tooLong = true; return 0; }
+            total += levels.length;
+            held += levels.length;
+            for (const level of levels) {
+                if (level && typeof level === 'object') total += entriesTotal((level as Record<string, unknown>).labels) + entriesTotal((level as Record<string, unknown>).labelIndexes);
+            }
+        }
         const dataSets = chart.dataSets;
         if (Array.isArray(dataSets)) {
             if (dataSets.length > limit) { tooLong = true; return 0; }
@@ -216,8 +235,10 @@ export function sharedNodeVisits(ast: OfficeParserAST, limit = Infinity, weigh?:
                 let own = chartTotals.get(series);
                 if (own === undefined) {
                     chartTotals.set(series, 0);
-                    const { name, values, valueIndexes, pointLabels, pointLabelIndexes } = series as Record<string, unknown>;
-                    own = entriesTotal(name) + entriesTotal(values) + entriesTotal(valueIndexes) + entriesTotal(pointLabels) + entriesTotal(pointLabelIndexes);
+                    const { name, values, valueIndexes, pointLabels, pointLabelIndexes, formatCode, shownValues, axisIds, xValues, xValueIndexes, bubbleSizes, bubbleSizeIndexes } = series as Record<string, unknown>;
+                    own = entriesTotal(name) + entriesTotal(values) + entriesTotal(valueIndexes) + entriesTotal(pointLabels) + entriesTotal(pointLabelIndexes)
+                        + entriesTotal(formatCode) + entriesTotal(shownValues) + entriesTotal(axisIds)
+                        + entriesTotal(xValues) + entriesTotal(xValueIndexes) + entriesTotal(bubbleSizes) + entriesTotal(bubbleSizeIndexes);
                     chartTotals.set(series, own);
                 }
                 total += own;
