@@ -4,6 +4,11 @@ All notable changes to `officeParser` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **Equations keep the braces a command's argument needs.** A fraction, root, bar, accent, math alphabet or function name of one-letter arguments was written as an undefined command (`\fracab`) in LaTeX and Markdown output and to KaTeX or MathJax; it is `\frac{a}{b}`, and a command before a letter is spaced (`\int x`).
+
 ## [8.7.1] - 2026-11-09
 
 ### Fixed

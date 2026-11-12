@@ -47,15 +47,47 @@ const escapeLatex = (text: string): string =>
         .replace(/\^/g, '\\textasciicircum{}');
 
 /**
- * Wraps an expression in braces unless it is already a single token.
+ * Wraps a script (the operand of `^` or `_`) in braces unless it is already a single token.
  *
  * `x^{2}` and `x^2` render identically, but `x^{2y}` and `x^2y` do not, so the braces cannot be
  * dropped whenever the argument is longer than one character. A lone digit or letter is the only
  * safe case, and it is by far the most common one, so special-casing it keeps ordinary output
- * readable without risking a mis-grouped exponent.
+ * readable without risking a mis-grouped exponent. It is for scripts only: the argument of a
+ * command is always `braced`, since a letter after a control word joins its name (`\frac` then
+ * `ab` is the undefined `\fracab`).
  */
 const group = (latex: string): string =>
     /^[0-9a-zA-Z]$/.test(latex) ? latex : `{${latex}}`;
+
+/** The argument of a command (`\frac{a}{b}`, `\sqrt{x}`, `\mathbb{R}`), always braced. */
+const braced = (latex: string): string => `{${latex}}`;
+
+/**
+ * The longest control word `joinLatex` looks back for. Every command this module writes is far
+ * shorter (`\Leftrightarrow`, 14 letters); bounding the look keeps each join constant time.
+ */
+const MAX_CONTROL_WORD = 32;
+
+/** Whether the LaTeX ends with a control word (`\int`, `\leq`), which a following letter would join. */
+const endsWithControlWord = (latex: string): boolean => {
+    let i = latex.length - 1;
+    const stop = Math.max(0, latex.length - 1 - MAX_CONTROL_WORD);
+    while (i >= stop && /[a-zA-Z]/.test(latex[i])) i--;
+    return i >= 0 && i < latex.length - 1 && latex[i] === '\\';
+};
+
+/**
+ * Joins pieces of LaTeX, with a space where a control word meets a letter (`\int` then `x` is
+ * `\int x`, never the undefined `\intx`; `a\leq` then `b` is `a\leq b`).
+ */
+const joinLatex = (pieces: string[], separator = ''): string => {
+    let out = '';
+    pieces.forEach((piece, index) => {
+        const next = index > 0 ? separator + piece : piece;
+        out += (next && /^[a-zA-Z]/.test(next) && endsWithControlWord(out)) ? ` ${next}` : next;
+    });
+    return out;
+};
 
 /** Strips any namespace prefix: `m:oMath` -> `omath`, `mml:mfrac` -> `mfrac`. */
 const localName = (element: Element): string =>
@@ -123,7 +155,7 @@ export const ommlToLatex = (node: Node, depth = 0): string => {
 
     const kids = elementChildren(element);
     /** Concatenates every child, used for containers and for unrecognized constructs. */
-    const all = () => kids.map(k => ommlToLatex(k, depth + 1)).join('');
+    const all = () => joinLatex(kids.map(k => ommlToLatex(k, depth + 1)));
     /** The LaTeX for the first `<m:xxx>` child with the given local name, or '' when absent. */
     const part = (name: string) => {
         const found = kids.find(k => localName(k) === name);
@@ -146,7 +178,7 @@ export const ommlToLatex = (node: Node, depth = 0): string => {
             };
             const alphabet = OMML_MATH_ALPHABETS[valueOf('scr')]
                 ?? (valueOf('sty') === 'b' ? '\\mathbf' : undefined);
-            return alphabet ? `${alphabet}${group(body)}` : body;
+            return alphabet ? `${alphabet}${braced(body)}` : body;
         }
 
         // Containers: an equation, an argument, a base.
@@ -171,7 +203,7 @@ export const ommlToLatex = (node: Node, depth = 0): string => {
             const linear = typeEl?.getAttribute('m:val') === 'lin' || typeEl?.getAttribute('val') === 'lin';
             const num = part('num');
             const den = part('den');
-            return linear ? `${group(num)}/${group(den)}` : `\\frac${group(num)}${group(den)}`;
+            return linear ? `${group(num)}/${group(den)}` : `\\frac${braced(num)}${braced(den)}`;
         }
 
         case 'ssup':
@@ -198,12 +230,12 @@ export const ommlToLatex = (node: Node, depth = 0): string => {
             const end = chr('endchr', ')');
             const sep = chr('sepchr', ',');
             const args = kids.filter(k => localName(k) === 'e').map(k => ommlToLatex(k, depth + 1));
-            return `${beg}${args.join(sep)}${end}`;
+            return joinLatex([beg, joinLatex(args, sep), end]);
         }
 
         case 'rad': {
             const deg = part('deg');
-            const base = group(part('e'));
+            const base = braced(part('e'));
             return deg ? `\\sqrt[${deg}]${base}` : `\\sqrt${base}`;
         }
 
@@ -215,12 +247,12 @@ export const ommlToLatex = (node: Node, depth = 0): string => {
             const op = OMML_NARY_OPERATORS[chr] ?? escapeLatex(chr);
             const sub = part('sub');
             const sup = part('sup');
-            return `${op}${sub ? `_${group(sub)}` : ''}${sup ? `^${group(sup)}` : ''}${part('e')}`;
+            return joinLatex([`${op}${sub ? `_${group(sub)}` : ''}${sup ? `^${group(sup)}` : ''}`, part('e')]);
         }
 
         case 'func':
             // `sin`, `log`, ... - the name is document text, so it cannot become a bare command.
-            return `\\operatorname${group(part('fname'))}${group(part('e'))}`;
+            return `\\operatorname${braced(part('fname'))}${group(part('e'))}`;
 
         case 'limlow':
             return `${part('e')}_${group(part('lim'))}`;
@@ -231,7 +263,7 @@ export const ommlToLatex = (node: Node, depth = 0): string => {
             const barPr = kids.find(k => localName(k) === 'barpr');
             const posEl = barPr ? elementChildren(barPr).find(k => localName(k) === 'pos') : undefined;
             const pos = posEl?.getAttribute('m:val') ?? posEl?.getAttribute('val');
-            return `${pos === 'top' ? '\\overline' : '\\underline'}${group(part('e'))}`;
+            return `${pos === 'top' ? '\\overline' : '\\underline'}${braced(part('e'))}`;
         }
 
         case 'acc': {
@@ -239,7 +271,7 @@ export const ommlToLatex = (node: Node, depth = 0): string => {
             const chrEl = accPr ? elementChildren(accPr).find(k => localName(k) === 'chr') : undefined;
             const chr = chrEl?.getAttribute('m:val') ?? chrEl?.getAttribute('val') ?? '̂';
             const command = chr === '̄' ? '\\bar' : chr === '⃗' ? '\\vec' : chr === '̇' ? '\\dot' : '\\hat';
-            return `${command}${group(part('e'))}`;
+            return `${command}${braced(part('e'))}`;
         }
 
         case 'box':
@@ -347,7 +379,7 @@ export const mathmlTreeToLatex = (node: MathNode, depth = 0): string => {
      * back to gathering the children rather than emitting an empty token.
      */
     const tokenText = () => node.text || kids.map(k => k.text || '').join('');
-    const all = () => kids.map(k => mathmlTreeToLatex(k, depth + 1)).join('');
+    const all = () => joinLatex(kids.map(k => mathmlTreeToLatex(k, depth + 1)));
     const arg = (index: number) => (kids[index] ? mathmlTreeToLatex(kids[index], depth + 1) : '');
 
     switch (tag) {
@@ -358,7 +390,7 @@ export const mathmlTreeToLatex = (node: MathNode, depth = 0): string => {
             // Same reason `tokenText` exists below: an element's text is in `text` for the DOM
             // adapter and in child text nodes for `HtmlParser`, so both have to be consulted.
             if (tex) return (tex.text || (tex.children ?? []).map(c => c.text || '').join('')).trim();
-            return kids.map(k => mathmlTreeToLatex(k, depth + 1)).join('');
+            return all();
         }
 
         case 'mrow':
@@ -375,7 +407,7 @@ export const mathmlTreeToLatex = (node: MathNode, depth = 0): string => {
             return mathmlToken(tokenText());
 
         case 'mfrac':
-            return `\\frac${group(arg(0))}${group(arg(1))}`;
+            return `\\frac${braced(arg(0))}${braced(arg(1))}`;
         case 'msup':
             return `${group(arg(0))}^${group(arg(1))}`;
         case 'msub':
@@ -383,23 +415,23 @@ export const mathmlTreeToLatex = (node: MathNode, depth = 0): string => {
         case 'msubsup':
             return `${group(arg(0))}_${group(arg(1))}^${group(arg(2))}`;
         case 'munder':
-            return `\\underset${group(arg(1))}${group(arg(0))}`;
+            return `\\underset${braced(arg(1))}${braced(arg(0))}`;
         case 'mover':
-            return `\\overset${group(arg(1))}${group(arg(0))}`;
+            return `\\overset${braced(arg(1))}${braced(arg(0))}`;
         case 'munderover':
             return `${group(arg(0))}_${group(arg(1))}^${group(arg(2))}`;
 
         case 'msqrt':
-            return `\\sqrt${group(all())}`;
+            return `\\sqrt${braced(all())}`;
         case 'mroot':
-            return `\\sqrt[${arg(1)}]${group(arg(0))}`;
+            return `\\sqrt[${arg(1)}]${braced(arg(0))}`;
 
         case 'mfenced': {
             // Deprecated in MathML 3 but still emitted by older producers.
             const open = escapeLatex(node.attributes?.['open'] ?? '(');
             const close = escapeLatex(node.attributes?.['close'] ?? ')');
             const sep = escapeLatex(node.attributes?.['separators'] ?? ',');
-            return `${open}${kids.map(k => mathmlTreeToLatex(k, depth + 1)).join(sep)}${close}`;
+            return joinLatex([open, joinLatex(kids.map(k => mathmlTreeToLatex(k, depth + 1)), sep), close]);
         }
 
         case 'mtable':

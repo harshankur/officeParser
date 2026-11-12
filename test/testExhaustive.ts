@@ -32,6 +32,7 @@ import * as fs from 'fs';
 import type { ImageMetadata, OfficeContentNode, OfficeParserAST, ShapeMetadata, SheetMetadata, TextMetadata } from '../src/types';
 import { OfficeWarningType } from '../src/types';
 import { parseXmlString } from '../src/utils/xmlUtils';
+import { mathmlToLatex, ommlToLatex } from '../src/utils/mathUtils';
 import { decodeWindows1252, textDecoder } from '../src/utils/encodingUtils';
 import { ocrTestHooks, performOcr, terminateOcr } from '../src/utils/ocrUtils';
 import { imageFromPdf, imageToTextPdf, newDecodeBudget } from '../src/utils/textPdf';
@@ -506,9 +507,9 @@ async function testHtml(): Promise<void> {
     // not enough that the digits survive, because the bug being locked out here was structure
     // being silently flattened away while the characters came through looking fine.
     const mathNodes = codeNodes.filter(n => (n.metadata as any)?.math);
-    assertExists(mathNodes, n => n.text === '\\frac12', 'HTML: MathML mfrac becomes \\frac, not the concatenation "12"');
+    assertExists(mathNodes, n => n.text === '\\frac{1}{2}', 'HTML: MathML mfrac becomes \\frac{1}{2}, not the concatenation "12"');
     assertExists(mathNodes, n => n.text === 'x^2', 'HTML: MathML msup becomes x^2, not the concatenation "x2"');
-    assertExists(mathNodes, n => n.text === '\\sqrt9', 'HTML: MathML msqrt becomes \\sqrt9');
+    assertExists(mathNodes, n => n.text === '\\sqrt{9}', 'HTML: MathML msqrt becomes \\sqrt{9}');
     // An author-written TeX annotation is the source of truth and must be preferred verbatim
     // over anything reconstructed from the presentation tree beside it.
     assertExists(mathNodes, n => n.text === '\\gamma_{0}', 'HTML: TeX annotation wins over the presentation MathML');
@@ -14318,6 +14319,82 @@ async function testMarkdownReading(): Promise<void> {
     assert.deepStrictEqual([pandoc.value, pandocBack.content[0].type, (pandocBack.content[0].metadata as any).admonitionType, (pandocBack.content[0].metadata as any).sourceSyntax], ['::: {.warning}\nBody\n:::', 'admonition', 'warning', 'pandoc'], 'MD: a Pandoc admonition reads back');
     const alt = await write([{ type: 'paragraph', children: [{ type: 'image', metadata: { url: 'a.png' } }] }]);
     assert.deepStrictEqual([alt, ((await parse(alt)).content[0].children![0].metadata as any).altText], ['![](a.png)', ''], 'MD: a picture with no alt text has none written');
+}
+
+/**
+ * Linear time: the shape at n takes at most 8 times the shape at n / 4 plus 250 ms, measured again once
+ * when over (the faster try kept), so a pause of the machine is not taken for quadratic work.
+ */
+async function assertLinearTime(name: string, n: number, run: (n: number) => unknown): Promise<void> {
+    const timed = async (size: number) => { const started = performance.now(); await run(size); return performance.now() - started; };
+    let small = await timed(n / 4);
+    let big = await timed(n);
+    if (big > 8 * small + 250) {
+        small = Math.max(small, await timed(n / 4));
+        big = Math.min(big, await timed(n));
+    }
+    assert.ok(big <= 8 * small + 250, `${name}: ${n} in ${big.toFixed(0)} ms, ${n / 4} in ${small.toFixed(0)} ms`);
+}
+
+/**
+ * Equation converters brace every command argument: `\frac` followed by `ab` is the undefined control
+ * sequence `\fracab`, so a fraction, root, bar, accent, alphabet or operator name of one-letter arguments
+ * was broken in LaTeX and Markdown output and in what a KaTeX or MathJax consumer renders. A control word
+ * followed by a letter gets a space (`\int x`, `a\leq b`), and a script keeps its short form (`x^2`).
+ */
+async function testMathCommandArguments(): Promise<void> {
+    const M = 'xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math"';
+    const omml = (inner: string) => ommlToLatex(parseXmlString(`<m:oMath ${M}>${inner}</m:oMath>`).documentElement);
+    const mr = (text: string) => `<m:r><m:t>${text}</m:t></m:r>`;
+    for (const [label, inner, expected] of [
+        ['a fraction', `<m:f><m:num>${mr('a')}</m:num><m:den>${mr('b')}</m:den></m:f>`, '\\frac{a}{b}'],
+        ['a linear fraction', `<m:f><m:fPr><m:type m:val="lin"/></m:fPr><m:num>${mr('a')}</m:num><m:den>${mr('b')}</m:den></m:f>`, 'a/b'],
+        ['a root', `<m:rad><m:radPr><m:degHide m:val="1"/></m:radPr><m:deg/><m:e>${mr('x')}</m:e></m:rad>`, '\\sqrt{x}'],
+        ['a root of a degree', `<m:rad><m:deg>${mr('n')}</m:deg><m:e>${mr('x')}</m:e></m:rad>`, '\\sqrt[n]{x}'],
+        ['an integral with no limits', `<m:nary><m:naryPr><m:chr m:val="∫"/></m:naryPr><m:sub/><m:sup/><m:e>${mr('x')}</m:e></m:nary>`, '\\int x'],
+        ['a sum with limits', `<m:nary><m:naryPr><m:chr m:val="∑"/></m:naryPr><m:sub>${mr('i')}</m:sub><m:sup>${mr('n')}</m:sup><m:e>${mr('x')}</m:e></m:nary>`, '\\sum_i^nx'],
+        ['a bar', `<m:bar><m:barPr><m:pos m:val="top"/></m:barPr><m:e>${mr('x')}</m:e></m:bar>`, '\\overline{x}'],
+        ['an accent', `<m:acc><m:e>${mr('x')}</m:e></m:acc>`, '\\hat{x}'],
+        ['a function', `<m:func><m:fName>${mr('sin')}</m:fName><m:e>${mr('x')}</m:e></m:func>`, '\\operatorname{sin}x'],
+        ['an alphabet', `<m:r><m:rPr><m:scr m:val="double-struck"/></m:rPr><m:t>R</m:t></m:r>`, '\\mathbb{R}'],
+        ['a bold run', `<m:r><m:rPr><m:sty m:val="b"/></m:rPr><m:t>v</m:t></m:r>`, '\\mathbf{v}'],
+        ['a script', `<m:sSup><m:e>${mr('x')}</m:e><m:sup>${mr('2')}</m:sup></m:sSup>`, 'x^2'],
+        ['nesting', `<m:f><m:num><m:rad><m:deg/><m:e>${mr('a')}</m:e></m:rad></m:num><m:den>${mr('b')}</m:den></m:f>`, '\\frac{\\sqrt{a}}{b}'],
+    ] as const) {
+        assert.strictEqual(omml(inner), expected, `OMML: ${label}`);
+    }
+
+    const mathml = (xml: string) => mathmlToLatex(parseXmlString(`<math xmlns="http://www.w3.org/1998/Math/MathML">${xml}</math>`).documentElement);
+    for (const [label, xml, expected] of [
+        ['mfrac', '<mfrac><mi>a</mi><mi>b</mi></mfrac>', '\\frac{a}{b}'],
+        ['msqrt', '<msqrt><mi>x</mi></msqrt>', '\\sqrt{x}'],
+        ['mroot', '<mroot><mi>x</mi><mi>n</mi></mroot>', '\\sqrt[n]{x}'],
+        ['munder', '<munder><mi>x</mi><mi>y</mi></munder>', '\\underset{y}{x}'],
+        ['mover', '<mover><mi>x</mi><mi>y</mi></mover>', '\\overset{y}{x}'],
+        ['an integral', '<mo>∫</mo><mi>x</mi>', '\\int x'],
+        ['a relation', '<mi>a</mi><mo>≤</mo><mi>b</mi>', 'a\\leq b'],
+        ['a number set', '<mi>x</mi><mo>∈</mo><mi>ℝ</mi>', 'x\\in\\mathbb{R}'],
+        ['a relation before a digit', '<mi>a</mi><mo>≤</mo><mn>2</mn>', 'a\\leq2'],
+        ['a fenced list', '<mfenced><mi>a</mi><mo>∞</mo><mi>b</mi></mfenced>', '(a,\\infty,b)'],
+        ['msup', '<msup><mi>x</mi><mn>2</mn></msup>', 'x^2'],
+    ] as const) {
+        assert.strictEqual(mathml(xml), expected, `MathML: ${label}`);
+    }
+
+    // End to end: a DOCX equation reaches LaTeX and Markdown output braced.
+    const { docx, parse } = ooxmlHelpers();
+    const { ast } = await parse(docx(`<w:p><m:oMath ${M}><m:f><m:num>${mr('a')}</m:num><m:den>${mr('b')}</m:den></m:f><m:r><m:t>+</m:t></m:r><m:rad><m:deg/><m:e>${mr('x')}</m:e></m:rad></m:oMath></w:p>`));
+    const tex = String((await ast.to('latex')).value);
+    const md = String((await ast.to('md')).value);
+    assert.ok(tex.includes('\\frac{a}{b}+\\sqrt{x}'), `LaTeX output holds the braced equation (${tex.slice(-300)})`);
+    assert.ok(md.includes('\\frac{a}{b}+\\sqrt{x}'), `Markdown output holds the braced equation (${md})`);
+    assert.ok(!/\\frac[a-z]|\\sqrt[a-z]/.test(tex + md), 'no command runs into its argument');
+
+    // Linear: a long row of operators and letters, n against n / 4.
+    const row = (n: number) => parseXmlString(`<math><mrow>${'<mo>∫</mo><mi>x</mi>'.repeat(n)}</mrow></math>`).documentElement;
+    const rows = new Map([20000, 5000].map(n => [n, row(n)]));
+    assert.strictEqual(mathmlToLatex(rows.get(5000)!), '\\int x'.repeat(5000), 'MathML: a long row of operators keeps every space');
+    await assertLinearTime('MathML: a row of operators', 20000, n => mathmlToLatex(rows.get(n)!));
 }
 
 async function runTests(): Promise<void> {
