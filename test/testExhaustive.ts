@@ -7053,6 +7053,8 @@ async function testXlsxFormulas(): Promise<void> {
         `<row r="13"><c r="J13"><f t="shared" ref="J13:J22" si="3">${rowRanges}</f><v>1</v></c></row>`,
         '<row r="14"><c r="J14"><f t="shared" si="3"/><v>1</v></c></row>',
         '<row r="22"><c r="J22"><f t="shared" si="3"/><v>1</v></c></row>',
+        '<row r="24"><c r="K24" t="str"><f>A1&amp;\r\n"x"</f><v>y</v></c></row>',
+        '<row r="25"><c r="K25" t="str"><f><![CDATA[A1&"<b>"]]></f><v>z</v></c></row>',
     ];
     const xlsx = Buffer.from(zipSync({
         '[Content_Types].xml': strToU8('<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/></Types>'),
@@ -7070,12 +7072,215 @@ async function testXlsxFormulas(): Promise<void> {
     assert.deepStrictEqual(['C1', 'D1', 'E1', 'E2'].map(formulaAt), ['A1&"x"', undefined, 'A1:A2*2', undefined], 'a formula decoded, none on a value, an array formula on its first cell');
     assert.deepStrictEqual(['D5', 'D6', 'D7'].map(formulaAt), ['B5-C5', 'B6-C6', 'B7-C7'], 'a shared formula with each cell\'s own references');
     assert.deepStrictEqual(['F3', 'F4'].map(formulaAt), [undefined, 'A4'], 'a cell before its shared formula\'s first has none');
-    assert.deepStrictEqual(['G8', 'H8'].map(formulaAt), [undefined, undefined], 'a data table\'s cell and a formula longer than Excel holds have none');
-    assert.deepStrictEqual([at('D10'), formulaAt('D11')], [undefined, 'IF(A11,"",B11)'], 'a shared formula whose first cell shows nothing is still the others\'');
-    assert.deepStrictEqual([formulaAt('J14')?.length, formulaAt('J22')?.length], [8191, undefined], 'a shared formula\'s copy that its moved references make longer than Excel holds has none');
+    assert.deepStrictEqual(['G8', 'H8'].map(formulaAt), [undefined, long], 'a data table\'s cell has none, and a formula longer than Excel takes typed in is kept');
+    assert.deepStrictEqual([at('D10')?.text, formulaAt('D10'), formulaAt('D11')], ['', 'IF(A10,"",B10)', 'IF(A11,"",B11)'], 'a shared formula whose first cell shows nothing is a cell of its formula, and still the others\'');
+    assert.deepStrictEqual([formulaAt('J14')?.length, formulaAt('J22')?.length, formulaAt('J22')?.slice(0, 12)], [8191, 2048 * 5 + 2047, '10:10+10:10+'], 'a shared formula\'s copy that its moved references make longer than Excel takes typed in is kept');
+    assert.deepStrictEqual(['K24', 'K25'].map(formulaAt), ['A1&\n"x"', 'A1&"<b>"'], 'a formula reads as an XML reader gives it: a literal CRLF as LF, a CDATA section as its text');
     assert.deepStrictEqual([at('D5')?.text, (at('D5')?.metadata as any).valueType, at('C1')?.text], ['750000', 'number', '10x'], 'the value is the result calculated');
     const text = String((await ast.to('text')).value), csv = String((await ast.to('csv')).value);
     assert.ok(text.includes('750000') && csv.includes('750000') && ![text, csv].some(out => out.includes('B5-C5') || out.includes('A1:A2*2')), `text and CSV keep the results; got ${JSON.stringify(text)}`);
+
+    // Formulas are kept at any length: a 5,999-character shared formula filled down 1,000 rows grows to
+    // 11,999 characters, and a plain formula of 8,999 characters is the file's own. Within the budget, no warning.
+    const master = Array.from({ length: 2000 }, () => 'A1').join('+'), plainLong = Array.from({ length: 3000 }, () => 'B1').join('+');
+    let filled = `<row r="1"><c r="B1"><f t="shared" ref="B1:B1000" si="0">${master}</f><v>1</v></c><c r="C1"><f>${plainLong}</f><v>2</v></c></row>`;
+    for (let r = 2; r <= 1000; r++) filled += `<row r="${r}"><c r="B${r}"><f t="shared" si="0"/><v>1</v></c></row>`;
+    const filledWarnings: any[] = [];
+    const filledAst = await OfficeParser.parseOffice(Buffer.from(zipSync({
+        'xl/workbook.xml': strToU8(`<?xml version="1.0"?><workbook ${ns}><sheets><sheet name="S" sheetId="1" r:id="rId1"/></sheets></workbook>`),
+        'xl/_rels/workbook.xml.rels': strToU8('<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Target="worksheets/sheet1.xml" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet"/></Relationships>'),
+        'xl/worksheets/sheet1.xml': strToU8(`<?xml version="1.0"?><worksheet ${ns}><sheetData>${filled}</sheetData></worksheet>`),
+    })), { fileType: 'xlsx', onWarning: (w: any) => filledWarnings.push(w.code) } as any) as OfficeParserAST;
+    const filledCells = collectAllNodes(filledAst).filter(n => n.type === 'cell');
+    const filledFormulas = filledCells.map(c => (c.metadata as any).formula as string | undefined);
+    const lastCopy = filledFormulas[filledFormulas.length - 1];
+    assert.deepStrictEqual([master.length, plainLong.length, filledCells.length, filledFormulas.filter(f => f !== undefined).length], [5999, 8999, 1001, 1001], 'every cell keeps its formula, at any length');
+    assert.deepStrictEqual([lastCopy?.slice(0, 11), lastCopy?.length, filledFormulas[1]], ['A1000+A1000', 11999, plainLong], 'the last copy is moved down 999 rows, and the plain formula is as written');
+    assert.deepStrictEqual(filledWarnings, [], 'copies within the budget are kept unwarned');
+}
+
+/**
+ * A workbook written without calculating its formulas (openpyxl writes `<c r="C1"><f>SUM(A1:B1)</f><v/></c>`,
+ * with no result) keeps every formula cell, with its formula and no text, and says so once per sheet
+ * (FORMULA_RESULTS_MISSING). Such cells were left out, so a sheet of formulas read as empty, unwarned.
+ * An empty text result (a text result of "", a shared string's index naming an empty string, an empty
+ * inline string) is a result, and is not warned about.
+ */
+async function testXlsxFormulaResultsMissing(): Promise<void> {
+    const ns = 'xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"';
+    const sheet = (rows: string) => strToU8(`<?xml version="1.0"?><worksheet ${ns}><sheetData>${rows}</sheetData></worksheet>`);
+    const xlsx = Buffer.from(zipSync({
+        'xl/workbook.xml': strToU8(`<?xml version="1.0"?><workbook ${ns}><sheets><sheet name="Totals" sheetId="1" r:id="rId1"/><sheet name="Other" sheetId="2" r:id="rId2"/><sheet name="Calculated" sheetId="3" r:id="rId3"/></sheets></workbook>`),
+        'xl/_rels/workbook.xml.rels': strToU8('<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+            + [1, 2, 3].map(i => `<Relationship Id="rId${i}" Target="worksheets/sheet${i}.xml" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet"/>`).join('')
+            + '<Relationship Id="rId4" Target="sharedStrings.xml" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings"/></Relationships>'),
+        // (String 1 is empty.)
+        'xl/sharedStrings.xml': strToU8(`<?xml version="1.0"?><sst ${ns}><si><t>first</t></si><si><t></t></si></sst>`),
+        // openpyxl's shape: an empty <v/> after each formula, no type.
+        'xl/worksheets/sheet1.xml': sheet('<row r="1"><c r="A1"><f>1+1</f><v/></c><c r="B1"><f>A1*2</f><v></v></c><c r="C1"><f>SUM(A1:B1)</f></c></row>'
+            + '<row r="2"><c r="A2"><f t="shared" ref="A2:A3" si="0">B2+1</f><v/></c></row><row r="3"><c r="A3"><f t="shared" si="0"/><v/></c></row>'),
+        'xl/worksheets/sheet2.xml': sheet('<row r="1"><c r="A1"><f>TODAY()</f><v/></c><c r="B1"><v>5</v></c></row>'),
+        // Calculated, with empty text results: a text result of "", a shared string's index naming an empty
+        // string, an empty inline string. A shared string's index naming no string is no result.
+        'xl/worksheets/sheet3.xml': sheet('<row r="1"><c r="A1"><f>1+1</f><v>2</v></c><c r="B1" t="str"><f>IF(A1,"","x")</f><v></v></c>'
+            + '<c r="C1" t="s"><f>X</f><v>1</v></c><c r="F1" t="inlineStr"><f>Y</f><is><t></t></is></c><c r="G1" t="s"><f>Z</f><v>99</v></c></row>'),
+    }));
+    const warnings: any[] = [];
+    const ast = await OfficeParser.parseOffice(xlsx, { fileType: 'xlsx', onWarning: (w: any) => warnings.push(w) } as any) as OfficeParserAST;
+    const cellsOf = (sheet: OfficeContentNode) => (sheet.children ?? []).flatMap(row => row.children ?? []).map(cell => [cell.text, (cell.metadata as any).formula, (cell.metadata as any).valueType]);
+    assert.deepStrictEqual(cellsOf(ast.content[0]), [['', '1+1', undefined], ['', 'A1*2', undefined], ['', 'SUM(A1:B1)', undefined], ['', 'B2+1', undefined], ['', 'B3+1', undefined]],
+        'every formula cell without a result is kept, with its formula and no text');
+    assert.deepStrictEqual(cellsOf(ast.content[1]), [['', 'TODAY()', undefined], ['5', undefined, 'number']], 'a sheet mixing values and formulas keeps both');
+    assert.deepStrictEqual(cellsOf(ast.content[2]), [['2', '1+1', 'number'], ['', 'IF(A1,"","x")', 'text'], ['', 'X', 'text'], ['', 'Y', 'text'], ['', 'Z', undefined]],
+        'an empty text result (of "", an empty shared string, an empty inline string) is a cell of its formula, of text; an index naming no string holds no result');
+    const missing = warnings.filter(w => w.code === 'FORMULA_RESULTS_MISSING');
+    assert.deepStrictEqual(missing.map(w => w.details), [{ sheet: 'Totals', cells: 5, first: 'A1' }, { sheet: 'Other', cells: 1, first: 'A1' }, { sheet: 'Calculated', cells: 1, first: 'G1' }],
+        'one warning per sheet holding formulas without results, an empty text result not counted');
+    assert.ok(/Sheet "Totals" holds 5 formula cells with no calculated result \(the first at A1\)/.test(missing[0].message) && /CellMetadata\.formula/.test(missing[0].message), missing[0].message);
+    // Every output writes such a cell empty, in its place.
+    const csv = String((await ast.to('csv')).value);
+    assert.ok(!csv.includes('SUM') && csv.includes('5'), `CSV writes the values, never the formula; got ${JSON.stringify(csv)}`);
+    for (const format of ['text', 'md', 'html', 'xlsx', 'ods', 'pdf'] as const) await ast.to(format as any, format === 'pdf' ? { pdfConfig: { engine: 'native' } } as any : undefined);
+}
+
+/**
+ * A formula's text result (`t="str"`) reads as the same text written as a shared string, whatever
+ * references and characters it is written with: the shared string reader is the reference, as an XML
+ * reader gives a value. Each text is bracketed, since a result's surrounding spaces are not kept.
+ */
+async function testXlsxValueDecodingProperty(): Promise<void> {
+    let s = 0x2545f491;
+    const next = () => (s = (Math.imul(s, 1664525) + 1013904223) >>> 0) >>> 8;
+    const alphabet = ['a', '&', '<', '>', '"', "'", ';', '#', 'x', '1', 'é', '中', '\n', ' '];
+    const written = (ch: string): string => {
+        const way = next() % 4;
+        if (way === 1) return `&#${ch.codePointAt(0)};`;
+        if (way === 2) return `&#x${ch.codePointAt(0)!.toString(16)};`;
+        return ch === '&' ? '&amp;' : ch === '<' ? '&lt;' : way === 3 && ch === '>' ? '&gt;' : way === 3 && ch === '"' ? '&quot;' : way === 3 && ch === "'" ? '&apos;' : ch;
+    };
+    const cases = 2000;
+    const texts: string[] = [];
+    for (let i = 0; i < cases; i++) {
+        let text = '[';
+        for (let k = 0, length = next() % 12; k < length; k++) text += alphabet[next() % alphabet.length];
+        texts.push(text + ']');
+    }
+    const escaped = (text: string) => Array.from(text, written).join('');
+    const ns = 'xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"';
+    const rows = texts.map((text, i) => `<row r="${i + 1}"><c r="A${i + 1}" t="str"><f>B${i + 1}</f><v>${escaped(text)}</v></c><c r="B${i + 1}" t="s"><v>${i}</v></c></row>`).join('');
+    const xlsx = Buffer.from(zipSync({
+        'xl/workbook.xml': strToU8(`<?xml version="1.0"?><workbook ${ns}><sheets><sheet name="S" sheetId="1" r:id="rId1"/></sheets></workbook>`),
+        'xl/_rels/workbook.xml.rels': strToU8('<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Target="worksheets/sheet1.xml" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet"/></Relationships>'),
+        'xl/sharedStrings.xml': strToU8(`<?xml version="1.0"?><sst ${ns}>${texts.map(text => `<si><t xml:space="preserve">${escaped(text)}</t></si>`).join('')}</sst>`),
+        'xl/worksheets/sheet1.xml': strToU8(`<?xml version="1.0"?><worksheet ${ns}><sheetData>${rows}</sheetData></worksheet>`),
+    }));
+    const ast = await OfficeParser.parseOffice(xlsx, { fileType: 'xlsx' } as any) as OfficeParserAST;
+    const rowNodes = ast.content[0].children!;
+    assert.strictEqual(rowNodes.length, cases, 'every row is read');
+    rowNodes.forEach((row, i) => {
+        const [result, shared] = row.children!;
+        assert.strictEqual(shared.text, texts[i], `the shared string reads as written, row ${i + 1}`);
+        assert.strictEqual(result.text, shared.text, `a text result reads as its shared string, row ${i + 1}: ${JSON.stringify(escaped(texts[i]))}`);
+    });
+    console.log(`  XLSX value decoding: ${cases} cases, ${new Set(texts).size} distinct texts`);
+}
+
+/**
+ * A workbook whose SpreadsheetML parts carry a prefix reads as the same workbook unprefixed, for any
+ * prefix, spacing around `=`, quote and main namespace (transitional or Strict): shared, rich and inline
+ * strings, numbers, text results with their formulas, booleans, errors, a comment and a style. In one
+ * case of three the roots bind a second prefix to the namespace, which every other element takes (in
+ * half of those one prefix begins the other), and the sheet's root binds a decoy prefix, the first one
+ * and `z`, to another namespace, whose elements stay unread.
+ */
+async function testXlsxPrefixProperty(): Promise<void> {
+    let s = 0x6c8e9cf5;
+    const next = () => (s = (Math.imul(s, 1664525) + 1013904223) >>> 0) >>> 8;
+    const pick = <T>(items: readonly T[]): T => items[next() % items.length];
+    const MAIN = ['http://schemas.openxmlformats.org/spreadsheetml/2006/main', 'http://purl.oclc.org/ooxml/spreadsheetml/main'] as const;
+    const REL = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
+    const rels = (list: [string, string, string][]) => `<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${list.map(([id, type, target]) => `<Relationship Id="${id}" Type="${REL}/${type}" Target="${target}"/>`).join('')}</Relationships>`;
+    const first = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_', rest = first + '0123456789.-';
+    const prefixOf = (): string => {
+        for (;;) {
+            let prefix = pick(first.split(''));
+            for (let i = 0, extra = next() % 6; i < extra; i++) prefix += pick(rest.split(''));
+            if (prefix !== 'r' && !/^xml/i.test(prefix)) return prefix;
+        }
+    };
+    // A second prefix for `prefix`: another one, or (half the time) `prefix` and one more character; never the decoy.
+    const secondPrefixOf = (prefix: string): string => {
+        for (;;) {
+            const second = next() % 2 === 0 ? prefixOf() : prefix + pick(rest.split(''));
+            if (second !== prefix && second !== `${prefix}z` && !/^xml/i.test(second)) return second;
+        }
+    };
+    /** `inner` with each element under the next of `prefixes` in turn (an end tag under its start tag's); prefixed names are left. */
+    const prefixed = (inner: string, prefixes: string[]) => {
+        let turn = 0;
+        const open: string[] = [];
+        return inner.replace(/<(\/?)([A-Za-z][^\s/>]*)([^>]*)>/g, (tag, slash: string, name: string, attributes: string) => {
+            if (name.includes(':')) return tag;
+            if (slash) return `</${open.pop()}:${name}${attributes}>`;
+            const p = prefixes[turn++ % prefixes.length];
+            if (!attributes.endsWith('/')) open.push(p);
+            return `<${p}:${name}${attributes}>`;
+        });
+    };
+    const DECOY_NAMESPACE = 'http://schemas.microsoft.com/office/spreadsheetml/2009/9/main';
+    const column = (c: number) => String.fromCharCode(65 + c);
+    const cases = 300;
+    const seen = new Set<string>();
+    for (let k = 0; k < cases; k++) {
+        const rows = 1 + next() % 6, cols = 1 + next() % 6;
+        const prefix = prefixOf(), ns = pick(MAIN), eq = pick(['=', ' = ', '= ', ' =']), quote = pick(['"', "'"]);
+        const second = next() % 3 === 0 ? secondPrefixOf(prefix) : undefined;
+        const decoy = `${prefix}z`;
+        const strings: string[] = [];
+        let sheetData = '';
+        for (let r = 0; r < rows; r++) {
+            sheetData += `<row r="${r + 1}">`;
+            for (let c = 0; c < cols; c++) {
+                const ref = `${column(c)}${r + 1}`, style = next() % 3 === 0 ? ' s="1"' : '';
+                const kind = next() % 7, word = `w${next() % 1000}`;
+                if (kind === 0) { strings.push(`<si><t>${word}</t></si>`); sheetData += `<c r="${ref}" t="s"${style}><v>${strings.length - 1}</v></c>`; }
+                else if (kind === 1) { strings.push(`<si><r><t>${word} </t></r><r><rPr><b/></rPr><t>bold</t></r></si>`); sheetData += `<c r="${ref}" t="s"${style}><v>${strings.length - 1}</v></c>`; }
+                else if (kind === 2) sheetData += `<c r="${ref}" t="inlineStr"${style}><is><t>${word} &amp; co</t></is></c>`;
+                else if (kind === 3) sheetData += `<c r="${ref}"${style}><v>${next() % 10000}</v></c>`;
+                else if (kind === 4) sheetData += `<c r="${ref}" t="str"${style}><f>A1&amp;"${word}"</f><v>${word}</v></c>`;
+                else if (kind === 5) sheetData += `<c r="${ref}" t="b"${style}><v>${next() % 2}</v></c>`;
+                else sheetData += `<c r="${ref}" t="e"${style}><v>#DIV/0!</v></c>`;
+            }
+            sheetData += '</row>';
+        }
+        // (The decoy's elements: a cell in the first row, and an extension, read by nothing.)
+        if (second) sheetData = sheetData.replace('<row r="1">', `<row r="1"><${decoy}:c r="Z1" t="inlineStr"><${decoy}:is><${decoy}:t>decoy ${k}</${decoy}:t></${decoy}:is></${decoy}:c>`);
+        const extensions = second ? `<extLst><ext uri="{decoy}"><${decoy}:ext/></ext></extLst>` : '';
+        const comment = `<authors><author>A${k}</author></authors><commentList><comment ref="A1" authorId="0"><text><r><t>note ${k}</t></r></text></comment></commentList>`;
+        const styles = '<fonts count="2"><font><sz val="11"/></font><font><b/><sz val="14"/></font></fonts><cellXfs count="2"><xf numFmtId="0" fontId="0"/><xf numFmtId="0" fontId="1" applyFont="1"/></cellXfs>';
+        const book = (p: string) => {
+            const decoyDeclaration = (root: string) => second && root === 'worksheet' ? ` xmlns:${decoy}="${DECOY_NAMESPACE}"` : '';
+            const part = (root: string, inner: string) => p
+                ? `<?xml version="1.0"?><${p}:${root} xmlns:${p}${eq}${quote}${ns}${quote}${second ? ` xmlns:${second}${eq}${quote}${ns}${quote}` : ''}${decoyDeclaration(root)} xmlns:r="${REL}">${prefixed(inner, second ? [p, second] : [p])}</${p}:${root}>`
+                : `<?xml version="1.0"?><${root} xmlns="${ns}"${decoyDeclaration(root)} xmlns:r="${REL}">${inner}</${root}>`;
+            return Buffer.from(zipSync({
+                'xl/workbook.xml': strToU8(part('workbook', '<sheets><sheet name="Sheet" sheetId="1" r:id="rId1"/></sheets>')),
+                'xl/_rels/workbook.xml.rels': strToU8(rels([['rId1', 'worksheet', 'worksheets/sheet1.xml'], ['rId2', 'sharedStrings', 'sharedStrings.xml'], ['rId3', 'styles', 'styles.xml']])),
+                'xl/sharedStrings.xml': strToU8(part('sst', strings.join(''))),
+                'xl/styles.xml': strToU8(part('styleSheet', styles)),
+                'xl/comments1.xml': strToU8(part('comments', comment)),
+                'xl/worksheets/_rels/sheet1.xml.rels': strToU8(rels([['rId1', 'comments', '../comments1.xml']])),
+                'xl/worksheets/sheet1.xml': strToU8(part('worksheet', `<sheetData>${sheetData}</sheetData>${extensions}`)),
+            }));
+        };
+        const read = async (p: string) => JSON.stringify((await OfficeParser.parseOffice(book(p), { fileType: 'xlsx' } as any) as OfficeParserAST).content);
+        const plain = await read(''), withPrefix = await read(prefix);
+        assert.ok(plain.includes(`note ${k}`) && plain.includes('"sheetName":"Sheet"'), `case ${k}: the unprefixed workbook is read with its comment`);
+        assert.ok(!withPrefix.includes(`decoy ${k}`), `case ${k}: the decoy prefix ${JSON.stringify(decoy)}'s elements stay unread`);
+        assert.strictEqual(withPrefix, plain, `case ${k}: prefix ${JSON.stringify(prefix)}${second ? ` and ${JSON.stringify(second)}` : ''}, ${JSON.stringify(eq)}, ${quote}, ${ns}`);
+        seen.add(`${prefix}|${second ?? ''}|${second ? decoy : ''}|${eq}|${quote}|${ns}|${sheetData}`);
+    }
+    console.log(`  XLSX prefixes: ${cases} cases, ${seen.size} distinct`);
 }
 
 /**
@@ -15476,6 +15681,9 @@ async function runTests(): Promise<void> {
         ['Native PDF GIF and BMP', testNativePdfGifAndBmp],
         ['XLSX shown text', testXlsxShownText],
         ['XLSX formulas', testXlsxFormulas],
+        ['XLSX formula results missing', testXlsxFormulaResultsMissing],
+        ['XLSX value decoding property', testXlsxValueDecodingProperty],
+        ['XLSX prefix property', testXlsxPrefixProperty],
         ['Sheet tables in PDF', testSheetTablesInPdf],
         ['Native PDF links', testNativePdfLinks],
         ['Paragraph layout', testParagraphLayout],

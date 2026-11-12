@@ -186,7 +186,14 @@
             ODS's text shows <code>10.46</code>; a date's or time's count of days in Excel's 1900 date system,
             <code>'45000.5'</code>; <code>'true'</code> or <code>'false'</code>), <code>numberFormat</code> (the XLSX number
             format it is shown in, as Excel writes one: <code>'0.0 "kg"'</code>, <code>'mm/dd/yyyy'</code>; none for
-            General) and <code>hidden</code> (in a hidden row or column). XLSX and ODS output hold the cell as that kind
+            General), <code>formula</code> (XLSX: the formula the cell's value is calculated from, as the sheet holds it,
+            without the leading <code>=</code>, <code>'SUM(A1:A3)'</code>; a filled-down (shared) formula with each cell's
+            own references, an array formula on its range's first cell. <code>text</code> and <code>value</code> keep the
+            result the file last calculated, which every output writes; no output writes the formula. Not set for a
+            what-if data table's cell; shared copies count toward <code>decompressionLimits.maxRepeatedContent</code>,
+            past which a copy keeps its value without its formula, and a copy with no calculated result is left out (both reported). A formula cell with no calculated result is a cell of its
+            formula and no text, reported once per sheet with <code>FORMULA_RESULTS_MISSING</code>) and
+            <code>hidden</code> (in a hidden row or column). XLSX and ODS output hold the cell as that kind
             of value, so text that reads as a number (<code>1E5</code>, a card number) stays text.</li>
     </ul>
 

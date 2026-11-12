@@ -260,8 +260,8 @@ const CONFIG_TESTS = [
         name: 'OCR Recognition Timeout',
         // Set timeout.recognition to 1 ms: OCR workers initialise normally, but the
         // actual recognition call (worker.recognize) will race against a 1 ms timer and
-        // lose.  Like C8, the parse should complete with a non-fatal OCR warning rather
-        // than throwing or hanging.  The difference from C8 is that the worker pool IS
+        // lose.  As with an OCR worker that fails to start, the parse should complete with a non-fatal OCR warning rather
+        // than throwing or hanging.  The difference is that the worker pool IS
         // initialised successfully here; only per-image recognition calls time out.
         config: {
             ocr: true,
@@ -1794,6 +1794,181 @@ async function testXlsxInlineStrings(): Promise<FeatureTest[]> {
     return results;
 }
 
+/**
+ * A cell's `<v>` is read as an XML reader gives it, for every kind of value: a formula's text result,
+ * an error, an ISO date, a number, a boolean and a shared string's index written with references were
+ * read as written (`AT&amp;T`, `&#35;N/A`, a dropped cell for `&#48;`), and a value is decoded once
+ * only (`a&amp;amp;b` is `a&amp;b`).
+ */
+async function testXlsxCellValueText(): Promise<FeatureTest[]> {
+    const results: FeatureTest[] = [];
+    const record = (feature: string, expected: any, actual: any, condition: boolean, details: string): void => {
+        results.push({
+            category: 'Excel Cell Value Decoding',
+            feature,
+            fileType: 'xlsx',
+            result: { status: condition ? 'PASS' : 'FAIL', expected, actual, details }
+        });
+    };
+
+    const fflate = require('fflate');
+    const ns = 'xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"';
+    const cells = [
+        '<c r="A1" t="str"><f>"AT"&amp;"&amp;T"</f><v>AT&amp;T &lt;b&gt; &quot;q&quot; &#169;</v></c>',
+        '<c r="B1" t="e"><v>&#35;N/A</v></c>',
+        '<c r="C1" t="d"><v>2024&#45;01&#45;02</v></c>',
+        '<c r="D1"><v>&#52;2</v></c>',
+        '<c r="E1" t="b"><v>&#49;</v></c>',
+        '<c r="F1" t="str"><v>line1&#10;line2</v></c>',
+        '<c r="G1" t="s"><v>&#48;</v></c>',
+        '<c r="H1" t="str"><v>a&amp;amp;b</v></c>',
+        '<c r="I1" t="str"><v>line1\r\nline2</v></c>',
+    ];
+    const files = {
+        'xl/workbook.xml': fflate.strToU8(`<?xml version="1.0"?><workbook ${ns}><sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets></workbook>`),
+        'xl/_rels/workbook.xml.rels': fflate.strToU8('<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>'),
+        'xl/sharedStrings.xml': fflate.strToU8(`<?xml version="1.0"?><sst ${ns}><si><t>First shared string</t></si></sst>`),
+        'xl/worksheets/sheet1.xml': fflate.strToU8(`<?xml version="1.0"?><worksheet ${ns}><sheetData><row r="1">${cells.join('')}</row></sheetData></worksheet>`),
+    };
+
+    try {
+        const ast: any = await OfficeParser.parseOffice(Buffer.from(fflate.zipSync(files)), { fileType: 'xlsx' });
+        const row = ast.content[0]?.children?.[0]?.children ?? [];
+        const byColumn = new Map<number, any>(row.map((cell: any) => [cell.metadata.col, cell]));
+        const check = (feature: string, col: number, text: string, valueType?: string, value?: string) => {
+            const cell = byColumn.get(col);
+            const actual = cell ? { text: cell.text, valueType: cell.metadata.valueType, value: cell.metadata.value } : 'no cell';
+            const ok = !!cell && cell.text === text && (valueType === undefined || cell.metadata.valueType === valueType) && (value === undefined || cell.metadata.value === value);
+            record(feature, { text, valueType, value }, actual, ok, ok ? 'Decoded as an XML reader reads it' : 'Read as written');
+        };
+        check('A formula\'s text result has its references decoded', 0, 'AT&T <b> "q" ©', 'text');
+        check('An error written with a reference', 1, '#N/A', 'error');
+        check('An ISO date written with references', 2, '2024-01-02', 'date', '45293');
+        check('A number written with a reference', 3, '42', 'number');
+        check('A boolean written with a reference', 4, 'TRUE', 'boolean', 'true');
+        check('A character reference for a line break', 5, 'line1\nline2', 'text');
+        check('A shared string\'s index written with a reference', 6, 'First shared string', 'text');
+        check('A value is decoded once only', 7, 'a&amp;b', 'text');
+        check('A literal CRLF in a value reads as LF', 8, 'line1\nline2', 'text');
+    } catch (e: any) {
+        record('Parsing Success', 'Success', e.message || e, false, `Failed to parse the cell value XLSX: ${e.message || e}`);
+    }
+
+    return results;
+}
+
+/**
+ * A workbook whose SpreadsheetML elements carry a prefix (`<x:row>`, as the .NET Open XML SDK writes
+ * them) reads as the same workbook unprefixed: its tabs, shared and rich strings, styles, comments,
+ * merges, links, hidden rows, columns and sheets, page setup and chart sheets. It read as one empty
+ * sheet named `sheet1.xml`, with no warning. The prefix is the one the part's root binds to the main
+ * namespace (transitional or Strict, spaces around `=` allowed); another namespace's prefix is not removed.
+ */
+async function testXlsxPrefixedParts(): Promise<FeatureTest[]> {
+    const results: FeatureTest[] = [];
+    const record = (feature: string, expected: any, actual: any, condition: boolean, details: string): void => {
+        results.push({
+            category: 'Excel Prefixed SpreadsheetML',
+            feature,
+            fileType: 'xlsx',
+            result: { status: condition ? 'PASS' : 'FAIL', expected, actual, details }
+        });
+    };
+
+    const fflate = require('fflate');
+    const MAIN = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main';
+    const STRICT = 'http://purl.oclc.org/ooxml/spreadsheetml/main';
+    const REL = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
+    const PKG = 'http://schemas.openxmlformats.org/package/2006/relationships';
+    const rels = (list: [string, string, string][]) => `<?xml version="1.0"?><Relationships xmlns="${PKG}">${list.map(([id, type, target]) => `<Relationship Id="${id}" Type="${REL}/${type}" Target="${target}"/>`).join('')}</Relationships>`;
+    /** A SpreadsheetML part rooted at `root`, its elements prefixed with `p` (none: the default namespace). */
+    const part = (p: string, root: string, inner: string, ns = MAIN, eq = '=') => p
+        ? `<?xml version="1.0"?><${p}:${root} xmlns:${p}${eq}"${ns}" xmlns:r="${REL}">${inner.replace(/<(\/?)([A-Za-z])/g, `<$1${p}:$2`)}</${p}:${root}>`
+        : `<?xml version="1.0"?><${root} xmlns${eq}"${ns}" xmlns:r="${REL}">${inner}</${root}>`;
+    const workbookOf = (p: string, ns?: string, eq?: string) => {
+        const zip: Record<string, Uint8Array> = {
+            '_rels/.rels': fflate.strToU8(rels([['rId1', 'officeDocument', 'xl/workbook.xml']])),
+            'xl/_rels/workbook.xml.rels': fflate.strToU8(rels([['rId1', 'worksheet', 'worksheets/sheet1.xml'], ['rId2', 'worksheet', 'worksheets/sheet2.xml'], ['rId3', 'sharedStrings', 'sharedStrings.xml'], ['rId4', 'styles', 'styles.xml']])),
+            'xl/worksheets/_rels/sheet1.xml.rels': fflate.strToU8(rels([['rId1', 'comments', '../comments1.xml']])),
+        };
+        const parts: Record<string, [string, string]> = {
+            'xl/workbook.xml': ['workbook', '<workbookPr/><sheets><sheet name="Data" sheetId="1" r:id="rId1"/><sheet name="Hidden" sheetId="2" state="hidden" r:id="rId2"/></sheets>'],
+            'xl/sharedStrings.xml': ['sst', '<si><t>shared</t></si><si><r><t>rich </t></r><r><rPr><b/></rPr><t>bold</t></r></si>'],
+            'xl/styles.xml': ['styleSheet', '<numFmts count="1"><numFmt numFmtId="164" formatCode="yyyy-mm-dd"/></numFmts><fonts count="2"><font><sz val="11"/></font><font><b/><sz val="14"/></font></fonts><fills count="1"><fill><patternFill patternType="none"/></fill></fills><cellXfs count="3"><xf numFmtId="0" fontId="0"/><xf numFmtId="164" fontId="0" applyNumberFormat="1"/><xf numFmtId="0" fontId="1" applyFont="1"/></cellXfs>'],
+            'xl/comments1.xml': ['comments', '<authors><author>Ann &amp; Bo</author></authors><commentList><comment ref="A1" authorId="0"><text><r><t>note &lt;1&gt;</t></r></text></comment></commentList>'],
+            'xl/worksheets/sheet1.xml': ['worksheet', '<cols><col min="3" max="3" hidden="1"/></cols><sheetData><row r="1">'
+                + '<c r="A1" t="s"><v>0</v></c><c r="B1" t="s"><v>1</v></c><c r="C1" s="1"><v>45000</v></c><c r="D1" s="2" t="str"><f>1</f><v>big</v></c><c r="E1" t="inlineStr"><is><t>inl</t></is></c>'
+                + '</row><row r="2" hidden="1"><c r="A2"><v>7</v></c></row></sheetData><mergeCells count="1"><mergeCell ref="A2:B2"/></mergeCells>'
+                + '<hyperlinks><hyperlink ref="E1" location="Data!A1"/></hyperlinks><pageMargins left="0.5" right="0.5" top="1" bottom="1" header="0.3" footer="0.3"/><pageSetup paperSize="9" orientation="landscape"/>'],
+            'xl/worksheets/sheet2.xml': ['worksheet', '<sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>secret</t></is></c></row></sheetData>'],
+        };
+        for (const [name, [root, inner]] of Object.entries(parts)) zip[name] = fflate.strToU8(part(p, root, inner, ns, eq));
+        return Buffer.from(fflate.zipSync(zip));
+    };
+    const parsed = async (buffer: Buffer, extra: object = {}) => {
+        const warnings: string[] = [];
+        const ast: any = await OfficeParser.parseOffice(buffer, { fileType: 'xlsx', onWarning: (w: any) => warnings.push(w.code), ...extra } as any);
+        return { content: JSON.stringify(ast.content), ast, warnings };
+    };
+
+    try {
+        // The pull request's own workbook.
+        const pr = await parsed(Buffer.from(fflate.zipSync({
+            'xl/workbook.xml': fflate.strToU8(`<x:workbook xmlns:x="${MAIN}" xmlns:r="${REL}"><x:sheets><x:sheet name="Data" sheetId="1" r:id="rId1"/></x:sheets></x:workbook>`),
+            'xl/_rels/workbook.xml.rels': fflate.strToU8(rels([['rId1', 'worksheet', 'worksheets/sheet1.xml']])),
+            'xl/worksheets/sheet1.xml': fflate.strToU8(`<x:worksheet xmlns:x="${MAIN}"><x:sheetData><x:row r="1"><x:c r="A1" t="inlineStr"><x:is><x:t>Hello</x:t></x:is></x:c><x:c r="B1"><x:v>42</x:v></x:c></x:row></x:sheetData></x:worksheet>`),
+        })));
+        const prOk = pr.content.includes('"sheetName":"Data"') && pr.content.includes('Hello') && pr.content.includes('42');
+        record('A prefixed workbook\'s tab and cells are read', 'Data: Hello, 42', pr.content.slice(0, 200), prOk, 'Prefixed workbook and worksheet');
+
+        const plain = await parsed(workbookOf(''));
+        const expectedBits = ['"sheetName":"Data"', '"sheetName":"Hidden"', 'secret', 'rich ', '"bold":true', 'note <1>', 'Ann & Bo', '"colSpan":2', '"hidden":true', '"link":"#Data!A1"', '"pageSetup":', '"valueType":"date"'];
+        const missing = expectedBits.filter(bit => !plain.content.includes(bit));
+        record('The unprefixed workbook holds every part read', [], missing, missing.length === 0, 'The reference for the prefixed cases');
+        for (const [label, buffer] of [
+            ['x: on every part', workbookOf('x')],
+            ['spaces around = in the declaration', workbookOf('ss', MAIN, ' = ')],
+            ['the Strict namespace', workbookOf('x', STRICT)],
+        ] as const) {
+            const prefixed = await parsed(buffer);
+            record(`A prefixed workbook (${label}) reads as unprefixed`, 'same AST', prefixed.content === plain.content ? 'same AST' : prefixed.content.slice(0, 300),
+                prefixed.content === plain.content, 'Every SpreadsheetML part read through one prefix rule');
+        }
+        const strictPlain = await parsed(workbookOf('', STRICT));
+        record('A Strict workbook in the default namespace reads as transitional', 'same AST', strictPlain.content === plain.content ? 'same AST' : strictPlain.content.slice(0, 300),
+            strictPlain.content === plain.content, 'Strict main namespace, unprefixed');
+
+        // A prefixed chart sheet is placed as a sheet holding its chart.
+        const chartBook = Buffer.from(fflate.zipSync({
+            'xl/workbook.xml': fflate.strToU8(part('x', 'workbook', '<sheets><sheet name="Chart1" sheetId="1" r:id="rId1"/></sheets>')),
+            'xl/_rels/workbook.xml.rels': fflate.strToU8(rels([['rId1', 'chartsheet', 'chartsheets/sheet1.xml']])),
+            'xl/chartsheets/sheet1.xml': fflate.strToU8(part('x', 'chartsheet', '<sheetViews><sheetView workbookViewId="0"/></sheetViews><drawing r:id="rId1"/>')),
+            'xl/chartsheets/_rels/sheet1.xml.rels': fflate.strToU8(rels([['rId1', 'drawing', '../drawings/drawing1.xml']])),
+            'xl/drawings/drawing1.xml': fflate.strToU8(`<?xml version="1.0"?><xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:r="${REL}"><xdr:absoluteAnchor><xdr:pos x="0" y="0"/><xdr:ext cx="8000000" cy="5000000"/><xdr:graphicFrame><xdr:nvGraphicFramePr><xdr:cNvPr id="2" name="Chart 1"/><xdr:cNvGraphicFramePr/></xdr:nvGraphicFramePr><xdr:xfrm/><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart r:id="rId1"/></a:graphicData></a:graphic></xdr:graphicFrame><xdr:clientData/></xdr:absoluteAnchor></xdr:wsDr>`),
+            'xl/drawings/_rels/drawing1.xml.rels': fflate.strToU8(rels([['rId1', 'chart', '../charts/chart1.xml']])),
+            'xl/charts/chart1.xml': fflate.strToU8('<?xml version="1.0"?><c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><c:chart><c:title><c:tx><c:rich><a:bodyPr/><a:p><a:r><a:t>OnChartSheet</a:t></a:r></a:p></c:rich></c:tx></c:title><c:plotArea><c:barChart><c:barDir val="col"/><c:ser><c:idx val="0"/><c:order val="0"/><c:val><c:numRef><c:numCache><c:ptCount val="2"/><c:pt idx="0"><c:v>11</c:v></c:pt><c:pt idx="1"><c:v>12</c:v></c:pt></c:numCache></c:numRef></c:val></c:ser></c:barChart></c:plotArea></c:chart></c:chartSpace>'),
+        }));
+        const charts = await parsed(chartBook, { extractAttachments: true });
+        const shape = charts.ast.content.map((sheet: any) => [sheet.metadata?.sheetName, (sheet.children ?? []).map((child: any) => child.type)]);
+        record('A prefixed chart sheet is placed with its chart', [['Chart1', ['chart']]], shape, JSON.stringify(shape) === JSON.stringify([['Chart1', ['chart']]]), 'x:chartsheet and x:drawing read');
+
+        // Another namespace's prefix on the root is not the main one's: an x14 extension list is left as it is.
+        const extSheet = (ext: string) => Buffer.from(fflate.zipSync({
+            'xl/workbook.xml': fflate.strToU8(part('', 'workbook', '<sheets><sheet name="S" sheetId="1" r:id="rId1"/></sheets>')),
+            'xl/_rels/workbook.xml.rels': fflate.strToU8(rels([['rId1', 'worksheet', 'worksheets/sheet1.xml']])),
+            'xl/worksheets/sheet1.xml': fflate.strToU8(`<?xml version="1.0"?><worksheet xmlns="${MAIN}" xmlns:x14="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main" xmlns:r="${REL}"><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>kept</t></is></c><c r="B1"><v>3</v></c></row></sheetData>${ext}</worksheet>`),
+        }));
+        const withExt = await parsed(extSheet('<extLst><ext uri="{78C0D931-6437-407d-A8EE-F0AAD7539E65}"><x14:conditionalFormattings><x14:conditionalFormatting><x14:cfRule type="dataBar" id="{1}"><x14:dataBar><x14:cfvo type="min"/></x14:dataBar></x14:cfRule></x14:conditionalFormatting></x14:conditionalFormattings></ext></extLst>'));
+        const withoutExt = await parsed(extSheet(''));
+        record('An x14 prefix on the root is not removed', 'same AST', withExt.content === withoutExt.content ? 'same AST' : withExt.content.slice(0, 300),
+            withExt.content === withoutExt.content && withExt.content.includes('kept'), 'Only the main namespace\'s prefix is removed');
+    } catch (e: any) {
+        record('Parsing Success', 'Success', e.message || e, false, `Failed to parse a prefixed XLSX: ${e.message || e}`);
+    }
+
+    return results;
+}
+
 // ============================================================================
 // TEST RUNNERS
 // ============================================================================
@@ -1829,6 +2004,8 @@ async function testFile(ext: string): Promise<FeatureTest[]> {
         results.push(...validateTextExtraction('Text Extraction', ext, (await ast.to('text')).value, metrics));
         if (ext === 'xlsx') {
             results.push(...await testXlsxInlineStrings());
+            results.push(...await testXlsxCellValueText());
+            results.push(...await testXlsxPrefixedParts());
         }
 
         // Load baseline if available
@@ -3255,6 +3432,8 @@ async function runSingleFileTest(ext: string) {
     const textValidation = validateTextExtraction('Text Extraction', ext, extractedText, metrics);
     if (ext === 'xlsx') {
         textValidation.push(...await testXlsxInlineStrings());
+        textValidation.push(...await testXlsxCellValueText());
+        textValidation.push(...await testXlsxPrefixedParts());
     }
     const textPassed = textValidation.filter(t => t.result.status === 'PASS').length;
     const textFailed = textValidation.filter(t => t.result.status === 'FAIL').length;
@@ -4247,7 +4426,7 @@ async function testHostileInputs(): Promise<FeatureTest[]> {
     const FAILED = 'DOCUMENT_DECRYPTION_FAILED';
     const parse = (buf: Buffer, cfg: OfficeParserConfig = {}) => OfficeParser.parseOffice(buf, { password: 'test123', ocr: false, ...cfg });
 
-    // C1: a descriptor that is one long run of '<'. The old per-attribute `<[^>]*\btag\b[^>]*>` regex
+    // A descriptor that is one long run of '<'. The old per-attribute `<[^>]*\btag\b[^>]*>` regex
     // restarted at every position: 22s for 50 KB, and it ran 15 times.
     const runOfAngles = (kb: number) => {
         const info = Buffer.alloc(4 + kb * 1024, 0x3c);
@@ -4263,7 +4442,7 @@ async function testHostileInputs(): Promise<FeatureTest[]> {
     await timed('RC4/CryptoAPI encryption reports unsupported', 'docx', 5000, FAILED, () => parse(cfbWith(standardEncryptionInfo(0x6801, 128))), /algId 0x6801/);
     await timed('Extensible encryption reports unsupported', 'docx', 5000, FAILED, () => parse(cfbWith(standardEncryptionInfo(0x660e, 128, 3))), /unsupported encryption version 3\.3/);
 
-    // H1: unclosed `<manifest:file-entry` tokens. The old `[\s\S]*?</manifest:file-entry>` scan ran to
+    // Unclosed `<manifest:file-entry` tokens. The old `[\s\S]*?</manifest:file-entry>` scan ran to
     // end-of-string from every start token: 4.4s for 256 KB, under the caller's full 512 MiB budget.
     const hostileManifestTok = '<manifest:file-entry manifest:full-path="a" ';
     const hostileManifest = '<?xml version="1.0"?><manifest:manifest><!-- encryption-data -->'
@@ -4271,7 +4450,7 @@ async function testHostileInputs(): Promise<FeatureTest[]> {
     const hostileOdf = await buildOdf(hostileManifest, {});
     await timed('Hostile ODF manifest (512 KB of unclosed entries) parsed fast', 'odt', 2000, 'completes', () => parse(hostileOdf));
 
-    // M1: 50 zero-length "encrypted" entries, each at the per-entry iteration cap and unverifiable.
+    // 50 zero-length "encrypted" entries, each at the per-entry iteration cap and unverifiable.
     // Pre-fix, a wrong password paid all 50 derivations (12.4s) and paid them again on every retry.
     let manyEntries = '<?xml version="1.0"?><manifest:manifest>';
     const manyFiles: Record<string, Uint8Array> = {};

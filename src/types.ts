@@ -144,6 +144,14 @@ export enum OfficeWarningType {
     INVALID_STYLE_MAP_TAG = 'INVALID_STYLE_MAP_TAG',
     /** A workbook archive contains no worksheet parts (chartsheet-only workbooks are legitimate) */
     NO_WORKSHEETS_FOUND = 'NO_WORKSHEETS_FOUND',
+    /**
+     * A sheet's formula cells hold no calculated result: the program that wrote the workbook wrote its
+     * formulas without calculating them. Those cells are read with their formula (`CellMetadata.formula`)
+     * and no text, and every output writes them empty. Once per sheet, with `details` naming the sheet,
+     * how many cells and the first of them; open and save the workbook in a spreadsheet application to
+     * calculate them.
+     */
+    FORMULA_RESULTS_MISSING = 'FORMULA_RESULTS_MISSING',
     /** A presentation archive contains no slides (a zero-slide presentation is legitimate) */
     NO_SLIDES_FOUND = 'NO_SLIDES_FOUND',
     /** A PDF's tagged-structure tree was absent, incomplete, or flagged unreliable; heuristics were used instead */
@@ -3546,7 +3554,11 @@ export interface CellMetadata {
      * Excel stores it with). A cell of a shared formula has it with its own references (`B6-C6` below
      * `B5-C5`), as Excel fills a formula down; an array formula is on its range's first cell. `text` and
      * `value` keep the result the file last calculated, which every output writes. Not set for a cell
-     * without a formula, a what-if data table's cell, or a formula longer than Excel's 8,192 characters.
+     * without a formula or a what-if data table's cell. Filled-down copies count toward
+     * `decompressionLimits.maxRepeatedContent`: past it a copy is left without its formula (its value is
+     * kept; a copy with no calculated result is left out), with a `REPEATED_CONTENT_LIMIT_EXCEEDED` warning.
+     * It is the document's own text: written into a spreadsheet it runs again (it can fetch addresses or
+     * start DDE commands). officeParser's writers write the value, never the formula.
      */
     formula?: string;
     /**

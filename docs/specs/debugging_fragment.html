@@ -272,7 +272,7 @@ await officeParser.parseOffice(latexBuffer,    { fileType: 'tex' });</code></pre
             </tr>
             <tr>
                 <td>Document parses but comes back empty</td>
-                <td>Check <code>ast.warnings</code> for <code>NO_WORKSHEETS_FOUND</code> / <code>NO_SLIDES_FOUND</code> - the file really is empty. Corrupt input throws instead of returning empty</td>
+                <td>Check <code>ast.warnings</code> for <code>NO_WORKSHEETS_FOUND</code> / <code>NO_SLIDES_FOUND</code> - the file really is empty. Corrupt input throws instead of returning empty. An XLSX sheet of formulas whose cells show nothing was written without calculating them: <code>FORMULA_RESULTS_MISSING</code> says so, and each cell keeps its <code>formula</code></td>
             </tr>
             <tr>
                 <td>LaTeX images or <code>\input</code> files missing (<code>LATEX_FILE_NOT_FOUND</code>)</td>

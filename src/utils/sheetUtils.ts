@@ -52,7 +52,8 @@ const columnIndex = (letters: string): number => {
     return index - 1;
 };
 
-const columnLetters = (index: number): string => {
+/** A 0-based column's letters (`A` for 0, `AA` for 26). */
+export const columnLetters = (index: number): string => {
     let letters = '';
     for (let n = index + 1; n > 0; n = Math.floor((n - 1) / 26)) letters = String.fromCharCode(65 + (n - 1) % 26) + letters;
     return letters;
@@ -117,9 +118,11 @@ function bracketEnd(formula: string, from: number): number {
  * moved past the sheet's edge is `#REF!` (a range with either end past it, the whole range). Strings,
  * quoted and unquoted sheet names, bracketed parts (table columns, a linked workbook's index), error
  * values, numbers and names (`LOG10(`, `Tax_2024`) are kept as written. One pass over the formula.
+ * Built from its parts and joined, so the copy is one flat string: one grown by `+=` stayed a tree of a
+ * node per token, several times its length in memory, in every cell holding it.
  */
 export function shiftFormula(formula: string, rows: number, cols: number): string {
-    let out = '';
+    const out: string[] = [];
     let at = 0;
     const tokenAt = (from: number): string | undefined => {
         FORMULA_TOKEN.lastIndex = from;
@@ -131,7 +134,7 @@ export function shiftFormula(formula: string, rows: number, cols: number): strin
         const ch = formula[at];
         if (ch === '"' || ch === "'" || ch === '[') {
             const end = ch === '[' ? bracketEnd(formula, at) : quotedEnd(formula, at);
-            out += formula.slice(at, end);
+            out.push(formula.slice(at, end));
             at = end;
             continue;
         }
@@ -139,20 +142,20 @@ export function shiftFormula(formula: string, rows: number, cols: number): strin
             FORMULA_ERROR.lastIndex = at;
             const error = FORMULA_ERROR.exec(formula)?.[0];
             if (error) {
-                out += error;
+                out.push(error);
                 at += error.length;
                 continue;
             }
         }
         const token = tokenAt(at);
         if (!token) {
-            out += ch;
+            out.push(ch);
             at++;
             continue;
         }
         const end = at + token.length;
         if (namesSomething(end)) {
-            out += token;
+            out.push(token);
             at = end;
             continue;
         }
@@ -161,16 +164,16 @@ export function shiftFormula(formula: string, rows: number, cols: number): strin
             const range = (['cell', 'column', 'row'] as const).map(kind => [movedReference(token, kind, rows, cols), movedReference(second, kind, rows, cols)])
                 .find(([from, to]) => from !== undefined && to !== undefined);
             if (range) {
-                out += range[0] === null || range[1] === null ? '#REF!' : `${range[0]}:${range[1]}`;
+                out.push(range[0] === null || range[1] === null ? '#REF!' : `${range[0]}:${range[1]}`);
                 at = end + 1 + second.length;
                 continue;
             }
         }
         const cell = movedReference(token, 'cell', rows, cols);
-        out += cell === undefined ? token : cell ?? '#REF!';
+        out.push(cell === undefined ? token : cell ?? '#REF!');
         at = end;
     }
-    return out;
+    return out.join('');
 }
 
 /**
