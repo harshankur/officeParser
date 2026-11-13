@@ -6425,13 +6425,13 @@ async function testChartScatterBubble(): Promise<void> {
             { name: 'Series B', xValues: ['100', '200'], xValueIndexes: [0, 1], values: ['30', '40'], bubbleSizes: undefined, bubbleSizeIndexes: undefined },
         ], `${fileType}: each scatter series keeps its own X values`);
         assert.deepStrictEqual([scatterChart.labels, scatterChart.labelIndexes], [['1', '2'], [0, 1]], `${fileType}: a scatter chart's labels are still its first series' X values`);
-        assert.deepStrictEqual(scatterChart.rawTexts, ['1', '2', 'Series A', '10', '20', 'Series B', '30', '40'], `${fileType}: a scatter chart's text holds its labels, names and values`);
+        assert.deepStrictEqual(scatterChart.rawTexts, ['1', '2', 'Series A', '10', '20', 'Series B', '30', '40', '100', '200'], `${fileType}: a scatter chart's text holds its labels, names and values, and every series' X values`);
 
         const bubbleChart = await chartOf(build(bubble), fileType);
         assert.deepStrictEqual(seriesOf(bubbleChart), [
             { name: 'Series C', xValues: ['1', '2', '3'], xValueIndexes: [0, 1, 2], values: ['10', '20', '30'], bubbleSizes: ['5', '15', '25'], bubbleSizeIndexes: [0, 1, 2] },
         ], `${fileType}: a bubble series keeps its X values and bubble sizes`);
-        assert.deepStrictEqual(bubbleChart.rawTexts, ['1', '2', '3', 'Series C', '10', '20', '30'], `${fileType}: a bubble chart's text holds its labels, name and values`);
+        assert.deepStrictEqual(bubbleChart.rawTexts, ['1', '2', '3', 'Series C', '10', '20', '30', '5', '15', '25'], `${fileType}: a bubble chart's text holds its labels, name and values, and its bubble sizes`);
     }
 
     // The cache leaves out blank points, and the indexes name the points that remain. A `c:v` outside a
