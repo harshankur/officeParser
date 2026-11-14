@@ -1319,6 +1319,7 @@ async function collectPage(
     // The codes of the page's fonts read by their glyphs' names, where pdf.js reads them as their own
     // characters ("ni!ht" for "nicht", see glyphNames), normalized as the page's text items are.
     const codeTexts = ops && !work.spent ? glyphNames?.codeTextsOf(pageNumber - 1, ops, pdfjs.OPS) : undefined;
+    const tabMappings = ops && !work.spent ? glyphNames?.tabMappingsOf(pageNumber - 1, ops, pdfjs.OPS) : undefined;
     const normalized = (text: string): string => pdfCfg.normalizeText && typeof pdfjs.normalizeUnicode === 'function' ? pdfjs.normalizeUnicode(text) : text;
 
     // The page's glyphs as it draws them: where each is, how far it advances, and whether it is seen (see
@@ -1331,6 +1332,7 @@ async function collectPage(
                 const data = page.commonObjs?.has?.(id) ? page.commonObjs.get(id) : undefined;
                 if (data && typeof data === 'object') font = { fontMatrix: Array.isArray(data.fontMatrix) || ArrayBuffer.isView(data.fontMatrix) ? data.fontMatrix : undefined, vertical: !!data.vertical };
             } catch { font = undefined; }
+            if (tabMappings?.has(id)) font = { ...font, tabMapped: tabMappings.get(id) };
             const texts = codeTexts?.get(id);
             if (texts) font = { ...font, codeTexts: new Map([...texts].map(([code, text]) => [code, normalized(text)])) };
             glyphFonts.set(id, font);

@@ -25,6 +25,8 @@ import { annotationMatrix, identityMatrix, mulMatrix as mul, toMatrix6 as toMat6
 export interface GlyphFont {
     fontMatrix?: ArrayLike<number>;
     vertical?: boolean;
+    /** Whether ToUnicode covers code 9; undefined when its mapping cannot be checked. */
+    tabMapped?: boolean;
     /**
      * Its codes read by their glyphs' names (see glyphNames), as the page's text items are normalized: a
      * glyph of such a code that pdf.js read as the code's own character is read so.
@@ -88,8 +90,8 @@ const SPECIAL_CHAR = /^(\s)|(\p{Mn})|(\p{Cf})$/u;
 /** Letters of the right-to-left scripts: a text holding one pdf.js may have reordered. */
 const RTL = /[\u0590-\u08FF\uFB1D-\uFDFF\uFE70-\uFEFF]/;
 
-/** The control characters, a glyph's text where its font lost what it is. */
-const CONTROL = /[\u0000-\u001f\u007f]/;
+/** Control characters from lost glyph mappings, except tabs used for word spaces. */
+const CONTROL = /[\u0000-\u0008\u000a-\u001f\u007f]/;
 
 /** Graphics state the walk keeps across `q`/`Q` and forms. */
 interface State {
@@ -222,9 +224,10 @@ export function collectGlyphs(ops: any, OPS: any, fontOf: (id: string) => GlyphF
                     const width = num(glyph.width) * fm0 * size;
                     const spacing = s.charSpacing + (glyph.isSpace ? s.wordSpacing : 0);
                     const special = SPECIAL_CHAR.exec(unicode);
-                    // (A space: blank text that is no control character, which is a glyph whose text a font lost, drawn
-                    // as any other: pdf.js reads a vertical tab as a blank, LibreOffice's "त्र" was one.)
-                    const blank = !!unicode && !unicode.trim() && !CONTROL.test(unicode);
+                    // A tab without a mapping is pdf.js's fallback for a lost glyph at code 9.
+                    // Explicit tab mappings remain word spaces, including code 9 mapped to itself.
+                    const blank = !!unicode && !unicode.trim() && !CONTROL.test(unicode)
+                        && !(unicode === '\t' && glyph.originalCharCode === 9 && s.font?.tabMapped === false);
                     if (out.count < MAX_GLYPHS) {
                         out.px.push(userX(qtm, s.rise)); out.py.push(userY(qtm, s.rise));
                         out.x0.push(userX(tm, s.rise)); out.y0.push(userY(tm, s.rise));
