@@ -9,10 +9,11 @@
  *
  * pdf.js keeps no font's encoding or CMap where its text is read (it can be asked to, `fontExtraProperties`,
  * but then sends every font's whole CMap, a CJK font's a sparse array billions long), so they are read here
- * from the file (see pdfFile), for the simple fonts (Type 1, Type 3, TrueType; never a composite font) of a
+ * from the file (see pdfFile), for glyph-name recovery in simple fonts (Type 1, Type 3, TrueType) of a
  * page that may have such a code, and each matched to pdf.js's font by the order the page sets them in:
  * the n-th `Tf` here is the n-th font pdf.js sets. A glyph is read by its name only where pdf.js read it
  * as its code's own character (see textGlyphs' collectGlyphs and measureItems).
+ * Code-9 tab coverage also reads composite fonts' ToUnicode maps within the same reader limits.
  *
  * @module parsers/pdf/glyphNames
  */
@@ -250,6 +251,58 @@ export class GlyphNames {
             const out = new Map<string, ReadonlyMap<number, string>>();
             for (const [id, texts] of byId) if (id && texts?.texts.size) out.set(id, texts.texts);
             return out.size ? out : undefined;
+        } catch {
+            return undefined;
+        }
+    }
+
+    /**
+     * Whether a font's ToUnicode map covers code 9, for pages drawing that code as a tab. A missing
+     * entry is pdf.js's code fallback, not a word space. Unreadable maps and ambiguous font matches
+     * remain unknown. Uses the same bounded CMap reader and font order as codeTextsOf.
+     */
+    tabMappingsOf(index: number, ops: { fnArray: number[]; argsArray: unknown[][] }, OPS: Record<string, number>): Map<string, boolean> | undefined {
+        try {
+            const { fnArray, argsArray } = ops;
+            const set: string[] = [];
+            let annotation = 0, drawn = false;
+            for (let i = 0; i < fnArray.length; i++) {
+                const fn = fnArray[i], arg = argsArray[i]?.[0];
+                if (fn === OPS.beginAnnotation) annotation++;
+                else if (fn === OPS.endAnnotation) annotation = Math.max(0, annotation - 1);
+                else if (annotation) continue;
+                else if (fn === OPS.setFont) set.push(typeof arg === 'string' ? arg : '');
+                else if (fn === OPS.showText && Array.isArray(arg)) {
+                    drawn ||= arg.some((g: { unicode?: unknown; originalCharCode?: unknown } | null) =>
+                        g?.unicode === '\t' && g.originalCharCode === 9);
+                }
+            }
+            if (!drawn) return undefined;
+            const at = this.file.page(index);
+            if (!at) return undefined;
+            const { reader, page } = at;
+            const fonts = this.fontsSet(reader, page);
+            if (!fonts || fonts.length !== set.length) return undefined;
+            const byId = new Map<string, boolean | undefined>();
+            for (let k = 0; k < set.length; k++) {
+                const font = fonts[k];
+                let mapped: boolean | undefined;
+                if (font) {
+                    const inner = descendantOf(reader, font);
+                    const cmap = reader.resolve(inner?.get('ToUnicode')) || reader.resolve(font.get('ToUnicode'));
+                    if (cmap === undefined) mapped = false;
+                    else if (cmap && isStream(cmap)) {
+                        if (!this.cmaps.has(cmap)) this.cmaps.set(cmap, this.covered(reader, cmap));
+                        const covered = this.cmaps.get(cmap);
+                        if (covered) mapped = !!covered[9];
+                    }
+                }
+                if (!byId.has(set[k])) byId.set(set[k], mapped);
+                else if (byId.get(set[k]) !== mapped) byId.set(set[k], undefined);
+            }
+            const out = new Map<string, boolean>();
+            for (const [id, mapped] of byId) if (id && mapped !== undefined) out.set(id, mapped);
+            return out;
         } catch {
             return undefined;
         }
