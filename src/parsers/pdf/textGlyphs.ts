@@ -25,6 +25,8 @@ import { annotationMatrix, identityMatrix, mulMatrix as mul, toMatrix6 as toMat6
 export interface GlyphFont {
     fontMatrix?: ArrayLike<number>;
     vertical?: boolean;
+    /** Whether ToUnicode covers code 9; undefined when its mapping cannot be checked. */
+    tabMapped?: boolean;
     /**
      * Its codes read by their glyphs' names (see glyphNames), as the page's text items are normalized: a
      * glyph of such a code that pdf.js read as the code's own character is read so.
@@ -222,9 +224,10 @@ export function collectGlyphs(ops: any, OPS: any, fontOf: (id: string) => GlyphF
                     const width = num(glyph.width) * fm0 * size;
                     const spacing = s.charSpacing + (glyph.isSpace ? s.wordSpacing : 0);
                     const special = SPECIAL_CHAR.exec(unicode);
-                    // Tabs can represent word spaces. Other controls can represent lost glyph mappings:
-                    // pdf.js reads a vertical tab as a blank, but LibreOffice used one for "त्र".
-                    const blank = !!unicode && !unicode.trim() && !CONTROL.test(unicode);
+                    // A tab without a mapping is pdf.js's fallback for a lost glyph at code 9.
+                    // Explicit tab mappings remain word spaces, including code 9 mapped to itself.
+                    const blank = !!unicode && !unicode.trim() && !CONTROL.test(unicode)
+                        && !(unicode === '\t' && glyph.originalCharCode === 9 && s.font?.tabMapped === false);
                     if (out.count < MAX_GLYPHS) {
                         out.px.push(userX(qtm, s.rise)); out.py.push(userY(qtm, s.rise));
                         out.x0.push(userX(tm, s.rise)); out.y0.push(userY(tm, s.rise));

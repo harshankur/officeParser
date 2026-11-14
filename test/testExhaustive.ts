@@ -24,7 +24,7 @@ import { markDroppedHyphen } from '../src/utils/lineJoins';
 import { runHyphenBreakGenerator } from './helpers/hyphenBreakGenerator';
 import { OfficeConverter } from '../src/OfficeConverter';
 import { zipSync, strToU8, unzipSync, unzlibSync, strFromU8 } from 'fflate';
-import { PDFDict, PDFDocument, PDFHexString, PDFName, PDFOperator, PDFRawStream, StandardFonts, TextAlignment, degrees, rgb } from 'pdf-lib';
+import { decodePDFRawStream, PDFArray, PDFDict, PDFDocument, PDFHexString, PDFName, PDFOperator, PDFRawStream, PDFRef, StandardFonts, TextAlignment, degrees, rgb } from 'pdf-lib';
 import * as assert from 'assert';
 import * as path from 'path';
 import * as fs from 'fs';
@@ -10112,22 +10112,25 @@ async function testPdfItemsMatchTheirOwnGlyphs(): Promise<void> {
 
 /** A visible word space stays a separator when its font maps it to a tab. */
 async function testPdfTabMappedSpaces(): Promise<void> {
-    for (const mapping of ['0020', '0009']) {
+    for (const [code, mapping] of [['20', '0020'], ['20', '0009'], ['09', '0009']]) {
         const pdf = await PDFDocument.create();
         const font = await pdf.embedFont(StandardFonts.Helvetica);
         const page = pdf.addPage([300, 100]);
         page.node.setFontDictionary(PDFName.of('F1'), font.ref);
         await pdf.flush();
+        if (code === '09') pdf.context.lookup(font.ref, PDFDict).set(PDFName.of('Encoding'), pdf.context.obj({
+            Type: 'Encoding', BaseEncoding: 'WinAnsiEncoding', Differences: [9, PDFName.of('space')],
+        }));
         const cmap = `/CIDInit /ProcSet findresource begin 12 dict begin begincmap
 /CMapName /WordSpaces def /CMapType 2 def
 1 begincodespacerange <00> <FF> endcodespacerange
 1 beginbfrange <21> <7E> <0021> endbfrange
-1 beginbfchar <20> <${mapping}> endbfchar
+1 beginbfchar <${code}> <${mapping}> endbfchar
 endcmap CMapName currentdict /CMap defineresource pop end end`;
         pdf.context.lookup(font.ref, PDFDict).set(PDFName.of('ToUnicode'), pdf.context.register(pdf.context.flateStream(cmap)));
         let content = 'BT /F1 12 Tf 20 50 Td';
         for (const [i, word] of ['Hello', 'world', 'again'].entries()) {
-            if (i) content += ' /Span BMC ( ) Tj EMC';
+            if (i) content += ` /Span BMC <${code}> Tj EMC`;
             content += ` (${word}) Tj`;
         }
         content += ' ET';
@@ -10135,8 +10138,66 @@ endcmap CMapName currentdict /CMap defineresource pop end end`;
         const ast = await OfficeParser.parseOffice(Buffer.from(await pdf.save()), {
             fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false },
         });
-        assert.strictEqual(String((await ast.to('text')).value).trim(), 'Hello world again', `word spaces mapped to U+${mapping} stay between words`);
+        assert.strictEqual(String((await ast.to('text')).value).trim(), 'Hello world again', `code ${code} mapped to U+${mapping} keeps words apart`);
     }
+}
+
+/** Renumbering an unmapped Indic glyph to code 9 must not add word spaces. */
+async function testPdfLostTabGlyph(): Promise<void> {
+    const pdf = await PDFDocument.load(fs.readFileSync(path.join(__dirname, 'files/pdf/indic_words_libreoffice.pdf')));
+    const page = pdf.getPage(0);
+    const resources = page.node.Resources();
+    assert.ok(resources, 'the source page has font resources');
+    const font = resources.lookup(PDFName.of('Font'), PDFDict).lookup(PDFName.of('F2'), PDFDict);
+    const widths = font.lookup(PDFName.of('Widths'), PDFArray);
+    const nine = widths.get(9); widths.set(9, widths.get(11)); widths.set(11, nine);
+    const mapRef = font.get(PDFName.of('ToUnicode'));
+    assert.ok(mapRef instanceof PDFRef);
+    const mapStream = pdf.context.lookup(mapRef);
+    assert.ok(mapStream instanceof PDFRawStream);
+    const map = Buffer.from(decodePDFRawStream(mapStream).decode()).toString('latin1');
+    assert.ok(map.includes('<09> <0928093F>') && !map.includes('<0B>'), 'the source has no mapping for code 11');
+    pdf.context.assign(mapRef, pdf.context.flateStream(map.replace('<09> <0928093F>', '<0B> <0928093F>')));
+    const fontRef = font.lookup(PDFName.of('FontDescriptor'), PDFDict).get(PDFName.of('FontFile2'));
+    assert.ok(fontRef instanceof PDFRef);
+    const fontStream = pdf.context.lookup(fontRef);
+    assert.ok(fontStream instanceof PDFRawStream);
+    const fontBytes = Buffer.from(decodePDFRawStream(fontStream).decode());
+    let head = 0;
+    for (let i = 0; i < fontBytes.readUInt16BE(4); i++) {
+        const table = 12 + i * 16, tag = fontBytes.toString('ascii', table, table + 4), start = fontBytes.readUInt32BE(table + 8), length = fontBytes.readUInt32BE(table + 12);
+        if (tag === 'head') head = start;
+        if (tag !== 'cmap') continue;
+        const subtable = start + fontBytes.readUInt32BE(start + 8);
+        assert.strictEqual(fontBytes.readUInt16BE(subtable), 0, 'the source uses a format-0 font cmap');
+        const at = subtable + 6;
+        const old = fontBytes[at + 9]; fontBytes[at + 9] = fontBytes[at + 11]; fontBytes[at + 11] = old;
+        let sum = 0; for (let j = 0; j < length; j += 4) sum = (sum + fontBytes.readUInt32BE(start + j)) >>> 0;
+        fontBytes.writeUInt32BE(sum, table + 4);
+    }
+    fontBytes.writeUInt32BE(0, head + 8);
+    let sum = 0; for (let i = 0; i < fontBytes.length; i += 4) sum = (sum + fontBytes.readUInt32BE(i)) >>> 0;
+    fontBytes.writeUInt32BE((0xB1B0AFBA - sum) >>> 0, head + 8);
+    pdf.context.assign(fontRef, pdf.context.flateStream(fontBytes, { Length1: fontBytes.length }));
+    const contents = page.node.get(PDFName.of('Contents'));
+    assert.ok(contents instanceof PDFRef);
+    const stream = pdf.context.lookup(contents);
+    assert.ok(stream instanceof PDFRawStream);
+    let source = Buffer.from(decodePDFRawStream(stream).decode()).toString('latin1');
+    // Swap only text-show strings while F2 is active. ActualText and other fonts remain unchanged.
+    let activeFont = '';
+    source = source.replace(/\/(F\d+)\s+[\d.]+\s+Tf|(?:\[(?:[^\]]*)\]|<[0-9A-Fa-f]+>)\s*T[Jj]/g, (op, name) => {
+        if (name) { activeFont = name; return op; }
+        if (activeFont !== 'F2') return op;
+        return op.replace(/<([0-9A-Fa-f]+)>/g, (_, hex) => '<' + hex.replace(/../g, (c: string) => c === '09' ? '0B' : c === '0B' ? '09' : c) + '>');
+    });
+    pdf.context.assign(contents, pdf.context.flateStream(source));
+    const ast = await OfficeParser.parseOffice(Buffer.from(await pdf.save()), {
+        fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false },
+    });
+    const text = String((await ast.to('text')).value);
+    assert.ok(text.includes('यह हिंदी पाठ है।'), `a lost code-9 glyph stays inside the Hindi word: ${text}`);
+    assert.ok(text.includes('महाराष्ट्र राज्याची राजधानी'), `lost code-9 glyphs stay inside the Marathi words: ${text}`);
 }
 
 /**
@@ -14069,6 +14130,7 @@ async function runTests(): Promise<void> {
         ['Brotli decoder with a known flaw avoided', testBrotliGuard],
         ['PDF items match their own glyphs', testPdfItemsMatchTheirOwnGlyphs],
         ['PDF tab-mapped spaces', testPdfTabMappedSpaces],
+        ['PDF lost code-9 glyph', testPdfLostTabGlyph],
         ['Markdown HTML cell formatting', testMarkdownHtmlCellFormatting],
         ['List marker reading', testListMarkerReading],
         ['PDF running lines as parts', testPdfRunningLinesAsParts],
