@@ -1332,7 +1332,7 @@ async function collectPage(
                 const data = page.commonObjs?.has?.(id) ? page.commonObjs.get(id) : undefined;
                 if (data && typeof data === 'object') font = { fontMatrix: Array.isArray(data.fontMatrix) || ArrayBuffer.isView(data.fontMatrix) ? data.fontMatrix : undefined, vertical: !!data.vertical };
             } catch { font = undefined; }
-            if (tabMappings?.has(id)) font = { ...font, tabMapped: tabMappings.get(id) };
+            if (tabMappings?.has(id)) font = { ...font, tabMapped: true };
             const texts = codeTexts?.get(id);
             if (texts) font = { ...font, codeTexts: new Map([...texts].map(([code, text]) => [code, normalized(text)])) };
             glyphFonts.set(id, font);

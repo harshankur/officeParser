@@ -25,7 +25,10 @@ import { annotationMatrix, identityMatrix, mulMatrix as mul, toMatrix6 as toMat6
 export interface GlyphFont {
     fontMatrix?: ArrayLike<number>;
     vertical?: boolean;
-    /** Whether ToUnicode covers code 9; undefined when its mapping cannot be checked. */
+    /**
+     * Its `/ToUnicode` CMap, as read from the file (see glyphNames' tabMappingsOf), maps code 9 to U+0009: only
+     * then is a glyph of code 9 that pdf.js reads as a tab a word space.
+     */
     tabMapped?: boolean;
     /**
      * Its codes read by their glyphs' names (see glyphNames), as the page's text items are normalized: a
@@ -224,10 +227,11 @@ export function collectGlyphs(ops: any, OPS: any, fontOf: (id: string) => GlyphF
                     const width = num(glyph.width) * fm0 * size;
                     const spacing = s.charSpacing + (glyph.isSpace ? s.wordSpacing : 0);
                     const special = SPECIAL_CHAR.exec(unicode);
-                    // A tab without a mapping is pdf.js's fallback for a lost glyph at code 9.
-                    // Explicit tab mappings remain word spaces, including code 9 mapped to itself.
+                    // A tab is a word space, but pdf.js reads a code its font maps to nothing as the code's own
+                    // character, so a glyph a font lost at code 9 reads as a tab too: a tab of code 9 is a space
+                    // only where its font's `/ToUnicode` is read to map code 9 to the tab (see GlyphFont).
                     const blank = !!unicode && !unicode.trim() && !CONTROL.test(unicode)
-                        && !(unicode === '\t' && glyph.originalCharCode === 9 && s.font?.tabMapped === false);
+                        && !(unicode === '\t' && glyph.originalCharCode === 9 && s.font?.tabMapped !== true);
                     if (out.count < MAX_GLYPHS) {
                         out.px.push(userX(qtm, s.rise)); out.py.push(userY(qtm, s.rise));
                         out.x0.push(userX(tm, s.rise)); out.y0.push(userY(tm, s.rise));

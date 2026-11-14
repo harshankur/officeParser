@@ -46,6 +46,7 @@ import { decodeWindows1252, textDecoder } from '../src/utils/encodingUtils';
 import { ocrTestHooks, performOcr, terminateOcr } from '../src/utils/ocrUtils';
 import { imageFromPdf, imageToTextPdf, newDecodeBudget } from '../src/utils/textPdf';
 import { PdfFile } from '../src/parsers/pdf/pdfFile';
+import { GlyphNames } from '../src/parsers/pdf/glyphNames';
 import { KeptJpegs } from '../src/parsers/pdf/pdfJpeg';
 import { decodeBase64, hexColor, isHeaderRow, lengthToPt, resolvePaper, resolveZipInstant, runningFurniture, sniffImageSize, toBookmarkNameRaw } from '../src/utils/officeGenUtils';
 
@@ -11978,8 +11979,13 @@ endcmap CMapName currentdict /CMap defineresource pop end end`;
     }
 }
 
-/** Renumbering an unmapped Indic glyph to code 9 must not add word spaces. */
-async function testPdfLostTabGlyph(): Promise<void> {
+/**
+ * The Indic fixture with its lost "ा" glyph renumbered to code 9, which pdf.js reads as a tab: as the file is
+ * (`flate`), with the font's ToUnicode in a filter the file's reader does not read (`hex`), with an entry of no
+ * text for code 9 (`empty`, which pdf.js reads as none), or with a cross-reference the file's reader cannot
+ * follow (`badxref`).
+ */
+async function lostTabGlyphPdf(variant: 'flate' | 'hex' | 'empty' | 'badxref'): Promise<Buffer> {
     const pdf = await PDFDocument.load(fs.readFileSync(path.join(__dirname, 'files/pdf/indic_words_libreoffice.pdf')));
     const page = pdf.getPage(0);
     const resources = page.node.Resources();
@@ -11993,7 +11999,9 @@ async function testPdfLostTabGlyph(): Promise<void> {
     assert.ok(mapStream instanceof PDFRawStream);
     const map = Buffer.from(decodePDFRawStream(mapStream).decode()).toString('latin1');
     assert.ok(map.includes('<09> <0928093F>') && !map.includes('<0B>'), 'the source has no mapping for code 11');
-    pdf.context.assign(mapRef, pdf.context.flateStream(map.replace('<09> <0928093F>', '<0B> <0928093F>')));
+    const moved = pdf.context.flateStream(map.replace('<09> <0928093F>', variant === 'empty' ? '<0B> <0928093F>\n<09> <>' : '<0B> <0928093F>'));
+    pdf.context.assign(mapRef, variant !== 'hex' ? moved
+        : pdf.context.stream(Buffer.from(Buffer.from(moved.getContents()).toString('hex') + '>', 'latin1'), { Filter: ['ASCIIHexDecode', 'FlateDecode'] }));
     const fontRef = font.lookup(PDFName.of('FontDescriptor'), PDFDict).get(PDFName.of('FontFile2'));
     assert.ok(fontRef instanceof PDFRef);
     const fontStream = pdf.context.lookup(fontRef);
@@ -12028,12 +12036,61 @@ async function testPdfLostTabGlyph(): Promise<void> {
         return op.replace(/<([0-9A-Fa-f]+)>/g, (_, hex) => '<' + hex.replace(/../g, (c: string) => c === '09' ? '0B' : c === '0B' ? '09' : c) + '>');
     });
     pdf.context.assign(contents, pdf.context.flateStream(source));
-    const ast = await OfficeParser.parseOffice(Buffer.from(await pdf.save()), {
-        fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false },
+    const bytes = Buffer.from(await pdf.save());
+    if (variant !== 'badxref') return bytes;
+    // (A startxref past the table: pdf.js rebuilds it, the file's reader does not.)
+    const file = bytes.toString('latin1'), at = file.lastIndexOf('startxref');
+    return Buffer.from(file.slice(0, at) + file.slice(at).replace(/startxref\s+(\d+)/, (m, n) => m.replace(n, String(+n + 7))), 'latin1');
+}
+
+/**
+ * Renumbering an unmapped Indic glyph to code 9 must not add word spaces: a tab of code 9 is a word space only
+ * where its font's ToUnicode is read to map code 9 to it, so a map not read, a file not opened and an entry
+ * pdf.js reads as none all leave the glyph inside its word.
+ */
+async function testPdfLostTabGlyph(): Promise<void> {
+    for (const variant of ['flate', 'hex', 'empty', 'badxref'] as const) {
+        const ast = await OfficeParser.parseOffice(await lostTabGlyphPdf(variant), {
+            fileType: 'pdf', ocr: false, pdfParserConfig: { separateProcess: false },
+        });
+        const text = String((await ast.to('text')).value);
+        // (Without the file's reader the page's ActualText is not read, and its sentences read otherwise.)
+        const words = variant === 'badxref' ? ['पाठ', 'राज्याची'] : ['यह हिंदी पाठ है।', 'महाराष्ट्र राज्याची राजधानी'];
+        for (const word of words) assert.ok(text.includes(word), `${variant}: lost code-9 glyphs stay inside "${word}": ${text}`);
+    }
+}
+
+/**
+ * A page's fonts' ToUnicode maps are read for its tabs of code 9 only for the fonts that draw one (the font set
+ * last, saved and restored), and a map gives the tab where its last entry for code 9 maps it to U+0009, in a
+ * range as in a single entry, and not where that entry has no text.
+ */
+async function testPdfTabMapsReadForTabFonts(): Promise<void> {
+    const pdf = await PDFDocument.create();
+    const page = pdf.addPage([300, 100]);
+    const maps = ['1 beginbfchar <09> <0009> endbfchar', '1 beginbfchar <41> <0041> endbfchar', '1 beginbfrange <00> <7F> <0000> endbfrange', '2 beginbfchar <09> <0009> <09> <> endbfchar'];
+    maps.forEach((entries, k) => {
+        const cmap = `/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CMapName /Tab${k} def /CMapType 2 def
+1 begincodespacerange <00> <FF> endcodespacerange
+${entries}
+endcmap CMapName currentdict /CMap defineresource pop end end`;
+        page.node.setFontDictionary(PDFName.of(`F${k + 1}`), pdf.context.register(pdf.context.obj({
+            Type: 'Font', Subtype: 'Type1', BaseFont: 'Helvetica', ToUnicode: pdf.context.register(pdf.context.flateStream(cmap)),
+        })));
     });
-    const text = String((await ast.to('text')).value);
-    assert.ok(text.includes('यह हिंदी पाठ है।'), `a lost code-9 glyph stays inside the Hindi word: ${text}`);
-    assert.ok(text.includes('महाराष्ट्र राज्याची राजधानी'), `lost code-9 glyphs stay inside the Marathi words: ${text}`);
+    page.node.addContentStream(pdf.context.register(pdf.context.flateStream('BT /F1 12 Tf <09> Tj q /F2 12 Tf (A) Tj Q <09> Tj /F3 12 Tf <09> Tj /F4 12 Tf <09> Tj ET')));
+    // The page's operator list as pdf.js gives it: F2 draws no tab, and the tab after its `Q` is drawn with F1.
+    const OPS = { setFont: 1, showText: 2, save: 3, restore: 4 };
+    const tab = [{ unicode: '\t', originalCharCode: 9 }];
+    const ops = {
+        fnArray: [1, 2, 3, 1, 2, 4, 2, 1, 2, 1, 2],
+        argsArray: [['a', 12], [tab], [], ['b', 12], [[{ unicode: 'A', originalCharCode: 65 }]], [], [tab], ['c', 12], [tab], ['d', 12], [tab]],
+    };
+    let read = 0;
+    class CountedFile extends PdfFile { override takeTokens(wanted: number): number { read++; return super.takeTokens(wanted); } }
+    const tabbed = new GlyphNames(new CountedFile(new Uint8Array(await pdf.save()), 1)).tabMappingsOf(0, ops, OPS);
+    assert.deepStrictEqual([...tabbed ?? []].sort(), ['a', 'c'], 'PDF tab maps: the fonts whose ToUnicode maps code 9 to U+0009');
+    assert.strictEqual(read, 3, 'PDF tab maps: the map of a font that draws no tab of code 9 is not read');
 }
 
 /**
@@ -17043,6 +17100,7 @@ async function runTests(): Promise<void> {
         ['PDF items match their own glyphs', testPdfItemsMatchTheirOwnGlyphs],
         ['PDF tab-mapped spaces', testPdfTabMappedSpaces],
         ['PDF lost code-9 glyph', testPdfLostTabGlyph],
+        ['PDF tab maps read for tab fonts', testPdfTabMapsReadForTabFonts],
         ['Markdown HTML cell formatting', testMarkdownHtmlCellFormatting],
         ['List marker reading', testListMarkerReading],
         ['PDF running lines as parts', testPdfRunningLinesAsParts],

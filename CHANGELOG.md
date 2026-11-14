@@ -57,6 +57,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **PDF (native engine): each equation written as its LaTeX source is reported**, naming the equation (`details.latex`); it was written with no warning.
 - **PDF (native engine): a picture is embedded by what its bytes are.** A JPEG named `.png` (or typed `image/png`) was left out with a message saying its data could not be read, and an SVG with no XML declaration was drawn only when its name or type said SVG.
 - **PDF (native engine): a PNG is checked against the picture size limit by the header its decoder reads, and an animated PNG is refused before its frames are decoded.** A PNG with a second, larger header was drawn past the limit, and a large animated one could run out of memory.
+- **PDF: words are no longer glued together where a font's space glyph reads as a tab (U+0009).** Since 8.4.0 such text read as `Helloworldagain`; its spaces separate words again. (#158)
 - **PPTX, ODP and RTF output no longer fail on a picture whose data is not base64.** The picture is reported and written as its alt text, as DOCX and ODT do.
 - **Equations keep the braces a command's argument needs.** A fraction, root, bar, accent, math alphabet or function name of one-letter arguments was written as an undefined command (`\fracab`) in LaTeX and Markdown output and to KaTeX or MathJax; it is `\frac{a}{b}`, and a command before a letter is spaced (`\int x`).
 - **PPTX and ODP: speaker notes no longer end with the notes page's slide number.** (#137)

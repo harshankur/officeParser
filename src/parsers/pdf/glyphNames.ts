@@ -13,7 +13,8 @@
  * page that may have such a code, and each matched to pdf.js's font by the order the page sets them in:
  * the n-th `Tf` here is the n-th font pdf.js sets. A glyph is read by its name only where pdf.js read it
  * as its code's own character (see textGlyphs' collectGlyphs and measureItems).
- * Code-9 tab coverage also reads composite fonts' ToUnicode maps within the same reader limits.
+ * Whether a font's `/ToUnicode` CMap maps code 9 to a tab is read the same way, for the fonts (composite ones
+ * too) a page draws a glyph of code 9 with that pdf.js reads as a tab (see tabMappingsOf).
  *
  * @module parsers/pdf/glyphNames
  */
@@ -176,6 +177,9 @@ function saysNothing(reader: PdfReader, font: PdfDict): boolean {
     return !(toUnicode && isStream(toUnicode)) && !(toUnicode instanceof PdfName && !identity(toUnicode));
 }
 
+/** What a `/ToUnicode` CMap maps (see GlyphNames' covered): which one-byte codes it has an entry for, and whether it maps code 9 to U+0009. */
+interface CMapCodes { codes: Uint8Array; tab: boolean }
+
 /** A font's codes read by their glyphs' names (code to text), with a key of them, equal for fonts that read alike. */
 interface CodeTexts { texts: ReadonlyMap<number, string>; key: string }
 const NONE: CodeTexts = { texts: new Map(), key: '' };
@@ -187,8 +191,8 @@ const NONE: CodeTexts = { texts: new Map(), key: '' };
  */
 export class GlyphNames {
     private readonly fonts = new Map<PdfDict, CodeTexts>();
-    /** The codes each `/ToUnicode` CMap has an entry for (see covered), read once whatever fonts share it. */
-    private readonly cmaps = new Map<PdfValue, Uint8Array | undefined>();
+    /** What each `/ToUnicode` CMap maps (see covered), read once whatever fonts share it. */
+    private readonly cmaps = new Map<PdfValue, CMapCodes | undefined>();
     /** The codes some font a resources dictionary reaches (its own, its forms') reads by name. */
     private readonly reached = new Map<PdfDict, ReadonlySet<number>>();
     /** A form's fonts in the order it sets them, with the resources it was last drawn with. */
@@ -257,55 +261,59 @@ export class GlyphNames {
     }
 
     /**
-     * Whether a font's ToUnicode map covers code 9, for pages drawing that code as a tab. A missing
-     * entry is pdf.js's code fallback, not a word space. Unreadable maps and ambiguous font matches
-     * remain unknown. Uses the same bounded CMap reader and font order as codeTextsOf.
+     * The fonts of a page (index 0 the first page's) whose `/ToUnicode` CMap maps code 9 to U+0009: pdf.js's
+     * ids of them, for a page that draws a glyph of code 9 pdf.js reads as a tab (see textGlyphs' collectGlyphs,
+     * where only such a tab is a word space: pdf.js reads a code its font maps to nothing as the code's own
+     * character). Only the fonts of ids that draw such a glyph are read, each matched to pdf.js's by the order
+     * the page sets them in (see codeTextsOf); an id is left out where one of its fonts maps code 9 to anything
+     * else or nothing, or its map cannot be read here. Undefined where the page draws no such glyph,
+     * cannot be read here, or sets its fonts otherwise than pdf.js sets them.
      */
-    tabMappingsOf(index: number, ops: { fnArray: number[]; argsArray: unknown[][] }, OPS: Record<string, number>): Map<string, boolean> | undefined {
+    tabMappingsOf(index: number, ops: { fnArray: number[]; argsArray: unknown[][] }, OPS: Record<string, number>): Set<string> | undefined {
         try {
             const { fnArray, argsArray } = ops;
-            const set: string[] = [];
-            let annotation = 0, drawn = false;
+            // pdf.js's fonts in the order the page sets them, and those a glyph of code 9 read as a tab is drawn
+            // with: the font set last, saved and restored as collectGlyphs keeps it (an annotation's apart, as in codeTextsOf).
+            const set: string[] = [], tabbed = new Set<string>(), saved: string[] = [];
+            let annotation = 0, font = '';
             for (let i = 0; i < fnArray.length; i++) {
                 const fn = fnArray[i], arg = argsArray[i]?.[0];
+                if (fn === OPS.save || fn === OPS.paintFormXObjectBegin || fn === OPS.beginAnnotation) saved.push(font);
+                else if (fn === OPS.restore || fn === OPS.paintFormXObjectEnd || fn === OPS.endAnnotation) font = saved.pop() ?? font;
                 if (fn === OPS.beginAnnotation) annotation++;
                 else if (fn === OPS.endAnnotation) annotation = Math.max(0, annotation - 1);
                 else if (annotation) continue;
-                else if (fn === OPS.setFont) set.push(typeof arg === 'string' ? arg : '');
-                else if (fn === OPS.showText && Array.isArray(arg)) {
-                    drawn ||= arg.some((g: { unicode?: unknown; originalCharCode?: unknown } | null) =>
-                        g?.unicode === '\t' && g.originalCharCode === 9);
-                }
+                else if (fn === OPS.setFont) { font = typeof arg === 'string' ? arg : ''; set.push(font); }
+                else if (fn === OPS.showText && font && !tabbed.has(font) && Array.isArray(arg)
+                    && arg.some((g: { unicode?: unknown; originalCharCode?: unknown } | null) => g?.unicode === '\t' && g.originalCharCode === 9)) tabbed.add(font);
             }
-            if (!drawn) return undefined;
+            if (!tabbed.size) return undefined;
             const at = this.file.page(index);
             if (!at) return undefined;
             const { reader, page } = at;
             const fonts = this.fontsSet(reader, page);
             if (!fonts || fonts.length !== set.length) return undefined;
-            const byId = new Map<string, boolean | undefined>();
+            // (An id's fonts are read until one of them does not map code 9 to the tab.)
+            const mapped = new Map<string, boolean>();
             for (let k = 0; k < set.length; k++) {
-                const font = fonts[k];
-                let mapped: boolean | undefined;
-                if (font) {
-                    const inner = descendantOf(reader, font);
-                    const cmap = reader.resolve(inner?.get('ToUnicode')) || reader.resolve(font.get('ToUnicode'));
-                    if (cmap === undefined) mapped = false;
-                    else if (cmap && isStream(cmap)) {
-                        if (!this.cmaps.has(cmap)) this.cmaps.set(cmap, this.covered(reader, cmap));
-                        const covered = this.cmaps.get(cmap);
-                        if (covered) mapped = !!covered[9];
-                    }
-                }
-                if (!byId.has(set[k])) byId.set(set[k], mapped);
-                else if (byId.get(set[k]) !== mapped) byId.set(set[k], undefined);
+                const id = set[k];
+                if (!tabbed.has(id) || mapped.get(id) === false) continue;
+                mapped.set(id, !!fonts[k] && this.mapsTab(reader, fonts[k]!));
             }
-            const out = new Map<string, boolean>();
-            for (const [id, mapped] of byId) if (id && mapped !== undefined) out.set(id, mapped);
+            const out = new Set<string>();
+            for (const [id, tab] of mapped) if (tab) out.add(id);
             return out;
         } catch {
             return undefined;
         }
+    }
+
+    /** Whether a font's `/ToUnicode` CMap (its descendant's, else its own, as pdf.js takes it) is read here to map code 9 to U+0009. */
+    private mapsTab(reader: PdfReader, font: PdfDict): boolean {
+        const cmap = reader.resolve(descendantOf(reader, font)?.get('ToUnicode')) || reader.resolve(font.get('ToUnicode'));
+        if (!cmap || !isStream(cmap)) return false;
+        if (!this.cmaps.has(cmap)) this.cmaps.set(cmap, this.covered(reader, cmap));
+        return !!this.cmaps.get(cmap)?.tab;
     }
 
     /**
@@ -479,7 +487,7 @@ export class GlyphNames {
             if (cmap instanceof PdfName) return NONE;
             if (cmap && isStream(cmap)) {
                 if (!this.cmaps.has(cmap)) this.cmaps.set(cmap, this.covered(reader, cmap));
-                const covered = this.cmaps.get(cmap);
+                const covered = this.cmaps.get(cmap)?.codes;
                 if (!covered) return NONE;
                 for (const c of [...texts.keys()]) if (covered[c]) texts.delete(c);
             }
@@ -491,12 +499,13 @@ export class GlyphNames {
 
     /**
      * Which one-byte codes a `/ToUnicode` CMap has an entry for (`bfchar`, `bfrange`, and their `cid` forms,
-     * as pdf.js reads them: a range of an array of destinations as far as the array reaches); undefined where
-     * it cannot be read here (another filter, past the file's bounds, another CMap used, an entry not of
-     * codes), so its font is left as pdf.js reads it. Each entry is a range of codes, counted in a difference
+     * as pdf.js reads them: a range of an array of destinations as far as the array reaches), and whether its
+     * last entry for code 9 maps it to U+0009 (an empty destination, `<09> <>`, which pdf.js reads as no entry,
+     * does not); undefined where it cannot be read here (another filter, past the file's bounds, another CMap
+     * used, an entry not of codes), so its font is left as pdf.js reads it. Each entry is a range of codes, counted in a difference
      * array: a CMap of a million ranges each over every code is read in time in its length.
      */
-    private covered(reader: PdfReader, cmap: Parameters<PdfReader['decode']>[0]): Uint8Array | undefined {
+    private covered(reader: PdfReader, cmap: Parameters<PdfReader['decode']>[0]): CMapCodes | undefined {
         const data = reader.decode(cmap);
         if (!data) return undefined;
         const allowed = this.file.takeTokens(MAX_CMAP_TOKENS);
@@ -513,15 +522,22 @@ export class GlyphNames {
             starts[Math.max(0, lo)]++;
             starts[Math.min(0xff, hi) + 1]--;
         };
-        let mode: 'char' | 'range' | undefined, operands: unknown[] = [], tokens = 0, readable = true;
+        let mode: 'char' | 'range' | undefined, cid = false, tab = false, operands: unknown[] = [], tokens = 0, readable = true;
+        // A destination as pdf.js reads it for a code `step` past its range's first: a string of the one UTF-16
+        // unit U+0009 (`<09>`, `<0009>`, a range's counted up in its last byte), or a number a `cid` entry or
+        // a `bfrange` gives (pdf.js takes no number for a `bfchar`, nor a string for a `cid` entry).
+        const tabOf = (dst: unknown, step: number): boolean => typeof dst === 'number'
+            ? (cid || mode === 'range') && dst + step === 9
+            : dst instanceof PdfString && !cid && (dst.bytes.length === 1 || (dst.bytes.length === 2 && dst.bytes[0] === 0))
+                && dst.bytes[dst.bytes.length - 1] + step === 9;
         for (; tokens < allowed && readable; tokens++) {
             const t = lx.next();
             if (t === undefined) break;
             if (t && typeof t === 'object' && 'op' in t) {
                 const op = t.op;
                 if (op === 'usecmap') readable = false;
-                else if (op === 'beginbfchar' || op === 'begincidchar') mode = 'char';
-                else if (op === 'beginbfrange' || op === 'begincidrange') mode = 'range';
+                else if (op === 'beginbfchar' || op === 'begincidchar') { mode = 'char'; cid = op === 'begincidchar'; }
+                else if (op === 'beginbfrange' || op === 'begincidrange') { mode = 'range'; cid = op === 'begincidrange'; }
                 else if (mode && (op === 'endbfchar' || op === 'endcidchar' || op === 'endbfrange' || op === 'endcidrange')) {
                     if (operands.length) readable = false;
                     mode = undefined;
@@ -534,19 +550,24 @@ export class GlyphNames {
             if (mode === 'char' && operands.length === 2) {
                 const c = codeOf(operands[0]);
                 if (c === undefined) readable = false; else cover(c, c);
+                if (c === 9) tab = tabOf(operands[1], 0);
                 operands = [];
             } else if (mode === 'range' && operands.length === 3) {
                 const lo = codeOf(operands[0]), hi = codeOf(operands[1]), dst = operands[2];
                 if (lo === undefined || hi === undefined) readable = false;
-                else cover(lo, Array.isArray(dst) ? Math.min(hi, lo + dst.length - 1) : hi);
+                else {
+                    const last = Array.isArray(dst) ? Math.min(hi, lo + dst.length - 1) : hi;
+                    cover(lo, last);
+                    if (lo <= 9 && 9 <= last) tab = Array.isArray(dst) ? !cid && tabOf(dst[9 - lo], 0) : tabOf(dst, 9 - lo);
+                }
                 operands = [];
             }
         }
         this.file.returnTokens(allowed - tokens);
         if (!readable || tokens >= allowed) return undefined;
-        const covered = new Uint8Array(256);
+        const codes = new Uint8Array(256);
         let level = 0;
-        for (let c = 0; c < 256; c++) { level += starts[c]; covered[c] = level > 0 ? 1 : 0; }
-        return covered;
+        for (let c = 0; c < 256; c++) { level += starts[c]; codes[c] = level > 0 ? 1 : 0; }
+        return { codes, tab };
     }
 }
