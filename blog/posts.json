@@ -18,7 +18,7 @@
             "title": "Markdown Inside an HTML Table: Where a Reader Cuts the Lines",
             "shortTitle": "Markdown Inside an HTML Table",
             "category": "deep-dive",
-            "published": "2026-11-12",
+            "published": "2026-11-14",
             "description": "Why GitHub-style HTML tables with Markdown between blank lines in a cell lost their text, or showed a code like op9ta1at81p:0 in its place, and how officeParser 8.8.0 reads such a table as one HTML block from its first table tag to its last.",
             "deck": "A cell's Markdown stood in the table as a token until the HTML reader read it. A <div> line, a heading or a --- under the table cut the table first, and the token was shown instead of the text."
         },
@@ -27,7 +27,7 @@
             "title": "Chart Caches and Blank Points: Pairing a Label With Its Value",
             "shortTitle": "Chart Caches and Blank Points",
             "category": "deep-dive",
-            "published": "2026-11-12",
+            "published": "2026-11-14",
             "description": "How a chart's cached categories and values skip blank points and say which point each entry is, why pairing them by position put values under the wrong categories, and what officeParser 8.8.0 reads and writes for a chart: point indexes, category levels, number formats, axes, X values and bubble sizes.",
             "deck": "A chart's cache leaves a blank point out and numbers the rest. Read in order and paired by position, March took the value of the blank point before it. Pairing by point index, every output now writes the chart it was given."
         },
@@ -36,7 +36,7 @@
             "title": "When '250' Is More Than '1000': Comparing Numbers in a Template",
             "shortTitle": "Comparing Numbers in Templates",
             "category": "deep-dive",
-            "published": "2026-11-12",
+            "published": "2026-11-14",
             "description": "Why two texts that read as numbers still compare as text in officeParser 8.8.0's templates, the warning that says so, numericTextComparison comparing twenty-digit ids exactly, filters and <> in conditions, and dataNumberSeparators as a list that refuses text two ways read differently.",
             "deck": "Data from a spreadsheet is text, and as text \"5000\" comes before \"800\". Changing that would break templates that compare codes, so 8.8.0 keeps it, says so, and compares as numbers exactly when asked."
         },

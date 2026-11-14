@@ -4,7 +4,7 @@ All notable changes to `officeParser` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [8.8.0] - 2026-11-14
 
 ### Added
 - **Templates: filters in conditions.** A condition's values go through the same filters as a field's, so `{{ if (answer | lower) == "yes" }}` matches `Yes` and `YES`. `upper`, `lower`, `format` and your own `formatters` all work; `tags()` lists them in an `if` tag's `filters`, and a word after `|` that is no filter leaves the tag as text, as in a field.

@@ -5,13 +5,13 @@
     <link>https://officeparser.harshankur.com/blog/</link>
     <description>How document formats work inside, how officeParser reads and writes them, where it falls short, and how to chunk documents for retrieval. Written by Harsh Ankur, author of officeParser.</description>
     <language>en</language>
-    <lastBuildDate>Thu, 12 Nov 2026 00:00:00 GMT</lastBuildDate>
+    <lastBuildDate>Sat, 14 Nov 2026 00:00:00 GMT</lastBuildDate>
     <atom:link href="https://officeparser.harshankur.com/blog/feed.xml" rel="self" type="application/rss+xml"/>
     <item>
       <title>Markdown Inside an HTML Table: Where a Reader Cuts the Lines</title>
       <link>https://officeparser.harshankur.com/blog/markdown-inside-an-html-table.html</link>
       <guid isPermaLink="true">https://officeparser.harshankur.com/blog/markdown-inside-an-html-table.html</guid>
-      <pubDate>Thu, 12 Nov 2026 00:00:00 GMT</pubDate>
+      <pubDate>Sat, 14 Nov 2026 00:00:00 GMT</pubDate>
       <dc:creator>Harsh Ankur</dc:creator>
       <category>Format Deep Dives</category>
       <description>Why GitHub-style HTML tables with Markdown between blank lines in a cell lost their text, or showed a code like op9ta1at81p:0 in its place, and how officeParser 8.8.0 reads such a table as one HTML block from its first table tag to its last.</description>
@@ -253,7 +253,7 @@ It's the **second**
       <title>Chart Caches and Blank Points: Pairing a Label With Its Value</title>
       <link>https://officeparser.harshankur.com/blog/chart-caches-and-blank-points.html</link>
       <guid isPermaLink="true">https://officeparser.harshankur.com/blog/chart-caches-and-blank-points.html</guid>
-      <pubDate>Thu, 12 Nov 2026 00:00:00 GMT</pubDate>
+      <pubDate>Sat, 14 Nov 2026 00:00:00 GMT</pubDate>
       <dc:creator>Harsh Ankur</dc:creator>
       <category>Format Deep Dives</category>
       <description>How a chart&#39;s cached categories and values skip blank points and say which point each entry is, why pairing them by position put values under the wrong categories, and what officeParser 8.8.0 reads and writes for a chart: point indexes, category levels, number formats, axes, X values and bubble sizes.</description>
@@ -496,7 +496,7 @@ Users   ms      Users   ms
       <title>When &#39;250&#39; Is More Than &#39;1000&#39;: Comparing Numbers in a Template</title>
       <link>https://officeparser.harshankur.com/blog/comparing-numbers-in-templates.html</link>
       <guid isPermaLink="true">https://officeparser.harshankur.com/blog/comparing-numbers-in-templates.html</guid>
-      <pubDate>Thu, 12 Nov 2026 00:00:00 GMT</pubDate>
+      <pubDate>Sat, 14 Nov 2026 00:00:00 GMT</pubDate>
       <dc:creator>Harsh Ankur</dc:creator>
       <category>Format Deep Dives</category>
       <description>Why two texts that read as numbers still compare as text in officeParser 8.8.0&#39;s templates, the warning that says so, numericTextComparison comparing twenty-digit ids exactly, filters and &lt;&gt; in conditions, and dataNumberSeparators as a list that refuses text two ways read differently.</description>
