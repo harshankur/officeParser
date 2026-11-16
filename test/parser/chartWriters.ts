@@ -12,6 +12,7 @@ import { OfficeParser } from '../../src/OfficeParser';
 import type { ChartData, OfficeParserAST } from '../../src/types';
 import { repeatedContentOfAst, repeatPreview } from '../../src/utils/repeatUtils';
 import { parseXmlString } from '../../src/utils/xmlUtils';
+import { scaledMs } from '../helpers/timing';
 
 // ─── Shared fixtures ─────────────────────────────────────────────────────────
 
@@ -77,8 +78,8 @@ const sharedAxesScatter = (series: number, xTitle: string, yTitle: string) => ch
 const linearTime = async (name: string, run: (scale: 1 | 4) => Promise<unknown>): Promise<void> => {
     const time = async (scale: 1 | 4) => { const started = performance.now(); await run(scale); return performance.now() - started; };
     let small = await time(1), large = await time(4);
-    if (large > 8 * small + 250) { small = await time(1); large = Math.min(large, await time(4)); }
-    assert.ok(large <= 8 * small + 250, `${name}: 4n in ${large.toFixed(0)} ms, n in ${small.toFixed(0)} ms`);
+    if (large > 8 * small + await scaledMs(250)) { small = await time(1); large = Math.min(large, await time(4)); }
+    assert.ok(large <= 8 * small + await scaledMs(250), `${name}: 4n in ${large.toFixed(0)} ms, n in ${small.toFixed(0)} ms`);
 };
 
 // ─── Chart titles and axis titles written again ──────────────────────────
@@ -699,8 +700,8 @@ export async function testNativePdfChartLines(): Promise<void> {
     const small = await pdfOf(shape(20_000)), large = await pdfOf(shape(80_000));
     assert.ok(large.pdf.length <= 1.5 * small.pdf.length, `the PDF does not grow with the title: ${small.pdf.length} bytes, then ${large.pdf.length}`);
     let ms = [small.ms, large.ms];
-    if (ms[1] > 1.5 * ms[0] + 250) ms = [(await pdfOf(shape(20_000))).ms, Math.min(ms[1], (await pdfOf(shape(80_000))).ms)];
-    assert.ok(ms[1] <= 1.5 * ms[0] + 250, `nor its time: ${ms[0].toFixed(0)} ms, then ${ms[1].toFixed(0)} ms`);
+    if (ms[1] > 1.5 * ms[0] + await scaledMs(250)) ms = [(await pdfOf(shape(20_000))).ms, Math.min(ms[1], (await pdfOf(shape(80_000))).ms)];
+    assert.ok(ms[1] <= 1.5 * ms[0] + await scaledMs(250), `nor its time: ${ms[0].toFixed(0)} ms, then ${ms[1].toFixed(0)} ms`);
     const text = await pdfText(large.pdf);
     assert.ok(text.includes('HeadTTTT'), 'the title is drawn, its start on its line');
     assert.ok(!text.includes('T'.repeat(1000)), 'and no more of it than the line holds');
@@ -1014,8 +1015,8 @@ export async function testNativePdfChartTextCopies(): Promise<void> {
     const small = await pdfOf(few), large = await pdfOf(many);
     assert.ok(large.pdf.length <= 1.2 * small.pdf.length, `four times the paragraphs, the PDF about the same: ${small.pdf.length} bytes, then ${large.pdf.length}`);
     let ms = [small.ms, large.ms];
-    if (ms[1] > 1.5 * ms[0] + 500) ms = [(await pdfOf(few)).ms, Math.min(ms[1], (await pdfOf(many)).ms)];
-    assert.ok(ms[1] <= 1.5 * ms[0] + 500, `and its time: ${ms[0].toFixed(0)} ms, then ${ms[1].toFixed(0)} ms`);
+    if (ms[1] > 1.5 * ms[0] + await scaledMs(500)) ms = [(await pdfOf(few)).ms, Math.min(ms[1], (await pdfOf(many)).ms)];
+    assert.ok(ms[1] <= 1.5 * ms[0] + await scaledMs(500), `and its time: ${ms[0].toFixed(0)} ms, then ${ms[1].toFixed(0)} ms`);
     const text = await pdfText(large.pdf);
     assert.ok(occurrences(text, '1') >= 20_000 && text.includes('[Chart: T]'), `the first chart's lines, then its reference; got ${occurrences(text, '1')} lines and ${occurrences(text, '[Chart: T]')} references`);
 

@@ -9,7 +9,7 @@ import { OfficeGenerator } from '../../src/OfficeGenerator';
 import { OfficeParser } from '../../src/OfficeParser';
 import type { OfficeParserAST } from '../../src/types';
 import { repeatedContentOfAst } from '../../src/utils/repeatUtils';
-import { withinTime } from '../helpers/timing';
+import { scaledMs, withinTime } from '../helpers/timing';
 import { parseXmlString } from '../../src/utils/xmlUtils';
 
 type Check = (name: string, cond: boolean, detail?: string) => void;
@@ -109,18 +109,31 @@ export async function chartWritersHardeningTests(check: Check): Promise<void> {
     check('charts: and drawn in seconds', within, `${ms} ms`);
 
     // Native PDF: a paragraph of word-charts.docx holding a chart of 20,000 one-character values (one it cannot draw,
-    // written as its lines), framed 1,000 times: 200 frames took 96 seconds. Each copy of its text is charged what it
-    // lays out, past the budget its reference: the default budget's worth of lines, in seconds.
+    // written as its lines), framed 1,000 times: 200 frames took 96 seconds, each copy laid out whole. Each copy of its
+    // text is charged what it lays out, past the budget its reference, so once the budget is spent (about 50 copies)
+    // more copies take almost no more time: 1,000 copies are written in about the time of 250, where laying each out
+    // took four times as long. Measured against 250 copies on the same machine, not against a clock, as a CI runner
+    // takes about three times as long as a laptop for both.
     const ones = chartPart(`<c:barChart><c:ser><c:idx val="0"/><c:tx><c:strRef><c:f>S!$A$1</c:f><c:strCache><c:ptCount val="1"/><c:pt idx="0"><c:v>A</c:v></c:pt></c:strCache></c:strRef></c:tx><c:val>${numRef(Array.from({ length: 20_000 }, () => '1'))}</c:val></c:ser><c:axId val="1"/><c:axId val="2"/></c:barChart>`);
-    const inLines = await OfficeParser.parseOffice((() => {
+    const inLinesOf = async (n: number) => await OfficeParser.parseOffice((() => {
         const base = unzipSync(new Uint8Array(fs.readFileSync(path.join(FILES, 'charts', 'word-charts.docx'))));
         const doc = strFromU8(base['word/document.xml']);
         const para = doc.match(/<w:p><w:pPr>(?:(?!<w:p>).)*?r:id="rId2"\/>.*?<\/w:p>/s)![0];
-        return Buffer.from(zipSync({ ...base, 'word/charts/chart1.xml': strToU8(ones), 'word/document.xml': strToU8(doc.replace(/<w:body>[\s\S]*<\/w:body>/, `<w:body>${para.repeat(1000)}</w:body>`)) }, { level: 9 }));
+        return Buffer.from(zipSync({ ...base, 'word/charts/chart1.xml': strToU8(ones), 'word/document.xml': strToU8(doc.replace(/<w:body>[\s\S]*<\/w:body>/, `<w:body>${para.repeat(n)}</w:body>`)) }, { level: 9 }));
     })(), silent as any) as OfficeParserAST;
-    const { result: lined, ms: linedMs, within: linedWithin } = await withinTime(40_000, () => writtenSize(inLines, 'pdf'));
-    check('charts: native PDF of a 20,000-value chart in 1,000 paragraphs is written within the repeat budget', !lined.error && lined.codes.includes('REPEATED_CONTENT_LIMIT_EXCEEDED'), lined.error ?? lined.codes.join(','));
-    check('charts: and in under 40 seconds', linedWithin, `${linedMs} ms`);
+    const [inLines, inFewerLines] = [await inLinesOf(1000), await inLinesOf(250)];
+    const timed = async (ast: OfficeParserAST) => { const started = performance.now(); const written = await writtenSize(ast, 'pdf'); return { written, ms: performance.now() - started }; };
+    const flatSlack = await scaledMs(2000);
+    const flat = (large: number, small: number) => large <= 1.5 * small + flatSlack;
+    let fewer = await timed(inFewerLines), lined = await timed(inLines);
+    // Measured again once when over, the faster of each kept, so a pause of the machine is not taken for the growth.
+    if (!flat(lined.ms, fewer.ms)) {
+        const again = [await timed(inFewerLines), await timed(inLines)];
+        fewer = again[0].ms < fewer.ms ? again[0] : fewer;
+        lined = again[1].ms < lined.ms ? again[1] : lined;
+    }
+    check('charts: native PDF of a 20,000-value chart in 1,000 paragraphs is written within the repeat budget', !lined.written.error && lined.written.codes.includes('REPEATED_CONTENT_LIMIT_EXCEEDED'), lined.written.error ?? lined.written.codes.join(','));
+    check('charts: and in about the time of 250 such paragraphs', !fewer.written.error && flat(lined.ms, fewer.ms), fewer.written.error ?? `${Math.round(lined.ms)} ms for 1,000, ${Math.round(fewer.ms)} ms for 250`);
 
     // The round 2 review's shapes of text a writer escapes to many bytes: an 89 KB test.pptx whose chart's 50 labels are
     // 2,000 `^` each, framed 200 times, ran LaTeX (`\textasciicircum{}` a character) out of a 2 GB heap; 1,000 emoji

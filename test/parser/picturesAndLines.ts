@@ -15,7 +15,7 @@ import { OfficeParser } from '../../src/OfficeParser';
 import type { OfficeContentNode, OfficeParserAST } from '../../src/types';
 import { decodeBmp, decodeGif, encodePng } from '../../src/utils/rasterUtils';
 import { readMetafile } from '../../src/utils/metafileUtils';
-import { withinTime } from '../helpers/timing';
+import { scaledMs, withinTime } from '../helpers/timing';
 import { allNodes, bytesOf, docxOf, emfBytes, lcg, para, pictureRun, placeableWmf, run, zipTexts } from './wordRtfContent';
 
 // ─── Shared helpers ──────────────────────────────────────────────────────────
@@ -259,8 +259,8 @@ export const linearTime = async (label: string, run: (n: number) => unknown | Pr
     const quarter = Math.floor(n / 4);
     const time = async (count: number) => { const started = performance.now(); await run(count); return performance.now() - started; };
     let small = await time(quarter), large = await time(n);
-    if (large > 8 * small + 250) { small = Math.min(small, await time(quarter)); large = Math.min(large, await time(n)); }
-    assert.ok(large <= 8 * small + 250, `${label}: linear (${Math.round(small)} ms at ${quarter}, ${Math.round(large)} ms at ${n})`);
+    if (large > 8 * small + await scaledMs(250)) { small = Math.min(small, await time(quarter)); large = Math.min(large, await time(n)); }
+    assert.ok(large <= 8 * small + await scaledMs(250), `${label}: linear (${Math.round(small)} ms at ${quarter}, ${Math.round(large)} ms at ${n})`);
     console.log(`  ✓ ${label}: ${Math.round(small)} ms at ${quarter}, ${Math.round(large)} ms at ${n}`);
 };
 

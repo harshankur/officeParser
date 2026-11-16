@@ -43,7 +43,7 @@ import { KeptJpegs } from '../../src/parsers/pdf/pdfJpeg';
 import { shadeRuns } from '../../src/parsers/pdf/rulings';
 import { CffOutlines, nativeUnbrotli, sfntOf, TrueTypeOutlines } from '../../src/generators/pdf/fontFiles';
 import { cffTable, charString, EMPTY } from '../helpers/cffFontWriter';
-import { withinTime } from '../helpers/timing';
+import { scaledMs, withinDeadline, withinTime } from '../helpers/timing';
 import * as zlib from 'zlib';
 
 let passed = 0;
@@ -137,9 +137,11 @@ const linear = async (name: string, run: () => unknown, heap?: { label: string; 
         }
         return took;
     };
+    // The slack and the backstop are time, so they are this machine's (see test/helpers/timing.ts); the ratio is not.
+    const slack = await scaledMs(LINEAR_SLACK_MS), backstop = await scaledMs(LINEAR_BACKSTOP_MS);
     let small = await time(0.25);
     let large = await time(1);
-    const within = () => large <= LINEAR_RATIO * small + LINEAR_SLACK_MS && large < LINEAR_BACKSTOP_MS;
+    const within = () => large <= LINEAR_RATIO * small + slack && large < backstop;
     if (!within()) {
         small = Math.min(small, await time(0.25));
         large = Math.min(large, await time(1));
@@ -3596,10 +3598,10 @@ async function parserHardeningTests() {
     const drawnRun = await withinTime(30_000, () => warned(drawnOften, 'pdf'));
     const drawn = drawnRun.result;
     check('pdf: a form drawing a 1 MB string 300 times stops at maxTimeMs', !drawn.error && drawnRun.within && drawn.codes.includes('PDF_CONTENT_LIMIT_EXCEEDED'), `${drawnRun.ms}ms ${drawn.codes} ${drawn.error}`);
-    const quicklyRun = await withinTime(4000, () => warned(drawnOften, 'pdf', { pdfParserConfig: { maxTimeMs: 200 } }));
+    const quicklyRun = await withinDeadline(200, 3800, () => warned(drawnOften, 'pdf', { pdfParserConfig: { maxTimeMs: 200 } }));
     const quickly = quicklyRun.result;
     check('pdf: maxTimeMs is the base of the limit', !quickly.error && quicklyRun.within && quickly.codes.includes('PDF_CONTENT_LIMIT_EXCEEDED'), `${quicklyRun.ms}ms ${quickly.codes}`);
-    const abortedPdfRun = await withinTime(4000, () => parseQuiet(drawnOften, 'pdf', { abortSignal: AbortSignal.timeout(500), pdfParserConfig: { maxTimeMs: 60_000 } }));
+    const abortedPdfRun = await withinDeadline(500, 3500, () => parseQuiet(drawnOften, 'pdf', { abortSignal: AbortSignal.timeout(500), pdfParserConfig: { maxTimeMs: 60_000 } }));
     const abortedPdf = abortedPdfRun.result;
     check('pdf: abortSignal stops pdf.js in the middle of a stream', /abort/i.test(abortedPdf.error) && abortedPdfRun.within, `${abortedPdfRun.ms}ms ${abortedPdf.error}`);
     const inflating = pdfFrom([
@@ -3640,7 +3642,7 @@ async function parserHardeningTests() {
         ...Array.from({ length: bookmarks }, () => `<</Type/Page/Parent ${chainAt(depth - 1)} 0 R>>`),
         ...Array.from({ length: bookmarks }, (_, i) => `<</Title(b${i})/Parent 5 0 R${i > 0 ? `/Prev ${itemAt(i - 1)} 0 R` : ''}${i < bookmarks - 1 ? `/Next ${itemAt(i + 1)} 0 R` : ''}/Dest[${targetAt(i)} 0 R/XYZ 0 0 0]>>`),
     ]);
-    const outlinedRun = await withinTime(30_000, () => warned(deepOutline, 'pdf', { pdfParserConfig: { maxTimeMs: 200 } }));
+    const outlinedRun = await withinDeadline(200, 29_800, () => warned(deepOutline, 'pdf', { pdfParserConfig: { maxTimeMs: 200 } }));
     const outlined = outlinedRun.result;
     check('pdf: bookmarks naming pages deep in a long page tree are resolved within maxTimeMs', !outlined.error && outlinedRun.within && outlined.codes.includes('PDF_CONTENT_LIMIT_EXCEEDED'), `${outlinedRun.ms}ms ${deepOutline.length} bytes ${outlined.codes} ${outlined.error}`);
     await pdfProcessTests({ pdfFrom, flate, pdfForms, drawnOften, parseQuiet, files });
@@ -4831,7 +4833,7 @@ async function pdfProcessTests(h: {
     let fallback: Awaited<ReturnType<typeof read>>;
     try { fallback = await read(testPdf, { pdfParserConfig: { processMemoryMb: 500 } }); } finally { process.execPath = execPath; }
     check('pdf: where no process can start, pdf.js runs here with PDF_SEPARATE_PROCESS_UNAVAILABLE', !fallback.error && fallback.pages === 8 && fallback.codes.join() === 'PDF_SEPARATE_PROCESS_UNAVAILABLE', `${fallback.pages} pages ${fallback.codes} ${fallback.error}`);
-    const afterHereRun = await withinTime(4000, () => read(drawnOften, { pdfParserConfig: { maxTimeMs: 200 } }));
+    const afterHereRun = await withinDeadline(200, 3800, () => read(drawnOften, { pdfParserConfig: { maxTimeMs: 200 } }));
     const afterHere = afterHereRun.result;
     check('pdf: after pdf.js ran in this process, the next parse still runs it in a separate one', !afterHere.error && afterHereRun.within && named(afterHere.warnings, 'maxTimeMs'), `${afterHereRun.ms}ms ${afterHere.codes} ${afterHere.error}`);
 
@@ -5986,7 +5988,7 @@ async function pdfAssetTests() {
         const address = `http://127.0.0.1:${(hanging.address() as any).port}/`;
         try {
             for (const separateProcess of [true, false]) {
-                const abortedRun = await withinTime(5000, async () => {
+                const abortedRun = await withinDeadline(500, 4500, async () => {
                     try { await OfficeParser.parseOffice(fixture, { extractAttachments: true, onWarning: () => { }, abortSignal: AbortSignal.timeout(500), pdfCMapUrl: address, pdfDecoderUrl: address, pdfParserConfig: { separateProcess } } as any); return 'parsed'; } catch (e: any) { return String(e?.name); }
                 });
                 check(`pdf assets: an abort ends a parse waiting on a file that never comes (separateProcess ${separateProcess})`, abortedRun.within && abortedRun.result === 'AbortError', `${abortedRun.ms}ms ${abortedRun.result}`);
@@ -6010,7 +6012,8 @@ async function pdfAssetTests() {
                 return { first, after: after.result, afterMs: after.ms, warnings: slow.warnings };
             })();
             const warnings: any[] = [];
-            const timedRun = await withinTime(25_000, async () => {
+            // The folder's 15 s is wall-clock time on any machine; the parse around it is this machine's.
+            const timedRun = await withinDeadline(15_000, 10_000, async () => {
                 warnings.length = 0;
                 const ast = await OfficeParser.parseOffice(fixture, { extractAttachments: true, onWarning: (issue: any) => warnings.push(issue), pdfCMapUrl: address } as any) as OfficeParserAST;
                 return ast.attachments.length;
@@ -6167,7 +6170,7 @@ async function htmlReadingTests() {
         await once(size);
         const small = await time(size);
         const large = await time(size * 4);
-        check(`${label} takes linear time`, large <= LINEAR_RATIO * small + LINEAR_SLACK_MS, `${small.toFixed(0)}ms -> ${large.toFixed(0)}ms`);
+        check(`${label} takes linear time`, large <= LINEAR_RATIO * small + await scaledMs(LINEAR_SLACK_MS), `${small.toFixed(0)}ms -> ${large.toFixed(0)}ms`);
     };
     const epubOf = (override: string) => OfficeGenerator.generate(astWith([{ type: 'paragraph', children: [{ type: 'text', text: 'x' }] }]), 'epub', { onNode: (n: any) => n.type === 'paragraph' ? override : undefined, onWarning: () => {} } as any);
 
@@ -6372,7 +6375,7 @@ async function templateTextBoundTests() {
     const scanned = await withinTime(30_000, () => renderQuiet(docxOf(wp(`{{a}}${spaces}`)), { a: 1 }));
     const unscanned = await withinTime(30_000, () => renderQuiet(docxOf(wp('{{a}}') + wp(spaces)), { a: 1 }));
     check('template: the look-alike scan of a paragraph of 20,000,000 spaces costs about what reading it does',
-        !scanned.result.code && !unscanned.result.code && scanned.ms <= 1.5 * unscanned.ms + 250, `${scanned.ms}ms with a brace in the paragraph, ${unscanned.ms}ms without; ${scanned.result.code ?? unscanned.result.code ?? ''}`);
+        !scanned.result.code && !unscanned.result.code && scanned.ms <= 1.5 * unscanned.ms + await scaledMs(250), `${scanned.ms}ms with a brace in the paragraph, ${unscanned.ms}ms without; ${scanned.result.code ?? unscanned.result.code ?? ''}`);
     // Text made of braces, the scan's worst case: linear, each a few compares.
     for (const [label, make, texts] of [
         ['10,000,000 {} in one paragraph', () => docxOf(wp('{{ v }}') + wp('{}'.repeat(n(10_000_000)))), 0],

@@ -9,6 +9,7 @@ import { decryptIfNeeded } from '../../src/crypto/decryptContainer';
 import { decryptOdf, isEncryptedOdf } from '../../src/crypto/odfCrypto';
 import { OfficeParser } from '../../src/OfficeParser';
 import { detectOfficeTypeFromZip, extractFiles } from '../../src/utils/zipUtils';
+import { scaledMs } from '../helpers/timing';
 
 const quiet = { onWarning: () => { } };
 
@@ -88,12 +89,14 @@ export async function archiveCancellationTests(): Promise<void> {
         await extractFiles(large, () => true, {}, { ...quiet, abortSignal: signal });
         return performance.now() - started;
     };
+    // The 50 ms is time, so it is this machine's (test/helpers/timing.ts).
+    const slack = await scaledMs(50);
     let without = await timeOf(), withSignal = await timeOf(new AbortController().signal);
-    if (withSignal > 2 * without + 50) {
+    if (withSignal > 2 * without + slack) {
         without = Math.min(without, await timeOf());
         withSignal = Math.min(withSignal, await timeOf(new AbortController().signal));
     }
-    assert.ok(withSignal <= 2 * without + 50, `a 40 MB archive takes ${Math.round(withSignal)} ms with a signal, ${Math.round(without)} ms without`);
+    assert.ok(withSignal <= 2 * without + slack, `a 40 MB archive takes ${Math.round(withSignal)} ms with a signal, ${Math.round(without)} ms without`);
 
     // This also proves the entry point checks cancellation before file I/O.
     await assert.rejects(OfficeParser.parseOffice('missing-cancelled-file.odt', {
@@ -118,7 +121,7 @@ export async function archiveCancellationTests(): Promise<void> {
     live.abort();
     assert.equal((await extractFiles(archive, () => true, {}, quiet)).length, 3);
 
-    hostShapeTests();
+    hostShapeTests(await scaledMs(50));
 }
 
 /**
@@ -154,10 +157,10 @@ const HOST_SHAPES: Array<{ name: string; turn: 'immediate' | 'channel' | 'timer'
  * `process.exit`: its exiting on its own (status 0) within the timeout proves extraction left no port or
  * timer holding the process.
  */
-function hostShapeTests(): void {
+function hostShapeTests(slackMs: number): void {
     for (const shape of HOST_SHAPES) {
         const script = join(tmpdir(), `officeparser-host-shape-${process.pid}-${Math.random().toString(36).slice(2)}.ts`);
-        writeFileSync(script, hostShapeScript(shape));
+        writeFileSync(script, hostShapeScript(shape, slackMs));
         try {
             const child = spawnSync(process.execPath, [...process.execArgv, script], { encoding: 'utf8', timeout: 60_000 });
             const label = `host shape "${shape.name}" (${shape.turn} turns)`;
@@ -173,7 +176,7 @@ function hostShapeTests(): void {
 }
 
 /** The child's script for one host shape: applies it, extracts under it, and prints one JSON line. */
-function hostShapeScript(shape: (typeof HOST_SHAPES)[number]): string {
+function hostShapeScript(shape: (typeof HOST_SHAPES)[number], slackMs: number): string {
     const src = join(__dirname, '..', '..', 'src');
     return [
         `const g = globalThis;`,
@@ -204,7 +207,7 @@ function hostShapeScript(shape: (typeof HOST_SHAPES)[number]): string {
         `    expect(plain.r.value && plain.r.value.length === 40, 'without a signal: ' + describe(plain.r));`,
         `    expect(signalled.r.value && signalled.r.value.length === 40 && signalled.r.value.every((e, i) => e.path === plain.r.value[i].path && e.content.equals(plain.r.value[i].content)),`,
         `        'with a signal, the entries read without one: ' + describe(signalled.r));`,
-        `    const bound = without => 2 * without + 50 + (turn === 'timer' ? 4 * 40 : 0);`,
+        `    const bound = without => 2 * without + ${slackMs} + (turn === 'timer' ? 4 * 40 : 0);`,
         `    let without = plain.ms;`,
         `    if (signalled.ms > bound(without)) { without = Math.min(without, (await timeOf()).ms); signalled = { ms: Math.min(signalled.ms, (await timeOf(new AbortController().signal)).ms) }; }`,
         `    expect(signalled.ms <= bound(without), 'a 40 MB archive takes ' + Math.round(signalled.ms) + ' ms with a signal, ' + Math.round(without) + ' ms without');`,

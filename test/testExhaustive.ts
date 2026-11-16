@@ -5,7 +5,7 @@
  */
 
 import { OfficeParser } from '../src/OfficeParser';
-import { withinTime } from './helpers/timing';
+import { scaledMs, withinTime } from './helpers/timing';
 import { digestOf, docxTemplateCases } from './helpers/docxTemplateCases';
 import { testUnicodeChunks } from './generator/unicodeChunks';
 import { testBrotliGuard } from './security/brotliGuard';
@@ -4394,11 +4394,11 @@ async function templateLinear(name: string, n: number, run: (n: number) => unkno
     const timed = async (m: number) => { const started = performance.now(); await run(m); return performance.now() - started; };
     let small = await timed(n / 4);
     let big = await timed(n);
-    if (big > 8 * small + 250) {
+    if (big > 8 * small + await scaledMs(250)) {
         small = Math.max(small, await timed(n / 4));
         big = Math.min(big, await timed(n));
     }
-    assert.ok(big <= 8 * small + 250, `${name}: ${n} in ${big.toFixed(0)} ms, ${n / 4} in ${small.toFixed(0)} ms`);
+    assert.ok(big <= 8 * small + await scaledMs(250), `${name}: ${n} in ${big.toFixed(0)} ms, ${n / 4} in ${small.toFixed(0)} ms`);
 }
 
 /**
@@ -5078,11 +5078,11 @@ async function testTemplateNumericTexts(): Promise<void> {
     const passesBounded = async (name: string, run: (passes: number) => Promise<unknown>) => {
         const timed = async (passes: number) => { const started = performance.now(); await run(passes); return performance.now() - started; };
         let few = await timed(4), many = await timed(400);
-        if (many > 8 * few + 250) {
+        if (many > 8 * few + await scaledMs(250)) {
             few = Math.max(few, await timed(4));
             many = Math.min(many, await timed(400));
         }
-        assert.ok(many <= 8 * few + 250, `${name}: 400 passes in ${many.toFixed(0)} ms, 4 in ${few.toFixed(0)} ms`);
+        assert.ok(many <= 8 * few + await scaledMs(250), `${name}: 400 passes in ${many.toFixed(0)} ms, 4 in ${few.toFixed(0)} ms`);
     };
     const stopped = '-' + ' '.repeat(1_000_000) + 'x';
     for (const mode of [{}, { numericTextComparison: 'number' }]) {
@@ -6805,11 +6805,11 @@ async function testExcelRelationshipTargetsNotToTheLetter(): Promise<void> {
         if (shape === many) assert.ok(named.length === n && named.every((s, i) => s[0] === `S${i + 1}`), `${name}: every tab keeps its name`);
         let small = await timed(quarter);
         let big = await timed(large);
-        if (big > 8 * small + 250) {
+        if (big > 8 * small + await scaledMs(250)) {
             small = Math.max(small, await timed(quarter));
             big = Math.min(big, await timed(large));
         }
-        assert.ok(big <= 8 * small + 250, `${name}: ${n} in ${big.toFixed(0)} ms, ${n / 4} in ${small.toFixed(0)} ms`);
+        assert.ok(big <= 8 * small + await scaledMs(250), `${name}: ${n} in ${big.toFixed(0)} ms, ${n / 4} in ${small.toFixed(0)} ms`);
     }
 }
 
@@ -6959,9 +6959,8 @@ async function testExcelFallbackNeverTakesNamedPart(): Promise<void> {
         'xl/_rels/workbook.xml.rels': sheetParts.rels(ids.map(i => [`rId${i}`, 'worksheet', `old/sheet${i}.xml`] as [string, string, string])),
         'xl/worksheets/sheet1.xml': sheetParts.worksheet(['a']),
     });
-    const started = Date.now();
-    await parse(big, false);
-    assert.ok(Date.now() - started < 20000, `${many} relationships to missing parts are read in linear time; took ${Date.now() - started} ms`);
+    const read = await withinTime(20000, () => parse(big, false));
+    assert.ok(read.within, `${many} relationships to missing parts are read in linear time; ${read.detail}`);
 }
 
 /**
@@ -10930,16 +10929,16 @@ async function testCsvZipFileNames(): Promise<void> {
     assert.strictEqual(Object.keys(unzipSync((await OfficeGenerator.generate(many(2000), 'csv', { csvConfig: { mergeSheets: false }, onWarning: () => { } } as any)).value as Uint8Array)).length, 2000, '2,000 sheets of one name are 2,000 files');
     const time = async (n: number) => { const started = performance.now(); await OfficeGenerator.generate(many(n), 'csv', { csvConfig: { mergeSheets: false }, onWarning: () => { } } as any); return performance.now() - started; };
     let small = await time(2000), large = await time(8000);
-    if (large > 8 * small + 250) { small = await time(2000); large = Math.min(large, await time(8000)); }
-    assert.ok(large <= 8 * small + 250, `8,000 sheets of one name in ${large.toFixed(0)} ms, 2,000 in ${small.toFixed(0)} ms`);
+    if (large > 8 * small + await scaledMs(250)) { small = await time(2000); large = Math.min(large, await time(8000)); }
+    assert.ok(large <= 8 * small + await scaledMs(250), `8,000 sheets of one name in ${large.toFixed(0)} ms, 2,000 in ${small.toFixed(0)} ms`);
     // Linear in the sheets when every number is some sheet's own name: A-2 to A-(k+1), then k sheets named A.
     const numbered = (k: number) => ({ type: 'xlsx', metadata: {}, attachments: [], content: [...Array.from({ length: k }, (_, i) => sheet(`A-${i + 2}`, 'v')), ...Array.from({ length: k }, () => sheet('A', 'v'))] } as any as OfficeParserAST);
     const numberedNames = Object.keys(unzipSync((await OfficeGenerator.generate(numbered(1000), 'csv', { csvConfig: { mergeSheets: false }, onWarning: () => { } } as any)).value as Uint8Array));
     assert.strictEqual(new Set(numberedNames.map(name => name.toLowerCase())).size, 2000, 'A-2 to A-1001, then 1,000 sheets named A: 2,000 files');
     const timeNumbered = async (k: number) => { const started = performance.now(); await OfficeGenerator.generate(numbered(k), 'csv', { csvConfig: { mergeSheets: false }, onWarning: () => { } } as any); return performance.now() - started; };
     small = await timeNumbered(1000); large = await timeNumbered(4000);
-    if (large > 8 * small + 250) { small = await timeNumbered(1000); large = Math.min(large, await timeNumbered(4000)); }
-    assert.ok(large <= 8 * small + 250, `A-2 to A-4001 then 4,000 sheets named A in ${large.toFixed(0)} ms, the 1,000 shape in ${small.toFixed(0)} ms`);
+    if (large > 8 * small + await scaledMs(250)) { small = await timeNumbered(1000); large = Math.min(large, await timeNumbered(4000)); }
+    assert.ok(large <= 8 * small + await scaledMs(250), `A-2 to A-4001 then 4,000 sheets named A in ${large.toFixed(0)} ms, the 1,000 shape in ${small.toFixed(0)} ms`);
 }
 
 /**
@@ -11154,8 +11153,8 @@ async function testXlsxChartsNotReadReported(): Promise<void> {
         if (named) assert.ok(counted.length === 1 && counted[0].details.count === 8000 && counted[0].details.name === 'chart1.xml', `8,000 chart parts a drawing names: one report, count 8,000, the first chart1.xml; got ${JSON.stringify(counted.map(w => w.details))}`);
         else assert.deepStrictEqual(counted, [], '8,000 chart parts no drawing names: nothing reported');
         let smallTime = await time(small), largeTime = await time(large);
-        if (largeTime > 8 * smallTime + 250) { smallTime = await time(small); largeTime = Math.min(largeTime, await time(large)); }
-        assert.ok(largeTime <= 8 * smallTime + 250, `8,000 chart parts (${named ? 'named' : 'none named'}) parsed in ${largeTime.toFixed(0)} ms, 2,000 in ${smallTime.toFixed(0)} ms`);
+        if (largeTime > 8 * smallTime + await scaledMs(250)) { smallTime = await time(small); largeTime = Math.min(largeTime, await time(large)); }
+        assert.ok(largeTime <= 8 * smallTime + await scaledMs(250), `8,000 chart parts (${named ? 'named' : 'none named'}) parsed in ${largeTime.toFixed(0)} ms, 2,000 in ${smallTime.toFixed(0)} ms`);
     }
 }
 
@@ -13834,11 +13833,11 @@ async function testMarkdownCellPieces(): Promise<void> {
         const n = 40000;
         let small = await timed(make(n / 4));
         let big = await timed(make(n));
-        if (big > 8 * small + 250) {
+        if (big > 8 * small + await scaledMs(250)) {
             small = Math.max(small, await timed(make(n / 4)));
             big = Math.min(big, await timed(make(n)));
         }
-        assert.ok(big <= 8 * small + 250, `Markdown cell pieces, ${name}: ${n} in ${big.toFixed(0)} ms, ${n / 4} in ${small.toFixed(0)} ms`);
+        assert.ok(big <= 8 * small + await scaledMs(250), `Markdown cell pieces, ${name}: ${n} in ${big.toFixed(0)} ms, ${n / 4} in ${small.toFixed(0)} ms`);
     }
 }
 
@@ -14191,11 +14190,11 @@ async function testPdfHyphenAtLineBreak(): Promise<void> {
             const [large, quarter] = [shape(n), shape(n / 4)];
             let small = await timed(() => OfficeGenerator.generate(quarter, format));
             let big = await timed(() => OfficeGenerator.generate(large, format));
-            if (big > 8 * small + 250) {
+            if (big > 8 * small + await scaledMs(250)) {
                 small = Math.max(small, await timed(() => OfficeGenerator.generate(quarter, format)));
                 big = Math.min(big, await timed(() => OfficeGenerator.generate(large, format)));
             }
-            assert.ok(big <= 8 * small + 250, `${name} to ${format}: ${n} in ${big.toFixed(0)} ms, ${n / 4} in ${small.toFixed(0)} ms`);
+            assert.ok(big <= 8 * small + await scaledMs(250), `${name} to ${format}: ${n} in ${big.toFixed(0)} ms, ${n / 4} in ${small.toFixed(0)} ms`);
         }
     }
     console.log('✓ PDF hyphen at a line break');
@@ -16159,11 +16158,11 @@ async function assertLinearTime(name: string, n: number, run: (n: number) => unk
     const timed = async (size: number) => { const started = performance.now(); await run(size); return performance.now() - started; };
     let small = await timed(n / 4);
     let big = await timed(n);
-    if (big > 8 * small + 250) {
+    if (big > 8 * small + await scaledMs(250)) {
         small = Math.max(small, await timed(n / 4));
         big = Math.min(big, await timed(n));
     }
-    assert.ok(big <= 8 * small + 250, `${name}: ${n} in ${big.toFixed(0)} ms, ${n / 4} in ${small.toFixed(0)} ms`);
+    assert.ok(big <= 8 * small + await scaledMs(250), `${name}: ${n} in ${big.toFixed(0)} ms, ${n / 4} in ${small.toFixed(0)} ms`);
 }
 
 /**

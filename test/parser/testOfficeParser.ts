@@ -13,6 +13,7 @@ import * as path from 'path';
 import { OfficeParser } from '../../src/OfficeParser';
 import { DeepRequired, OfficeContentNode, OfficeIssue, OfficeParserAST, OfficeParserConfig } from '../../src/types';
 import { testTextLayout } from './testTextLayout';
+import { withinTime } from '../helpers/timing';
 
 // ============================================================================
 // CONSTANTS & CONFIGURATION
@@ -3839,11 +3840,10 @@ async function testPdfSmoke(): Promise<FeatureTest[]> {
 
     // --- pageRange is clamped to the document before it is expanded ---
     try {
-        const started = Date.now();
-        const ast = await OfficeParser.parseOffice(getFilePath('pdf'), { ocr: false, extractAttachments: false, pdfParserConfig: { pageRange: '1-999999999999' } });
-        const elapsed = Date.now() - started;
+        const read = await withinTime(60000, () => OfficeParser.parseOffice(getFilePath('pdf'), { ocr: false, extractAttachments: false, pdfParserConfig: { pageRange: '1-999999999999' } }));
+        const ast = read.result;
         // Before the clamp this loop counted to a trillion and the parse never returned.
-        add('Huge pageRange is clamped', ast.content.length === 8 && elapsed < 60000, '8 pages, returns', `${ast.content.length} pages in ${elapsed}ms`);
+        add('Huge pageRange is clamped', ast.content.length === 8 && read.within, '8 pages, returns', `${ast.content.length} pages; ${read.detail}`);
     } catch (e: any) {
         add('Huge pageRange is clamped', false, '8 pages', e?.message || String(e));
     }
@@ -4500,21 +4500,25 @@ async function testHostileInputs(): Promise<FeatureTest[]> {
      * validation that is being tested, so the code alone does not prove the fix.
      */
     const timed = async (feature: string, fileType: string, budgetMs: number, expected: string, fn: () => Promise<unknown>, detail?: RegExp) => {
-        const t = Date.now();
-        let actual = 'ok';
-        let details = '';
-        try { await fn(); } catch (e: any) {
-            actual = e?.officeIssue?.code || e?.message || String(e);
-            // `details` is free-form (a string, a list of parts): stringify before matching on it.
-            details = String(e?.officeIssue?.details ?? e?.message ?? e);
-        }
-        const ms = Date.now() - t;
-        const pass = (expected === 'completes' || actual === expected) && (!detail || detail.test(details)) && ms < budgetMs;
+        // Through withinTime: the budget is the reference machine's, scaled to this one, and a run over it is tried once more.
+        const run = await withinTime(budgetMs, async () => {
+            let actual = 'ok';
+            let details = '';
+            try { await fn(); } catch (e: any) {
+                actual = e?.officeIssue?.code || e?.message || String(e);
+                // `details` is free-form (a string, a list of parts): stringify before matching on it.
+                details = String(e?.officeIssue?.details ?? e?.message ?? e);
+            }
+            return { actual, details };
+        });
+        const { actual, details } = run.result;
+        const ms = run.ms;
+        const pass = (expected === 'completes' || actual === expected) && (!detail || detail.test(details)) && run.within;
         results.push({
             category, feature, fileType,
             result: {
                 status: pass ? 'PASS' : 'FAIL',
-                expected: `${expected}${detail ? ` /${detail.source}/` : ''} in < ${budgetMs}ms`,
+                expected: `${expected}${detail ? ` /${detail.source}/` : ''} in < ${run.limitMs}ms`,
                 actual: `${actual} in ${ms}ms`, details: details.slice(0, 90), duration: ms,
             },
         });

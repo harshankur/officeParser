@@ -10,7 +10,7 @@ import { strToU8, zlibSync } from 'fflate';
 import { OfficeParser } from '../../src/OfficeParser';
 import { readMetafile } from '../../src/utils/metafileUtils';
 import { crc32 } from '../../src/utils/imageUtils';
-import { withinTime } from '../helpers/timing';
+import { scaledMs, withinTime } from '../helpers/timing';
 import { bmpOf, dibOfFile, emfOf, emfPlus, GIF_1x1, JPEG_192x48, metaStretchDib, onePicture, pdfPictures, plusDrawImage, plusHeader, plusImage, rawTiff, stretchDibits, tiffOf, wmfOf, writeWithWarnings } from '../parser/picturesAndLines';
 import { docxOf, para, pictureRun, run } from '../parser/wordRtfContent';
 
@@ -110,8 +110,8 @@ const linearIn = async (run: (n: number) => unknown, n: number): Promise<{ ok: b
     const quarter = Math.floor(n / 4);
     const time = (count: number) => { const started = performance.now(); run(count); return performance.now() - started; };
     let small = time(quarter), large = time(n);
-    if (large > 8 * small + 250) { small = Math.min(small, time(quarter)); large = Math.min(large, time(n)); }
-    return { ok: large <= 8 * small + 250, detail: `${Math.round(small)} ms at ${quarter}, ${Math.round(large)} ms at ${n}` };
+    if (large > 8 * small + await scaledMs(250)) { small = Math.min(small, time(quarter)); large = Math.min(large, time(n)); }
+    return { ok: large <= 8 * small + await scaledMs(250), detail: `${Math.round(small)} ms at ${quarter}, ${Math.round(large)} ms at ${n}` };
 };
 
 /** What each output says of a TIFF picture: none draws or converts one, so a hostile TIFF is refused by its signature, unread. */

@@ -49,6 +49,7 @@
     "test:blog": "node test/testBlog.js",
     "test:site": "node scripts/sync-site-version.js --check && node scripts/sync-site-documents.js --check && node test/testSite.js",
     "test": "npm run lint && npm run test:types && npm run test:blog && npm run test:site && npm run test:clean && npm run build && npm run test:license && npm run test:artifacts && npm run test:parser && npm run test:exhaustive && npm run test:generator && npm run test:security && npm run test:cli",
+    "test:slow": "node scripts/test-slow.js",
     "test:fast": "npm run lint && npm run test:types && npm run test:blog && npm run test:site && npm run test:parser:fast && npm run test:exhaustive && npm run test:generator:fast && npm run test:security && npm run test:cli:fast",
     "test:exhaustive": "npx tsx test/testExhaustive.ts",
     "test:security": "npx tsx test/security/testSanitization.ts",

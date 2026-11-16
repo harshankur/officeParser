@@ -16,6 +16,7 @@ import { metafileSize } from '../../src/utils/metafileUtils';
 import { embeddedObjectKind } from '../../src/utils/oleUtils';
 import { ommlToLatex } from '../../src/utils/mathUtils';
 import { parseXmlString } from '../../src/utils/xmlUtils';
+import { scaledMs } from '../helpers/timing';
 
 // ─── Shared fixtures ─────────────────────────────────────────────────────────
 
@@ -254,8 +255,8 @@ export const linear = async (label: string, build: (n: number) => Buffer | strin
         return ms;
     };
     let smallMs = await time(small, quarter), largeMs = await time(large, n);
-    if (largeMs > 8 * smallMs + 250) { smallMs = Math.min(smallMs, await time(small, quarter)); largeMs = Math.min(largeMs, await time(large, n)); }
-    assert.ok(largeMs <= 8 * smallMs + 250, `${label}: linear (${Math.round(smallMs)} ms at ${quarter}, ${Math.round(largeMs)} ms at ${n})`);
+    if (largeMs > 8 * smallMs + await scaledMs(250)) { smallMs = Math.min(smallMs, await time(small, quarter)); largeMs = Math.min(largeMs, await time(large, n)); }
+    assert.ok(largeMs <= 8 * smallMs + await scaledMs(250), `${label}: linear (${Math.round(smallMs)} ms at ${quarter}, ${Math.round(largeMs)} ms at ${n})`);
     console.log(`  ✓ ${label}: ${Math.round(smallMs)} ms at ${quarter}, ${Math.round(largeMs)} ms at ${n}`);
 };
 
@@ -1031,8 +1032,8 @@ export async function testRtfEquationWriters(): Promise<void> {
     const fewRows = await nestedRows(150), manyRows = await nestedRows(600);
     const timeDeck = async (doc: OfficeParserAST) => { const started = performance.now(); await write(doc, 'pptx'); return performance.now() - started; };
     let fewMs = await timeDeck(fewRows), manyMs = await timeDeck(manyRows);
-    if (manyMs > 8 * fewMs + 250) { fewMs = Math.min(fewMs, await timeDeck(fewRows)); manyMs = Math.min(manyMs, await timeDeck(manyRows)); }
-    assert.ok(manyMs <= 8 * fewMs + 250, `Equation pictures: PPTX nested table of equations linear (${Math.round(fewMs)} ms at 150, ${Math.round(manyMs)} ms at 600)`);
+    if (manyMs > 8 * fewMs + await scaledMs(250)) { fewMs = Math.min(fewMs, await timeDeck(fewRows)); manyMs = Math.min(manyMs, await timeDeck(manyRows)); }
+    assert.ok(manyMs <= 8 * fewMs + await scaledMs(250), `Equation pictures: PPTX nested table of equations linear (${Math.round(fewMs)} ms at 150, ${Math.round(manyMs)} ms at 600)`);
     console.log(`  ✓ PPTX, a nested table of equations: ${Math.round(fewMs)} ms at 150 rows, ${Math.round(manyMs)} ms at 600`);
 
     // 5. A picture that is missing: the LaTeX, nothing reported. One of a kind no writer takes: the image path's alt text, reported.
@@ -1101,8 +1102,8 @@ export async function testRtfEquationWriters(): Promise<void> {
     for (const format of ['docx', 'rtf', 'pptx', 'pdf']) {
         const time = async (doc: OfficeParserAST) => { const started = performance.now(); await write(doc, format); return performance.now() - started; };
         let smallMs = await time(small), largeMs = await time(large);
-        if (largeMs > 8 * smallMs + 250) { smallMs = Math.min(smallMs, await time(small)); largeMs = Math.min(largeMs, await time(large)); }
-        assert.ok(largeMs <= 8 * smallMs + 250, `Equation pictures: ${format} linear (${Math.round(smallMs)} ms at 1000, ${Math.round(largeMs)} ms at 4000)`);
+        if (largeMs > 8 * smallMs + await scaledMs(250)) { smallMs = Math.min(smallMs, await time(small)); largeMs = Math.min(largeMs, await time(large)); }
+        assert.ok(largeMs <= 8 * smallMs + await scaledMs(250), `Equation pictures: ${format} linear (${Math.round(smallMs)} ms at 1000, ${Math.round(largeMs)} ms at 4000)`);
         console.log(`  ✓ Equation pictures, ${format}: ${Math.round(smallMs)} ms at 1000, ${Math.round(largeMs)} ms at 4000`);
     }
     console.log('  ✓ RTF equations written as their own pictures where math cannot be typeset');
@@ -1258,8 +1259,8 @@ export async function testWordPlaceholdersLinear(): Promise<void> {
     const [smallDoc, largeDoc] = [await nestedAt(2000), await nestedAt(8000)];
     const chunkTime = async (doc: OfficeParserAST) => { const started = performance.now(); await doc.to('chunks', { includePlaceholderText: true } as any); return performance.now() - started; };
     let smallMs = await chunkTime(smallDoc), largeMs = await chunkTime(largeDoc);
-    if (largeMs > 8 * smallMs + 250) { smallMs = Math.min(smallMs, await chunkTime(smallDoc)); largeMs = Math.min(largeMs, await chunkTime(largeDoc)); }
-    assert.ok(largeMs <= 8 * smallMs + 250, `Prompts: chunks with includePlaceholderText linear (${Math.round(smallMs)} ms at 2000, ${Math.round(largeMs)} ms at 8000)`);
+    if (largeMs > 8 * smallMs + await scaledMs(250)) { smallMs = Math.min(smallMs, await chunkTime(smallDoc)); largeMs = Math.min(largeMs, await chunkTime(largeDoc)); }
+    assert.ok(largeMs <= 8 * smallMs + await scaledMs(250), `Prompts: chunks with includePlaceholderText linear (${Math.round(smallMs)} ms at 2000, ${Math.round(largeMs)} ms at 8000)`);
     console.log(`  ✓ Prompts: chunks of 8,000 nested controls with includePlaceholderText: ${Math.round(smallMs)} ms at 2000, ${Math.round(largeMs)} ms at 8000`);
     console.log('  ✓ prompts found in linear time');
 }
