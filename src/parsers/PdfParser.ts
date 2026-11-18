@@ -15,11 +15,11 @@
  * - Password-protected documents via the top-level `password`, or the `onPassword` callback to
  *   supply one lazily/interactively (the same config every encryptable format uses).
  * - Comprehensive metadata (including the document outline/bookmarks, page labels, and permissions),
- *   hyperlink extraction, image extraction with optional OCR, and embedded file attachments.
+ *   hyperlink extraction, and image extraction with optional OCR.
  *
  * **Pipeline**
  * 1. Open the document (one worker, one pass).
- * 2. Extract metadata and embedded attachments.
+ * 2. Extract metadata.
  * 3. For each selected page, collect normalized text runs, images, annotations and (when tagged) the
  *    structure tree in a single pass.
  * 4. Post-process purely in memory: resolve fonts once per document, build lines, segment blocks,
@@ -1278,6 +1278,7 @@ async function collectPage(
 ): Promise<PageExtract | undefined> {
     const page = await work.within(pdfDocument.getPage(pageNumber) as Promise<any>);
     if (!page) return undefined;
+    slimFontsOf(page.commonObjs);
     const rotation = ((page.rotate % 360) + 360) % 360;
     const layoutViewport = page.getViewport({ scale: 1, rotation: 0 });
     const authoredW = layoutViewport.width;
@@ -2004,6 +2005,13 @@ async function readPdf(pdfjs: any, buffer: Buffer, config: FullOfficeParserConfi
                     data: new Uint8Array(buffer),
                     verbosity: 0,
                     isEvalSupported: false,
+                    // Two things pdf.js gives only when asked, from 6.3: a font's name (the typeface, and
+                    // whether it is bold or italic, see resolveFont), and each glyph's code in its font
+                    // (`originalCharCode`, which textGlyphs and glyphNames read for tabs, word spaces and glyph
+                    // names). With them it also keeps every font's program and sends its other extra properties
+                    // (a width for every code a font's W array spans): slimFontsOf lets each font go once it
+                    // is bound, and the separate process sends only the name (pdfProcess).
+                    fontExtraProperties: true,
                     maxImageSize,
                     password,
                     ...assets.documentOptions(),
@@ -2090,7 +2098,7 @@ async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserCo
         metadata.nativeProperties = {};
         for (const [key, val] of Object.entries(info)) {
             if (key === 'Custom' && typeof val === 'object' && !Array.isArray(val) && !(val instanceof Date) && val !== null) {
-                for (const [ck, cv] of Object.entries(val)) setOwn(metadata.nativeProperties, ck, cv);
+                for (const [ck, cv] of entriesOf(val)) setOwn(metadata.nativeProperties, ck, cv);
             } else {
                 setOwn(metadata.nativeProperties, key, val);
             }
@@ -2102,7 +2110,7 @@ async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserCo
         const customProperties: Record<string, string | number | boolean | Date> = {};
         const custom = info.Custom;
         if (custom && typeof custom === 'object' && !Array.isArray(custom) && !(custom instanceof Date)) {
-            for (const [ck, cv] of Object.entries(custom)) {
+            for (const [ck, cv] of entriesOf(custom)) {
                 if (cv === null || cv === undefined) continue;
                 if (typeof cv === 'string' || typeof cv === 'number' || typeof cv === 'boolean' || cv instanceof Date) setOwn(customProperties, ck, cv);
             }
@@ -2115,9 +2123,10 @@ async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserCo
         metadata.nativeProperties['XMP'] = typeof xmp.getAll === 'function' ? xmp.getAll() : xmp;
     }
 
-    // Tagged flag for consumers.
-    let markInfo: any = null;
-    try { markInfo = (await work.within(pdfDocument.getMarkInfo())) ?? null; } catch { markInfo = null; }
+    // Tagged flag for consumers. pdf.js gives the MarkInfo flags as a plain object up to 6.2 and as a
+    // Map from 6.3 (its type still says an object): read either, and keep a plain object, as JSON writes it.
+    let markInfo: { Marked: boolean; UserProperties: boolean; Suspects: boolean } | null = null;
+    try { markInfo = markInfoFlags(await work.within(pdfDocument.getMarkInfo())); } catch { markInfo = null; }
     if (!metadata.nativeProperties) metadata.nativeProperties = {};
     metadata.nativeProperties['tagged'] = !!(markInfo && markInfo.Marked);
     if (markInfo) metadata.nativeProperties['markInfo'] = markInfo;
@@ -2143,8 +2152,7 @@ async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserCo
         const fieldObjects = await work.within(pdfDocument.getFieldObjects());
         if (fieldObjects) {
             const fields: Record<string, unknown> = {};
-            for (const name of Object.keys(fieldObjects)) {
-                const arr = (fieldObjects as any)[name];
+            for (const [name, arr] of entriesOf(fieldObjects) as [string, any][]) {
                 // A field with widgets is listed as the field itself (no type, no value) then each of its
                 // widgets, which carry the type and value: the first entry with a type is the field's.
                 const f = Array.isArray(arr) ? (arr.find((e: any) => e && typeof e === 'object' && e.type) ?? arr[0]) : arr;
@@ -2161,18 +2169,8 @@ async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserCo
     let pageLabels: (string | null)[] | null = null;
     try { pageLabels = (await work.within(pdfDocument.getPageLabels() as Promise<(string | null)[] | null>)) ?? null; } catch { pageLabels = null; }
 
-    // --- Embedded file attachments ---
-    try {
-        const embeddedFiles: Record<string, any> | null | undefined = await work.within(pdfDocument.getAttachments());
-        if (embeddedFiles && config.extractAttachments) {
-            for (const name in embeddedFiles) {
-                const file = embeddedFiles[name];
-                attachments.push(createAttachment(file.filename, Buffer.from(file.content)));
-            }
-        }
-    } catch (e) {
-        logWarning(OfficeWarningType.ATTACHMENT_EXTRACTION_FAILED, config, undefined, e);
-    }
+    // A PDF's embedded files (its EmbeddedFiles name tree) are not read: pdf.js decodes a file whole before
+    // its size can be weighed, and finds each one by walking the whole name tree again.
 
     // --- Single collection pass ---
     const pageNumbers = parsePageRange(config.pdfParserConfig?.pageRange, numPages);
@@ -2258,7 +2256,7 @@ async function buildAst(pdfjs: any, pdfDocument: any, config: FullOfficeParserCo
 
     // Tagged-structure trust: the document must declare it is tagged and not flag it as suspect.
     const docTagged = !!(markInfo && markInfo.Marked);
-    const docTrusted = docTagged && !markInfo.Suspects;
+    const docTrusted = docTagged && !markInfo!.Suspects;
     let structWarned = false;
     const warnStruct = (reason: string) => {
         if (structWarned) return;
@@ -2764,4 +2762,48 @@ async function emitImage(
         logWarning(OfficeWarningType.IMAGE_EXTRACTION_FAILED, config, attachmentName, e, { page: pageNumber });
         return null;
     }
+}
+
+/** A document's MarkInfo flags from pdf.js's `getMarkInfo()`: a plain object up to pdf.js 6.2, a Map from 6.3; null when it has none. */
+function markInfoFlags(info: unknown): { Marked: boolean; UserProperties: boolean; Suspects: boolean } | null {
+    if (!info || typeof info !== 'object') return null;
+    const flag = (key: string): boolean => (info instanceof Map ? info.get(key) : (info as Record<string, unknown>)[key]) === true;
+    return { Marked: flag('Marked'), UserProperties: flag('UserProperties'), Suspects: flag('Suspects') };
+}
+
+/**
+ * The keys and values of a record pdf.js gives: a plain object up to pdf.js 6.2, a Map from 6.3 for some
+ * (the Info dictionary's `Custom`, `getFieldObjects()`), while its types still say an object.
+ */
+function entriesOf(record: object): [string, unknown][] {
+    return record instanceof Map ? [...record].filter((entry): entry is [string, unknown] => typeof entry[0] === 'string') : Object.entries(record);
+}
+
+/** The document object pools slimFontsOf has hooked (one per document: every page shares it). */
+const slimmedFontPools = new WeakSet<object>();
+/**
+ * What a font keeps of its own properties: its name (resolveFont), and what pdf.js itself reads of it. The
+ * rest of what `fontExtraProperties` adds is the parser's to drop; a font read for something else must keep
+ * that key here and in pdfProcess's SLIM_FONT_MESSAGE_SOURCE.
+ */
+const KEPT_FONT_KEYS = new Set(['name', 'charProcOperatorList', '_inspectFont']);
+
+/**
+ * Lets each font's program and extra properties go as the font arrives in the document's object pool,
+ * as pdf.js does itself when `fontExtraProperties` is off: under it pdf.js keeps every font's program,
+ * and its widths and char-code maps, for the whole parse (sixty fonts sharing one 23 MB font file held
+ * 1.3 GB). The getters the parser reads (`isType3Font`, `black`, `fontMatrix`, `vertical`) are the font's
+ * description, which clearing its data keeps. Hooked once per pool; never throws.
+ */
+export function slimFontsOf(commonObjs: any): void {
+    if (!commonObjs || typeof commonObjs !== 'object' || typeof commonObjs.resolve !== 'function' || slimmedFontPools.has(commonObjs)) return;
+    slimmedFontPools.add(commonObjs);
+    const resolve = commonObjs.resolve;
+    commonObjs.resolve = function (id: string, data: any) {
+        if (data && typeof data === 'object' && typeof data.clearData === 'function') {
+            try { data.clearData(); } catch { /* the font stays whole */ }
+            try { for (const key of Object.keys(data)) if (!KEPT_FONT_KEYS.has(key)) delete data[key]; } catch { /* the font keeps its properties */ }
+        }
+        return resolve.call(this, id, data);
+    };
 }

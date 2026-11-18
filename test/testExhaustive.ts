@@ -31,6 +31,8 @@ import { runHyphenBreakGenerator } from './helpers/hyphenBreakGenerator';
 import { checkMarkdownCellPieces } from './helpers/markdownCellPieces';
 import { OfficeConverter } from '../src/OfficeConverter';
 import { isWorkbookChartsNotRead } from '../src/parsers/ExcelParser';
+import { slimFontsOf } from '../src/parsers/PdfParser';
+import { CAP_ARRAYS_SOURCE, SLIM_FONT_MESSAGE_SOURCE, ownArrays } from '../src/parsers/pdf/pdfProcess';
 import { zipSync, strToU8, unzipSync, unzlibSync, strFromU8 } from 'fflate';
 import { decodePDFRawStream, PDFArray, PDFDict, PDFDocument, PDFHexString, PDFName, PDFOperator, PDFRawStream, PDFRef, StandardFonts, TextAlignment, degrees, rgb } from 'pdf-lib';
 import * as assert from 'assert';
@@ -12436,6 +12438,185 @@ async function testPdfFormMetadataAndHtml(): Promise<void> {
     assert.deepStrictEqual(spannedRows.map(r => (r.match(/<t[dh]/g) ?? []).length), [3, 3, 2], `HTML: a row under a row span is padded to the width it does not reach (${spannedRows.join(' ')})`);
 }
 
+/**
+ * A PDF's fonts are let go once pdf.js has bound them, as pdf.js does itself without `fontExtraProperties`
+ * (which the parser asks for, for each font's name and each glyph's code): the host keeps no font program,
+ * and the separate process sends a font's name alone of its extra properties. What the child sends is capped
+ * in Maps and null-prototype objects too (pdf.js sends a font's extras, form fields and structure-tree nodes
+ * so), and arrays in them are copied to buffers of their own.
+ */
+async function testPdfFontsLetGo(): Promise<void> {
+    // The child's cap and font trim, run as the child runs them.
+    const capArrays = (0, eval)(CAP_ARRAYS_SOURCE) as (value: any, depth: number) => any;
+    const slimFontMessage = (0, eval)(SLIM_FONT_MESSAGE_SOURCE) as (message: any) => any;
+    const bare: any = Object.create(null);
+    bare.widths = new Array(200000).fill(1);
+    const map = new Map<string, any>([['widget', new Array(200000).fill(2)]]);
+    const capped = capArrays({ bare, map, list: [bare] }, 0);
+    assert.strictEqual(capped.bare.widths.length, 100000, 'PDF IPC: an array in a null-prototype object is capped');
+    assert.strictEqual(capped.map.get('widget').length, 100000, 'PDF IPC: an array in a Map is capped');
+    const protoKey: any = Object.create(null);
+    Object.defineProperty(protoKey, '__proto__', { value: new Array(200000).fill(3), enumerable: true, configurable: true, writable: true });
+    const cappedProto = capArrays(protoKey, 0);
+    assert.ok(Object.getPrototypeOf(cappedProto) === null && cappedProto['__proto__'].length === 100000, 'PDF IPC: a key named __proto__ is data');
+    const extra: any = Object.create(null);
+    Object.assign(extra, { name: 'ABCDEF+Liberation-Bold', widths: new Array(200000).fill(500), toFontChar: new Map([[1, 2]]), vmetrics: [1, 2] });
+    const fontMessage = { action: 'commonobj', data: ['g_d0_f1', 'Font', { buffer: new ArrayBuffer(8), charProcOperatorList: null, extra }] };
+    assert.deepStrictEqual({ ...slimFontMessage(fontMessage).data[2].extra }, { name: 'ABCDEF+Liberation-Bold' }, 'PDF IPC: a font is sent with its name alone');
+    const nameless = { action: 'commonobj', data: ['g_d0_f2', 'Font', { extra: Object.assign(Object.create(null), { name: 7, widths: [1] }) }] };
+    assert.deepStrictEqual({ ...slimFontMessage(nameless).data[2].extra }, {}, 'PDF IPC: a font without a text name is sent with no extras');
+    const other = { action: 'commonobj', data: ['img_1', 'Image', { extra: { keep: true } }] };
+    assert.deepStrictEqual(slimFontMessage(other).data[2].extra, { keep: true }, 'PDF IPC: other objects are sent as they are');
+    // Views in null-prototype objects and Maps are copied to buffers of their own.
+    const buffer = new Uint8Array(16).buffer;
+    const owned = ownArrays({ bare: Object.assign(Object.create(null), { view: new Uint8Array(buffer, 4, 4) }), map: new Map([['view', new Uint8Array(buffer, 8, 4)]]) });
+    assert.ok(owned.bare.view.byteOffset === 0 && owned.bare.view.buffer.byteLength === 4, 'PDF IPC: a view in a null-prototype object gets its own buffer');
+    assert.ok(owned.map.get('view').byteOffset === 0 && owned.map.get('view').buffer.byteLength === 4, 'PDF IPC: a view in a Map gets its own buffer');
+
+    // The host's pool: a font is cleared and keeps only its name (and what pdf.js reads) as it arrives; other
+    // objects pass as they are; a pool is hooked once.
+    const resolved: [string, any][] = [];
+    const pool: any = { resolve(id: string, data: any) { resolved.push([id, data]); } };
+    slimFontsOf(pool);
+    const hooked = pool.resolve;
+    slimFontsOf(pool);
+    assert.strictEqual(pool.resolve, hooked, 'PDF fonts: a pool is hooked once');
+    // As pdf.js's FontFaceObject: clearData on the prototype, its extra properties assigned to the font.
+    let cleared = 0;
+    class FakeFont { clearData() { cleared++; } }
+    const font: any = Object.assign(new FakeFont(), { name: 'Liberation-Bold', charProcOperatorList: { a: 1 }, _inspectFont: null, widths: [1, 2], toFontChar: new Map() });
+    pool.resolve('g_d0_f1', font);
+    assert.strictEqual(cleared, 1, 'PDF fonts: a font is cleared once it arrives');
+    assert.deepStrictEqual(Object.keys(font).sort(), ['_inspectFont', 'charProcOperatorList', 'name'], 'PDF fonts: a font keeps its name and what pdf.js reads');
+    const image = { width: 1, data: new Uint8Array(4) };
+    pool.resolve('img_1', image);
+    assert.deepStrictEqual(Object.keys(image), ['width', 'data'], 'PDF fonts: other objects are kept as they are');
+    assert.deepStrictEqual(resolved.map(([id]) => id), ['g_d0_f1', 'img_1'], 'PDF fonts: everything still reaches the pool');
+    const throwing: any = Object.assign(Object.create({ clearData() { throw new Error('no'); } }), { name: 'X' });
+    pool.resolve('g_d0_f3', throwing);
+    assert.strictEqual(throwing.name, 'X', 'PDF fonts: a font whose data cannot be cleared still arrives');
+    slimFontsOf(null); slimFontsOf({}); slimFontsOf({ resolve: 1 });
+
+    // 100 fonts sharing one font program, in both process modes: every run names its font, and the bold ones are bold.
+    // (Each has widths of its own: pdf.js reads fonts alike in everything but their name as one.)
+    const zlib = await import('zlib');
+    const fontFile = zlib.deflateSync(fs.readFileSync(path.join(__dirname, '..', 'node_modules', 'pdfjs-dist', 'standard_fonts', 'LiberationSans-Regular.ttf')));
+    const buildPdf = (objs: (string | Buffer)[]): Buffer => {
+        const parts: Buffer[] = [Buffer.from('%PDF-1.7\n', 'latin1')];
+        let length = parts[0].length;
+        const offsets: number[] = [];
+        for (let i = 1; i < objs.length; i++) {
+            offsets[i] = length;
+            for (const part of [`${i} 0 obj\n`, objs[i], '\nendobj\n']) { const bytes = typeof part === 'string' ? Buffer.from(part, 'latin1') : part; parts.push(bytes); length += bytes.length; }
+        }
+        let xref = `xref\n0 ${objs.length}\n0000000000 65535 f \n`;
+        for (let i = 1; i < objs.length; i++) xref += `${String(offsets[i]).padStart(10, '0')} 00000 n \n`;
+        parts.push(Buffer.from(`${xref}trailer\n<</Size ${objs.length}/Root 1 0 R>>\nstartxref\n${length}\n%%EOF\n`, 'latin1'));
+        return Buffer.concat(parts);
+    };
+    const n = 100;
+    const fontObjs: (string | Buffer)[] = [];
+    let content = 'BT 12 TL 20 1260 Td\n';
+    const refs: string[] = [];
+    for (let i = 0; i < n; i++) {
+        fontObjs[7 + i] = `<</Type/Font/Subtype/TrueType/BaseFont/Sample${i % 2 ? 'Bold' : 'Regular'}${i}/FirstChar 32/LastChar 126/Widths[${Array(95).fill(500 + i).join(' ')}]/FontDescriptor 6 0 R/Encoding/WinAnsiEncoding>>`;
+        refs.push(`/F${i} ${7 + i} 0 R`);
+        content += `/F${i} 10 Tf (Word${i}) Tj T*\n`;
+    }
+    content += 'ET';
+    fontObjs[1] = '<</Type/Catalog/Pages 2 0 R>>';
+    fontObjs[2] = '<</Type/Pages/Kids[3 0 R]/Count 1>>';
+    fontObjs[3] = `<</Type/Page/Parent 2 0 R/MediaBox[0 0 612 1300]/Contents 4 0 R/Resources<</Font<<${refs.join('')}>>>>>>`;
+    fontObjs[4] = `<</Length ${content.length}>>stream\n${content}\nendstream`;
+    fontObjs[5] = Buffer.concat([Buffer.from(`<</Length ${fontFile.length}/Filter/FlateDecode>>stream\n`, 'latin1'), fontFile, Buffer.from('\nendstream', 'latin1')]);
+    fontObjs[6] = '<</Type/FontDescriptor/FontName/Sample/Flags 32/FontBBox[-200 -300 1200 1000]/ItalicAngle 0/Ascent 900/Descent -200/CapHeight 700/StemV 80/FontFile2 5 0 R>>';
+    const shared = buildPdf(fontObjs);
+    for (const separateProcess of [true, false]) {
+        const ast = await OfficeParser.parseOffice(shared, { fileType: 'pdf', pdfParserConfig: { separateProcess } } as any);
+        const runs: any[] = [];
+        const walkRuns = (node: any) => { if (node.type === 'text') runs.push(node); for (const child of node.children ?? []) walkRuns(child); };
+        ast.content.forEach(walkRuns);
+        const words = runs.filter(run => /^Word\d+$/.test(String(run.text).trim()));
+        assert.strictEqual(words.length, n, `PDF fonts (${separateProcess ? 'separate process' : 'in process'}): ${n} runs: ${words.length}`);
+        for (const run of words) {
+            const i = Number(String(run.text).trim().slice(4));
+            const expected = `Sample${i % 2 ? 'Bold' : 'Regular'}${i}`;
+            assert.strictEqual(run.formatting?.font, expected, `PDF fonts (${separateProcess ? 'separate process' : 'in process'}): run ${i} names its font`);
+            assert.strictEqual(!!run.formatting?.bold, i % 2 === 1, `PDF fonts (${separateProcess ? 'separate process' : 'in process'}): run ${i} is bold only in a bold font`);
+        }
+    }
+
+    // Against pdf.js itself (in this process, as a caller's own pdf.js runs): under fontExtraProperties a font
+    // keeps its program and every extra property, and a page's pool hooked by slimFontsOf keeps neither.
+    const { pathToFileURL } = await import('url');
+    const pdfjs: any = await import(pathToFileURL(require.resolve('pdfjs-dist/legacy/build/pdf.mjs')).href);
+    pdfjs.GlobalWorkerOptions.workerSrc ||= pathToFileURL(require.resolve('pdfjs-dist/legacy/build/pdf.worker.mjs')).href;
+    const fontsOfPage = async (slim: boolean) => {
+        const task = pdfjs.getDocument({ data: new Uint8Array(shared), fontExtraProperties: true, isEvalSupported: false, verbosity: 0 });
+        try {
+            const page = await (await task.promise).getPage(1);
+            if (slim) slimFontsOf(page.commonObjs);
+            const list = await page.getOperatorList();
+            const ids = new Set<string>();
+            list.fnArray.forEach((fn: number, i: number) => { if (fn === pdfjs.OPS.setFont) ids.add(list.argsArray[i][0]); });
+            return [...ids].map(id => page.commonObjs.get(id));
+        } finally {
+            await task.destroy();
+        }
+    };
+    const kept = await fontsOfPage(false);
+    assert.ok(kept.length === n && kept.every((f: any) => f.data instanceof Uint8Array && Array.isArray(f.widths)), 'PDF fonts: pdf.js keeps a font\'s program and widths under fontExtraProperties (what slimFontsOf undoes)');
+    const slimmed = await fontsOfPage(true);
+    assert.strictEqual(slimmed.length, n, 'PDF fonts: every font is in the pool');
+    for (const f of slimmed) {
+        assert.ok(f.data === undefined && !('widths' in f) && !('toFontChar' in f), `PDF fonts: a font's program and extras are let go (${Object.keys(f)})`);
+        assert.ok(typeof f.name === 'string' && /Sample(Bold|Regular)\d+$/.test(f.name), `PDF fonts: a font keeps its name (${f.name})`);
+        assert.ok(Array.isArray(f.fontMatrix) || ArrayBuffer.isView(f.fontMatrix), 'PDF fonts: a font keeps its description (fontMatrix)');
+    }
+
+    // And in the parser's own pass (in this process, where no separate process trims what pdf.js sends): every
+    // font the document's pool receives is let go by the time the parse ends.
+    const pdfObjects = Object.getPrototypeOf((await (async () => {
+        const task = pdfjs.getDocument({ data: new Uint8Array(shared), isEvalSupported: false, verbosity: 0 });
+        try { return await (await task.promise).getPage(1); } finally { await task.destroy(); }
+    })()).commonObjs);
+    const poolResolve = pdfObjects.resolve;
+    const received: any[] = [];
+    pdfObjects.resolve = function (this: any, id: string, data: any) { const result = poolResolve.call(this, id, data); if (data && typeof data.clearData === 'function') received.push(data); return result; };
+    try {
+        await OfficeParser.parseOffice(shared, { fileType: 'pdf', pdfParserConfig: { separateProcess: false } } as any);
+    } finally {
+        pdfObjects.resolve = poolResolve;
+    }
+    assert.strictEqual(received.length, n, `PDF fonts: the parse's pool received every font (${received.length})`);
+    assert.ok(received.every(f => f.data === undefined && !('widths' in f) && typeof f.name === 'string'), 'PDF fonts: a parse in this process lets every font go, keeping its name');
+
+    // A font whose W array gives one width to ten million codes (a few bytes of PDF) costs the host no more
+    // than one giving it to ten: the separate process sends a font's name alone, and caps every array it sends.
+    const widthsContent = 'BT 20 700 Td /F0 12 Tf <00410042> Tj ET';
+    const widthsPdf = (range: number) => buildPdf([
+        '',
+        '<</Type/Catalog/Pages 2 0 R>>',
+        '<</Type/Pages/Kids[3 0 R]/Count 1>>',
+        '<</Type/Page/Parent 2 0 R/MediaBox[0 0 612 792]/Contents 4 0 R/Resources<</Font<</F0 6 0 R>>>>>>',
+        `<</Length ${widthsContent.length}>>stream\n${widthsContent}\nendstream`,
+        '<</Type/FontDescriptor/FontName/Wide/Flags 4/FontBBox[0 0 1000 1000]/ItalicAngle 0/Ascent 800/Descent -200/CapHeight 700/StemV 80>>',
+        '<</Type/Font/Subtype/Type0/BaseFont/Wide/Encoding/Identity-H/DescendantFonts[7 0 R]>>',
+        `<</Type/Font/Subtype/CIDFontType2/BaseFont/Wide/CIDSystemInfo<</Registry(Adobe)/Ordering(Identity)/Supplement 0>>/FontDescriptor 5 0 R/DW 1000/W[0 ${range} 500]>>`,
+    ]);
+    const hostPeak = async (pdf: Buffer): Promise<number> => {
+        const base = process.memoryUsage().heapUsed;
+        let peak = base;
+        const timer = setInterval(() => { peak = Math.max(peak, process.memoryUsage().heapUsed); }, 5);
+        try { await OfficeParser.parseOffice(pdf, { fileType: 'pdf', onWarning: () => { } } as any); } finally { clearInterval(timer); }
+        return Math.max(peak, process.memoryUsage().heapUsed) - base;
+    };
+    const small = await hostPeak(widthsPdf(10));
+    const wide = await hostPeak(widthsPdf(10_000_000));
+    assert.ok(wide - small < 40 * 1048576, `PDF fonts: ten million widths add ${((wide - small) / 1048576).toFixed(0)} MB to the host (under 40 MB)`);
+    console.log('  PDF fonts let go: All assertions passed ✓');
+}
+
 async function testPdfFormValuesAsText(): Promise<void> {
     const inProcess = { pdfParserConfig: { separateProcess: false } };
     const textOf = (ast: OfficeParserAST): string => ast.content.map(n => n.text).join('\n');
@@ -13622,6 +13803,9 @@ async function testPdfInProcessTurns(): Promise<void> {
     try {
         reading = true;
         await OfficeParser.parseOffice(many, { fileType: 'pdf', ...inProcess, onWarning: (issue: any) => { found.push(issue); console.warn(`Warning: the caller's onWarning saw ${issue.code}`); } } as any);
+        // A document this short can be read without the caller's timer getting a turn (pdf.js 6.5 reads it in
+        // microtasks alone): the caller's lines are written while a document of eight pages is read, which takes turns.
+        await OfficeParser.parseOffice(path.join(__dirname, 'files', 'test.pdf'), { fileType: 'pdf', ...inProcess, onWarning: (issue: any) => { found.push(issue); console.warn(`Warning: the caller's onWarning saw ${issue.code}`); } } as any);
         reading = false;
     } finally {
         clearInterval(timer);
@@ -17194,6 +17378,7 @@ async function runTests(): Promise<void> {
         ['PDF pictures left out', testPdfPicturesLeftOut],
         ['PDF in-process turns', testPdfInProcessTurns],
         ['PDF form metadata and HTML details', testPdfFormMetadataAndHtml],
+        ['PDF fonts let go', testPdfFontsLetGo],
         ['PDF form values as text', testPdfFormValuesAsText],
         ['PDF glyph names', testPdfGlyphNames],
         ['PDF kept JPEGs', testPdfKeptJpegs],

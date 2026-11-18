@@ -3564,9 +3564,9 @@
          * pdf.js's CMaps (the text of fonts a PDF does not embed, as many Chinese, Japanese and Korean
          * PDFs do) and its image decoders (fax scans, JBIG2, JPEG 2000) are served beside the worker.
          */
-        window.SITE_PDF_WORKER_SRC = new URL('vendor/pdfjs-dist-6.2.108/pdf.worker.min.mjs', document.baseURI).href;
-        window.SITE_PDF_CMAP_URL = new URL('vendor/pdfjs-dist-6.2.108/cmaps/', document.baseURI).href;
-        window.SITE_PDF_DECODER_URL = new URL('vendor/pdfjs-dist-6.2.108/wasm/', document.baseURI).href;
+        window.SITE_PDF_WORKER_SRC = new URL('vendor/pdfjs-dist-6.5.438/pdf.worker.min.mjs', document.baseURI).href;
+        window.SITE_PDF_CMAP_URL = new URL('vendor/pdfjs-dist-6.5.438/cmaps/', document.baseURI).href;
+        window.SITE_PDF_DECODER_URL = new URL('vendor/pdfjs-dist-6.5.438/wasm/', document.baseURI).href;
         window.SITE_CHART_JS_SRC = new URL('vendor/chart.js-4.5.1/chart.umd.min.js', document.baseURI).href;
         /**
          * OCR's worker and engine, served by this site too (absolute, as Tesseract starts its worker from a

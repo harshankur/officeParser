@@ -138,7 +138,7 @@
     "@xmldom/xmldom": "^0.9.12",
     "fflate": "^0.8.3",
     "file-type": "^22.3.0",
-    "pdfjs-dist": "6.2.108",
+    "pdfjs-dist": "6.5.438",
     "tesseract.js": "^7.0.0"
   },
   "peerDependencies": {

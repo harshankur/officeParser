@@ -528,7 +528,7 @@ export interface CommonOfficeParserConfig {
     /**
      * The URL/path to the PDF.js worker script, used only on the PDF path in the browser.
      *
-     * Defaults to `https://cdn.jsdelivr.net/npm/pdfjs-dist@6.2.108/build/pdf.worker.min.mjs`, so you only
+     * Defaults to `https://cdn.jsdelivr.net/npm/pdfjs-dist@6.5.438/build/pdf.worker.min.mjs`, so you only
      * need to set it to point at a self-hosted copy when the CDN is unreachable or a CSP blocks it. The
      * slim browser bundle ships no default, so there it is required for PDF parsing. Ignored in Node.
      */
@@ -545,7 +545,7 @@ export interface CommonOfficeParserConfig {
      *
      * In Node the installed package's own folder is used, unless this is set to another address (a
      * path, or a `file:` or `http(s):` address). In the browser it defaults to
-     * `https://cdn.jsdelivr.net/npm/pdfjs-dist@6.2.108/cmaps/`; a page with a Content Security Policy,
+     * `https://cdn.jsdelivr.net/npm/pdfjs-dist@6.5.438/cmaps/`; a page with a Content Security Policy,
      * or one that must work offline, sets it to a copy of that folder it hosts (and allows the address
      * in `connect-src`). The slim browser bundle has no default: there, set it to read such text.
      * Not fetched from its default when `allowRemoteAssets` is false.
@@ -565,7 +565,7 @@ export interface CommonOfficeParserConfig {
      *
      * In Node the installed package's own folder is used, unless this is set to another address (a
      * path, or a `file:` or `http(s):` address). In the browser it defaults to
-     * `https://cdn.jsdelivr.net/npm/pdfjs-dist@6.2.108/wasm/`; a page with a Content Security Policy,
+     * `https://cdn.jsdelivr.net/npm/pdfjs-dist@6.5.438/wasm/`; a page with a Content Security Policy,
      * or one that must work offline, sets it to a copy of that folder it hosts (and allows the address
      * in `connect-src`). The slim browser bundle has no default: there, set it to decode such pictures.
      * Not fetched from its default when `allowRemoteAssets` is false.

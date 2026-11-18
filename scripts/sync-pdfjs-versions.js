@@ -9,19 +9,13 @@ const path = require('path');
  *
  * PIN RATIONALE (do not bump pdfjs-dist casually): pdfjs-dist is pinned to an EXACT version, not a
  * range, because its output feeds every committed PDF baseline and its tagged-structure API is
- * behavior-sensitive. 6.3.289 was tried and REVERTED, but the reason is narrower than it first
- * looks: on 6.3.289 `getMarkInfo()` returns `{}` for a marked PDF (6.2.108 returns
- * `{ Marked: true }`), so our tagged-detection (which keys off `getMarkInfo().Marked` in
- * PdfParser.ts) collapses to the geometry fallback and six PDF smoke assertions fail. The tagged
- * STRUCTURE itself is not lost: `getStructTree()` on 6.3.289 is byte-identical to 6.2.108 (verified
- * on test.pdf: same 1092 struct nodes, same H1/P/Table/TR/TH/TD/L/LI/TOC/Note/Figure/Link roles).
- * So the durable fix is to derive tagged-ness from the presence of a real struct tree (keeping
- * `getMarkInfo().Suspects` for the trust gate when present) instead of from `getMarkInfo().Marked`;
- * do that decoupling in PdfParser, THEN bump. Note also that 6.3.289 is currently the newest release
- * (no upstream fix exists) and is a lateral move plus a known regression, so staying on 6.2.108 is
- * correct until a genuinely newer pdfjs ships. Before raising the version: decouple detection as
- * above, run `npm run test:parser` (full, not fast), confirm the tagged-PDF assertions still pass,
- * and regenerate the PDF baselines. Bump with: `node scripts/sync-pdfjs-versions.js <version>`.
+ * behavior-sensitive. A bump can change the shape of what its API returns without its types saying so:
+ * from 6.3, `getMarkInfo()` resolves to a Map, not the plain object its type declares, which read as
+ * `{}` and turned off tagged-PDF reading (held 6.3.289 back until PdfParser's `markInfoFlags` read both
+ * shapes). Before raising the version: run `npm run test:parser` (full, not fast), confirm the
+ * tagged-PDF assertions still pass, look at every baseline that changes, and regenerate the PDF
+ * baselines. Bump with: `node scripts/sync-pdfjs-versions.js <version>`, which also says what to copy
+ * into docs/vendor/.
  */
 
 function syncVersions() {

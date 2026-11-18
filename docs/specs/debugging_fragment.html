@@ -55,9 +55,9 @@ await terminateOcr(); // Snappy exit</code></pre>
     <p>If PDF parsing fails in the browser with "Worker not found" or "Version mismatch" errors:</p>
     <ul>
         <li><strong>Worker Source:</strong> Ensure <code>pdfWorkerSrc</code> points to a valid URL. By default, it uses
-            a CDN pointing to <code>pdfjs-dist@6.2.108</code>.</li>
+            a CDN pointing to <code>pdfjs-dist@6.5.438</code>.</li>
         <li><strong>Version Matching:</strong> If you host the worker locally, ensure it matches the
-            <code>pdfjs-dist@6.2.108</code> used by the library.
+            <code>pdfjs-dist@6.5.438</code> used by the library.
         </li>
         <li><strong>CJK text or scanned pictures missing:</strong> pdf.js loads CMaps (<code>pdfCMapUrl</code>) for the
             text of fonts a PDF does not embed, and image decoders (<code>pdfDecoderUrl</code>) for JBIG2, CCITT fax and
@@ -224,7 +224,7 @@ await officeParser.parseOffice(latexBuffer,    { fileType: 'tex' });</code></pre
             </tr>
             <tr>
                 <td>"Worker not found" in browser (PDF)</td>
-                <td>Set <code>pdfWorkerSrc</code> to a valid URL for <code>pdfjs-dist@6.2.108</code></td>
+                <td>Set <code>pdfWorkerSrc</code> to a valid URL for <code>pdfjs-dist@6.5.438</code></td>
             </tr>
             <tr>
                 <td>Low OCR accuracy</td>

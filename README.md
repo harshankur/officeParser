@@ -2316,12 +2316,12 @@ const ast = await officeParser.parseOffice(pdfArrayBuffer);
 
 // Or specify your own:
 const ast = await officeParser.parseOffice(pdfArrayBuffer, {
-    pdfWorkerSrc: 'https://cdn.jsdelivr.net/npm/pdfjs-dist@6.2.108/build/pdf.worker.min.mjs'
+    pdfWorkerSrc: 'https://cdn.jsdelivr.net/npm/pdfjs-dist@6.5.438/build/pdf.worker.min.mjs'
 });
 ```
 
 > [!NOTE]
-> The `pdfjs-dist` worker version must match the version bundled with `officeparser` (currently `pdfjs-dist@6.2.108`).
+> The `pdfjs-dist` worker version must match the version bundled with `officeparser` (currently `pdfjs-dist@6.5.438`).
 
 > [!NOTE]
 > `pdfjs-dist` is pinned to that exact version, not a range: what the library reads from a PDF depends on pdf.js's output, which changes between releases, and pdf.js's API refuses a worker of another version. Your application can use its own `pdfjs-dist`, of this version or another, in the same Node process wherever the library finds `pdfjs-dist`'s worker file: it then runs pdf.js's worker on a module of its own (in a separate process by default, see `pdfParserConfig.separateProcess`), so each copy keeps its own worker. A bundle that inlines pdf.js (an ESM bundle for Node, or a bundle shipped without `node_modules`) has no worker file to find: there the library's worker is preloaded as `globalThis.pdfjsWorker`, which a `pdfjs-dist` of another version in the same process would also take, so use the library's version of `pdfjs-dist` there.
@@ -2333,7 +2333,7 @@ const ast = await officeParser.parseOffice(pdfArrayBuffer, {
 | Symptom | Fix |
 |---------|-----|
 | Node.js process stays alive after finishing | Call `await officeParser.terminateOcr()` at end of script when OCR was used |
-| `"Worker not found"` in browser for PDF | Verify `pdfWorkerSrc` points to `pdf.worker.min.mjs` matching `pdfjs-dist@6.2.108` |
+| `"Worker not found"` in browser for PDF | Verify `pdfWorkerSrc` points to `pdf.worker.min.mjs` matching `pdfjs-dist@6.5.438` |
 | Japanese, Chinese or Korean PDF text missing (`PDF_ASSET_UNAVAILABLE` for a CMap) | Set `pdfCMapUrl` to a copy of `pdfjs-dist/cmaps/` you host (or leave `allowRemoteAssets` on) |
 | Low OCR accuracy | Verify `ocrConfig.language` matches the document language; quality depends on image resolution |
 | Out of memory on large Excel files | Call `await ast.to('text')` early and discard the AST object to allow garbage collection |

@@ -3680,6 +3680,13 @@ async function testPdfSmoke(): Promise<FeatureTest[]> {
         add('Subscript joined', text.includes('subscript') && !text.includes('sub script'), 'subscript (joined)', text.includes('subscript') ? 'joined' : 'missing/broken');
         add('Document language', ast.metadata.language === 'en', 'en', ast.metadata.language);
         add('Tagged flag', ast.metadata.nativeProperties?.tagged === true, true, ast.metadata.nativeProperties?.tagged);
+        // pdf.js gives the MarkInfo flags as a Map from 6.3: kept as a plain object, as JSON writes it.
+        const markInfo = ast.metadata.nativeProperties?.markInfo;
+        add('MarkInfo flags as an object', JSON.stringify(markInfo) === '{"Marked":true,"UserProperties":false,"Suspects":false}', '{"Marked":true,"UserProperties":false,"Suspects":false}', JSON.stringify(markInfo));
+        // Every run names its font (pdf.js sends a font's name only when asked, from 6.3), and the bold ones are bold.
+        let runs = 0, named = 0, bold = 0;
+        ast.content.forEach((p: any) => walk(p, n => { if (n.type === 'text') { runs++; if (n.formatting?.font) named++; if (n.formatting?.bold) bold++; } }));
+        add('Runs name their font', runs > 0 && named === runs && bold > 0, `${runs}/${runs} named, some bold`, `${named}/${runs} named, ${bold} bold`);
         const page1 = ast.content[0] as any;
         add('Page dimensions', page1?.metadata?.pageWidth === 612 && page1?.metadata?.pageHeight === 792, '612x792', `${page1?.metadata?.pageWidth}x${page1?.metadata?.pageHeight}`);
         let boundsCount = 0, textCount = 0;
@@ -3876,6 +3883,17 @@ async function testPdfSmoke(): Promise<FeatureTest[]> {
         } catch (e: any) {
             add(`cjk_ccitt_jpx parse (separateProcess ${separateProcess})`, false, 'parsed', e?.message || String(e));
         }
+    }
+
+    // --- two_columns_narrow_latex fixture: the Info dictionary's own keys are the document's custom properties
+    // (pdf.js gives them as a Map from 6.3) ---
+    try {
+        const ast = await OfficeParser.parseOffice(path.join(pdfDir, 'two_columns_narrow_latex.pdf'), { ocr: false });
+        const banner = (ast.metadata.customProperties as any)?.['PTEX.Fullbanner'];
+        add('Custom properties read', typeof banner === 'string' && banner.startsWith('This is pdfTeX'), 'PTEX.Fullbanner: This is pdfTeX...', String(banner));
+        add('Custom properties in nativeProperties', (ast.metadata.nativeProperties as any)?.['PTEX.Fullbanner'] === banner, banner, (ast.metadata.nativeProperties as any)?.['PTEX.Fullbanner']);
+    } catch (e: any) {
+        add('two_columns_narrow_latex parse', false, 'parsed', e?.message || String(e));
     }
 
     // --- columns_untagged fixture: reading order left column before right column ---

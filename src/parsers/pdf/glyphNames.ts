@@ -7,8 +7,8 @@
  * underscore joins the components of a ligature, and each component is a name of the list, `uniXXXX` or
  * `uXXXX`.
  *
- * pdf.js keeps no font's encoding or CMap where its text is read (it can be asked to, `fontExtraProperties`,
- * but then sends every font's whole CMap, a CJK font's a sparse array billions long), so they are read here
+ * pdf.js sends no font's CMap where its text is read (up to 6.2, `fontExtraProperties` sent every font's
+ * whole CMap, a CJK font's a sparse array billions long; from 6.3 it sends none), so they are read here
  * from the file (see pdfFile), for glyph-name recovery in simple fonts (Type 1, Type 3, TrueType) of a
  * page that may have such a code, and each matched to pdf.js's font by the order the page sets them in:
  * the n-th `Tf` here is the n-th font pdf.js sets. A glyph is read by its name only where pdf.js read it

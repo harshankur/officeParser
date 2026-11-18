@@ -25,14 +25,17 @@ import { MAX_WARNING_LENGTH, MAX_WORKER_WARNINGS, PDFJS_WARNING_KIND_SOURCE } fr
  * as OWN_ARRAYS_SOURCE (the same function as source: a compiled function's own text can carry a
  * bundler's helpers, which the child does not have).
  */
-const ownArrays = (value: any): any => {
+export const ownArrays = (value: any): any => {
     const own = (item: any, depth: number): any => {
         if (ArrayBuffer.isView(item)) return item.byteOffset || item.byteLength !== item.buffer.byteLength ? (item as any).slice() : item;
         if (depth > 64 || item === null || typeof item !== 'object') return item;
         if (Array.isArray(item)) { for (let i = 0; i < item.length; i++) item[i] = own(item[i], depth + 1); return item; }
-        // Only a changed value is written, as an own property: a key named `__proto__` in a message is
-        // data, never the prototype.
-        if (Object.getPrototypeOf(item) === Object.prototype) for (const key of Object.keys(item)) { const next = own(item[key], depth + 1); if (next !== item[key]) Object.defineProperty(item, key, { value: next, writable: true, enumerable: true, configurable: true }); }
+        // A Map's values and a null-prototype object's (as pdf.js sends some results) are walked as a plain
+        // object's are. Only a changed value is written, as an own property: a key named `__proto__` in a
+        // message is data, never the prototype.
+        if (item instanceof Map) { for (const [key, entry] of item) { const next = own(entry, depth + 1); if (next !== entry) item.set(key, next); } return item; }
+        const proto = Object.getPrototypeOf(item);
+        if (proto === Object.prototype || proto === null) for (const key of Object.keys(item)) { const next = own(item[key], depth + 1); if (next !== item[key]) Object.defineProperty(item, key, { value: next, writable: true, enumerable: true, configurable: true }); }
         return item;
     };
     return own(value, 0);
@@ -43,11 +46,48 @@ const OWN_ARRAYS_SOURCE = `(value) => {
         if (ArrayBuffer.isView(item)) return item.byteOffset || item.byteLength !== item.buffer.byteLength ? item.slice() : item;
         if (depth > 64 || item === null || typeof item !== 'object') return item;
         if (Array.isArray(item)) { for (let i = 0; i < item.length; i++) item[i] = own(item[i], depth + 1); return item; }
-        if (Object.getPrototypeOf(item) === Object.prototype) for (const key of Object.keys(item)) { const next = own(item[key], depth + 1); if (next !== item[key]) Object.defineProperty(item, key, { value: next, writable: true, enumerable: true, configurable: true }); }
+        if (item instanceof Map) { for (const [key, entry] of item) { const next = own(entry, depth + 1); if (next !== entry) item.set(key, next); } return item; }
+        const proto = Object.getPrototypeOf(item);
+        if (proto === Object.prototype || proto === null) for (const key of Object.keys(item)) { const next = own(item[key], depth + 1); if (next !== item[key]) Object.defineProperty(item, key, { value: next, writable: true, enumerable: true, configurable: true }); }
         return item;
     };
     return own(value, 0);
 }`;
+
+/**
+ * The child's cap on what it sends (as source, run in the child): arrays hold at most 100,000 entries. A
+ * string drawn once can be a glyph array of fifty million in the operator list, and reading that message
+ * blocked the host for seconds. Nothing the host reads is that long (image data are typed arrays, which
+ * this leaves alone). Maps and null-prototype objects (pdf.js sends a font's extra properties, form fields
+ * and structure-tree nodes so) are walked as plain objects are. Exported for the tests.
+ */
+export const CAP_ARRAYS_SOURCE = `(function capArrays(value, depth) {
+    if (depth > 64 || value === null || typeof value !== 'object' || ArrayBuffer.isView(value)) return value;
+    if (Array.isArray(value)) {
+        if (value.length > 100000) value = value.slice(0, 100000);
+        for (let i = 0; i < value.length; i++) value[i] = capArrays(value[i], depth + 1);
+        return value;
+    }
+    if (value instanceof Map) { for (const [key, item] of value) { const next = capArrays(item, depth + 1); if (next !== item) value.set(key, next); } return value; }
+    const proto = Object.getPrototypeOf(value);
+    if (proto === Object.prototype || proto === null) for (const key of Object.keys(value)) { const next = capArrays(value[key], depth + 1); if (next !== value[key]) Object.defineProperty(value, key, { value: next, writable: true, enumerable: true, configurable: true }); }
+    return value;
+})`;
+
+/**
+ * The child's trim of a font it sends (as source, run in the child): of a font's extra properties, which
+ * pdf.js sends only under `fontExtraProperties` (see PdfParser), the parser reads the name alone. The rest
+ * (a glyph width for every code a font's W array spans, its char-code map, its metrics) is dropped before
+ * it crosses to the host. A font read for something else must keep that key here and in PdfParser's
+ * KEPT_FONT_KEYS. Exported for the tests.
+ */
+export const SLIM_FONT_MESSAGE_SOURCE = `(function slimFontMessage(message) {
+    if (message && message.action === 'commonobj' && Array.isArray(message.data) && message.data[1] === 'Font' && message.data[2] && message.data[2].extra) {
+        const name = message.data[2].extra.name;
+        message.data[2].extra = typeof name === 'string' ? { name } : {};
+    }
+    return message;
+})`;
 
 /** What the child sends where it would send a warning, when it refused pdf.js the runtime's Brotli decoder (see brotliFlaw). */
 export const BROTLI_AVOIDED_LINE = 'officeparser: the runtime\'s Brotli decoder was not used';
@@ -76,19 +116,8 @@ setInterval(() => {
 /** The child: pdf.js's worker, reading and writing its messages through the IPC channel. */
 const CHILD_SOURCE = `
 const ownArrays = ${OWN_ARRAYS_SOURCE};
-// Arrays sent to the host hold at most 100,000 entries: a string drawn once can be a glyph array of
-// fifty million in the operator list, and reading that message blocked the host for seconds. Nothing
-// the host reads is that long (image data are typed arrays, which this leaves alone).
-const capArrays = (value, depth) => {
-    if (depth > 64 || value === null || typeof value !== 'object' || ArrayBuffer.isView(value)) return value;
-    if (Array.isArray(value)) {
-        if (value.length > 100000) value = value.slice(0, 100000);
-        for (let i = 0; i < value.length; i++) value[i] = capArrays(value[i], depth + 1);
-        return value;
-    }
-    if (Object.getPrototypeOf(value) === Object.prototype) for (const key of Object.keys(value)) { const next = capArrays(value[key], depth + 1); if (next !== value[key]) Object.defineProperty(value, key, { value: next, writable: true, enumerable: true, configurable: true }); }
-    return value;
-};
+const capArrays = ${CAP_ARRAYS_SOURCE};
+const slimFontMessage = ${SLIM_FONT_MESSAGE_SOURCE};
 // The clock (fd 4): its first line says whether this process can measure its CPU time ('-' if not).
 let clock = null;
 try { clock = new (require('worker_threads').Worker)(${JSON.stringify(CLOCK_SOURCE)}, { eval: true }); clock.unref(); } catch { clock = null; }
@@ -127,7 +156,7 @@ if (process.env.OFFICEPARSER_PDF_AVOID_BROTLI === '1' && typeof globalThis.Decom
 }
 const listeners = new Set();
 const port = {
-    postMessage(message) { if (process.connected) process.send(capArrays(message, 0)); },
+    postMessage(message) { if (process.connected) process.send(capArrays(slimFontMessage(message), 0)); },
     addEventListener(type, listener, options) {
         if (type !== 'message') return;
         listeners.add(listener);
