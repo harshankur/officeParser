@@ -53,10 +53,10 @@ Point E 	93 	35 	54 	43 	— 
 # Sheet: Sheet4
 Next, we see a table with special formatting in various locations. Notice how the formatting for the header row and sub header rows is preserved. 
 College 	New students 	Graduating students 	Change 
-Undergraduate 
+	Undergraduate 
 Cedar University 	110 	103 	+7 
 Oak Institute 	202 	210 	-8 
-Graduate 
+	Graduate 
 Cedar University 	24 	20 	+4 
 Elm College 	43 	53 	-10 
 Total 	998 	908 	90 
@@ -68,13 +68,13 @@ Four 
 # Sheet: Sheet5
 We end with a fancy calendar, note how much of the original formatting is preserved. Note that this table will only display correctly on relatively wide screens. In general, very wide tables or tables whose cells have fixed width requirements don’t fare well in ebooks. 
 December 2007 
-Sun 	Mon 	Tue 	Wed 	Thu 	Fri 	Sat 
-1 
-2 	3 	4 	5 	6 	7 	8 
-9 	10 	11 	12 	13 	14 	15 
-16 	17 	18 	19 	20 	21 	22 
-23 	24 	25 	26 	27 	28 	29 
-30 	31 
+Sun 		Mon 		Tue 		Wed 		Thu 		Fri 		Sat 
+												1 
+2 		3 		4 		5 		6 		7 		8 
+9 		10 		11 		12 		13 		14 		15 
+16 		17 		18 		19 		20 		21 		22 
+23 		24 		25 		26 		27 		28 		29 
+30 		31 
 # Sheet: Sheet6
 Structural Elements 
 Miscellaneous structural elements you can add to your document, like footnotes, endnotes, dropcaps and the like.  
@@ -119,7 +119,7 @@ iii	We now resume our normal programming 
 iv	Four 
 # Sheet: Chart Sheet
 Charts
-Series 1	Series 2	Series 3
+	Series 1	Series 2	Series 3
 Category 1	4.3	2.4	2
 Category 2	2.5	4.4000000000000004	2
 Category 3	3.5	1.8	3
