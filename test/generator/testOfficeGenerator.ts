@@ -1997,6 +1997,32 @@ async function runWhitespaceFidelityTests(): Promise<GenFeatureTest[]> {
         gridCells.includes('| ITEM') && gridCells.includes('| NEEDED') && !gridCells.includes('ITEM\t'),
         'preserveLayout:true routes through renderTable, which does its own column alignment'));
 
+    // A spreadsheet stores no cell for a blank one: the next value stays in its own column.
+    const sparseRow = (cols: [number, string][]): OfficeContentNode => ({
+        type: 'row',
+        children: cols.map(([col, text]) => ({ type: 'cell', metadata: { row: 0, col }, children: [{ type: 'text', text }] })),
+    } as OfficeContentNode);
+    const sparseAst = createAST('xlsx', undefined as any,
+        [{ type: 'sheet', children: [sparseRow([[0, 'Ann'], [2, 'ann@x.com']]), sparseRow([[1, '555-1']])] } as OfficeContentNode],
+        [], parserConfig, undefined);
+    const { value: sparseText } = await sparseAst.to('text');
+    results.push(mk('text', 'a blank cell keeps its column',
+        'Ann\t\tann@x.com / \t555-1', JSON.stringify(sparseText),
+        sparseText.includes('Ann\t\tann@x.com') && sparseText.includes('\n\t555-1'),
+        'values after a blank cell moved into the previous column'));
+    const mergedSheet = createAST('xlsx', undefined as any, [{ type: 'sheet', children: [{
+        type: 'row',
+        children: [
+            { type: 'cell', metadata: { row: 0, col: 0, colSpan: 2 }, children: [{ type: 'text', text: 'Total' }] },
+            { type: 'cell', metadata: { row: 0, col: 2 }, children: [{ type: 'text', text: '10' }] },
+        ],
+    }] } as OfficeContentNode], [], parserConfig, undefined);
+    const { value: mergedSheetText } = await mergedSheet.to('text');
+    results.push(mk('text', 'a merged cell keeps the columns it covers',
+        'Total\t\t10', JSON.stringify(mergedSheetText),
+        mergedSheetText.includes('Total\t\t10'),
+        'the value after a merged cell moved into a column the merge covers'));
+
     // --- A table as the only/first top-level node: renderTable (text) and the HTML-fallback path
     // of renderMarkdownTable (md) both unconditionally wrap in a leading+trailing newline as
     // separators from siblings - with no preceding/following sibling, that leaks as a spurious

@@ -1,4 +1,4 @@
-import { CodeMetadata, ConversionResult, GeneratorConfig, OfficeContentNode, OfficeContentNodeType, OfficeParserAST, OfficeWarningType } from '../types.js';
+import { CellMetadata, CodeMetadata, ConversionResult, GeneratorConfig, OfficeContentNode, OfficeContentNodeType, OfficeParserAST, OfficeWarningType } from '../types.js';
 import { documentBytesOf, LAYOUT_SPACES_PER_BYTE } from '../utils/budgetUtils.js';
 import { BaseGenerator } from './BaseGenerator.js';
 import { chartReferenceText } from '../utils/chartUtils.js';
@@ -180,6 +180,7 @@ export class TextGenerator extends BaseGenerator<'text'> {
 
             // Append newline for block-level elements to maintain structure.
             if (node.type === 'row') {
+                if (this.walkedByProcessor(node)) childrenOutput = await this.renderRowCells(node, processor);
                 // Trailing separator on the final cell is an artifact of appending one per cell, not
                 // content, so drop it rather than leaving every row ending in a stray tab.
                 const row = childrenOutput.endsWith(CELL_SEPARATOR)
@@ -478,9 +479,39 @@ export class TextGenerator extends BaseGenerator<'text'> {
         return false;
     }
 
-    /** A laid-out table renders its own cells (see renderTable). */
+    /** A laid-out table renders its own cells (see renderTable), and so does a row of positioned cells (see renderRowCells). */
     protected override walkedByProcessor(node: OfficeContentNode): boolean {
+        if (node.type === 'row') {
+            return !!node.children?.length && node.children.every(
+                cell => cell.type === 'cell' && typeof (cell.metadata as CellMetadata | undefined)?.col === 'number');
+        }
         return node.type === 'table' && this.config.textConfig.preserveLayout;
+    }
+
+    /**
+     * A row's cells, each in its own column: a spreadsheet stores no cell for a blank one, and a
+     * merged cell covers several, so one separator per cell put every later value a column early.
+     * Cells whose text ends its own line (a paragraph's) are written as before.
+     */
+    private async renderRowCells(row: OfficeContentNode, processor: any): Promise<string> {
+        const newline = this.config.textConfig.newlineDelimiter;
+        let output = '';
+        let previous = '';
+        let nextCol = 0;
+        for (const cell of row.children!) {
+            const meta = cell.metadata as CellMetadata;
+            const piece = await this.processNodeRecursive(cell, processor);
+            if (!piece) continue;
+            // Columns a merged cell covers count as skipped, so the next value keeps its column.
+            const skipped = meta.col - nextCol;
+            nextCol = Math.max(nextCol, meta.col + 1);
+            const flat = !piece.endsWith(newline) && (previous === '' || previous.endsWith(CELL_SEPARATOR));
+            const pad = flat && skipped > 0 ? clampRepeat(skipped, MAX_LAYOUT_COLUMNS) : 0;
+            const padding = pad > 0 && this.takeLayoutPadding(pad) ? CELL_SEPARATOR.repeat(pad) : '';
+            output += this.childSeparator(previous, cell) + padding + piece;
+            previous = piece;
+        }
+        return output;
     }
 
     private async renderTable(node: OfficeContentNode, processor: any, newline: string): Promise<string> {
