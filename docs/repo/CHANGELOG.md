@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - **Markdown: a column aligned paragraph by paragraph is written as the column's alignment.** A table cell holding one centred or right-aligned paragraph was written as a `<div>` in every cell under `| --- |`. A column whose cells each hold one paragraph, all centred or all right-aligned, header included and cells that show nothing passed over, is now `:---:` or `---:`, and the header's left-aligned paragraph makes it `:---`. A column holding any other cell (a picture, a list, several paragraphs) keeps each cell's own alignment.
+- **`file-type` is `^22.3.0`** (was `^22.1.0`).
 - **HTML: under `sheetLayout: 'tables'` a sheet's heading has one id**, from its text, as every heading's is (`<h2 id="visits">`). It had the viewer's `sheet-N` id, with the text's id on an empty anchor before it.
 
 ### Fixed

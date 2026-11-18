@@ -137,7 +137,7 @@
   "dependencies": {
     "@xmldom/xmldom": "^0.9.12",
     "fflate": "^0.8.3",
-    "file-type": "^22.1.0",
+    "file-type": "^22.3.0",
     "pdfjs-dist": "6.2.108",
     "tesseract.js": "^7.0.0"
   },
@@ -159,20 +159,25 @@
   },
   "devDependencies": {
     "@pdf-lib/fontkit": "^1.1.1",
-    "@types/node": "^26.4.0",
-    "@typescript-eslint/eslint-plugin": "^8.70.0",
-    "@typescript-eslint/parser": "^8.70.0",
+    "@types/node": "^26.6.6",
+    "@typescript-eslint/eslint-plugin": "^8.72.2",
+    "@typescript-eslint/parser": "^8.72.2",
     "buffer": "^6.0.3",
     "dts-bundle-generator": "^9.5.1",
     "esbuild": "^0.28.2",
     "esbuild-plugins-node-modules-polyfill": "^1.8.3",
-    "eslint": "^10.9.1",
+    "eslint": "^10.15.0",
     "husky": "^9.1.7",
     "pdf-lib": "^1.17.1",
     "postject": "^1.0.0-alpha.6",
     "process": "^0.11.10",
-    "puppeteer": "^25.9.0",
-    "tsx": "^4.23.12",
+    "puppeteer": "^25.17.0",
+    "tsx": "^4.23.15",
     "typescript": "^6.0.3"
+  },
+  "overrides": {
+    "@typescript-eslint/typescript-estree": {
+      "minimatch": "^11.0.5"
+    }
   }
 }
