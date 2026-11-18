@@ -1,8 +1,8 @@
 {
- "from": "15a4c7ec, document 138 as 8.8.0 reads Markdown in HTML table cells, and documents 0, 212 and 226 with a column aligned paragraph by paragraph written as the column's alignment",
+ "from": "15a4c7ec, document 138 as 8.8.0 reads Markdown in HTML table cells, and documents 0, 212 and 226 with a column aligned paragraph by paragraph written as the column's alignment, and document 1 with merged table cells kept in their columns",
  "fingerprints": [
   "c20a3f9be4e441c4",
-  "4e68f02a1673ec1e",
+  "562ff59afe7e2cf0",
   "2a71f1b769578816",
   "2e6db5dcd0f7f209",
   "24c80e5465eb312a",
