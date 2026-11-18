@@ -1,4 +1,4 @@
-import { CodeMetadata, ConversionResult, GeneratorConfig, OfficeContentNode, OfficeContentNodeType, OfficeParserAST, OfficeWarningType } from '../types.js';
+import { CellMetadata, CodeMetadata, ConversionResult, GeneratorConfig, OfficeContentNode, OfficeContentNodeType, OfficeParserAST, OfficeWarningType } from '../types.js';
 import { documentBytesOf, LAYOUT_SPACES_PER_BYTE } from '../utils/budgetUtils.js';
 import { BaseGenerator } from './BaseGenerator.js';
 import { chartReferenceText } from '../utils/chartUtils.js';
@@ -500,13 +500,19 @@ export class TextGenerator extends BaseGenerator<'text'> {
 
             const row: string[] = [];
             if (rowNode.children) {
-                for (let i = 0; i < rowNode.children.length; i++) {
-                    const cellNode = rowNode.children[i];
+                // A cell sits in its grid column: a merged cell covers several, and a column a
+                // cell from a row above spans down into has no cell in this row.
+                let nextCol = 0;
+                for (const cellNode of rowNode.children) {
+                    const meta = cellNode.metadata as CellMetadata | undefined;
+                    const col = typeof meta?.col === 'number' && meta.col >= nextCol && meta.col < MAX_LAYOUT_COLUMNS ? meta.col : nextCol;
                     const cellText = (await this.processNodeRecursive(cellNode, processor))
                         .trim()
                         .replace(/\r?\n/g, ' ');
+                    while (row.length < col) row.push('');
                     row.push(cellText);
-                    colWidths[i] = Math.max(colWidths[i] || 0, cellText.length);
+                    colWidths[col] = Math.max(colWidths[col] || 0, cellText.length);
+                    nextCol = col + Math.max(1, meta?.colSpan ?? 1);
                 }
             }
             rows.push(row);

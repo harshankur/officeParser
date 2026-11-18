@@ -1997,6 +1997,26 @@ async function runWhitespaceFidelityTests(): Promise<GenFeatureTest[]> {
         gridCells.includes('| ITEM') && gridCells.includes('| NEEDED') && !gridCells.includes('ITEM\t'),
         'preserveLayout:true routes through renderTable, which does its own column alignment'));
 
+    // A merged cell covers several columns, and a row under a vertical merge has no cell for that column.
+    const gridCell = (col: number, text: string, colSpan?: number): OfficeContentNode => ({
+        type: 'cell', metadata: { row: 0, col, ...(colSpan ? { colSpan } : {}) },
+        children: [{ type: 'paragraph', children: [{ type: 'text', text }] }],
+    } as OfficeContentNode);
+    const mergedAst = createAST('docx', undefined as any, [{
+        type: 'table',
+        children: [
+            { type: 'row', children: [gridCell(0, 'Item'), gridCell(1, 'Q1'), gridCell(2, 'Q2')] },
+            { type: 'row', children: [gridCell(0, 'Subtotal', 2), gridCell(2, '10,500')] },
+            { type: 'row', children: [gridCell(1, '200'), gridCell(2, '300')] },
+        ],
+    } as OfficeContentNode], [], parserConfig, undefined);
+    const { value: mergedText } = await mergedAst.to('text', { textConfig: { preserveLayout: true } } as any);
+    const mergedRows = mergedText.split('\n').filter(l => l.startsWith('|')).map(l => l.split('|').map(c => c.trim()));
+    results.push(mk('text', 'merged table cells keep their columns',
+        '10,500 under Q2, 200 under Q1', JSON.stringify(mergedText),
+        mergedRows[1]?.[3] === '10,500' && mergedRows[2]?.[1] === '' && mergedRows[2]?.[2] === '200',
+        'a merged or spanned-over cell moved the values after it a column left'));
+
     // --- A table as the only/first top-level node: renderTable (text) and the HTML-fallback path
     // of renderMarkdownTable (md) both unconditionally wrap in a leading+trailing newline as
     // separators from siblings - with no preceding/following sibling, that leaks as a spurious
