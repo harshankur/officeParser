@@ -265,6 +265,16 @@
                     <code>w:val="auto"</code> already carries no colour). Off by default; the output is unchanged.</td>
             </tr>
             <tr>
+                <td><code>footnoteBackLinks</code></td>
+                <td><code>boolean</code></td>
+                <td><code>true</code></td>
+                <td>End each footnote and endnote with a link back to its reference
+                    (<code>&lt;a href="#footnote-ref-KEY"&gt;↩&lt;/a&gt;</code>). <code>false</code> writes the note's own
+                    content only, for a host that keeps a note's markup as its text (a rich-text editor shows the link as part
+                    of the note and saves it into the note's text). The reference keeps its id either way, and the HTML reader
+                    drops a back-link, so output round-trips with or without it.</td>
+            </tr>
+            <tr>
                 <td><code>sheetLayout</code></td>
                 <td><code>'viewer' | 'tables'</code></td>
                 <td><code>'viewer'</code></td>
@@ -272,10 +282,21 @@
                     letters, row numbers, tabs, and a resizing script where scripts are written). <code>'tables'</code>: as a
                     document holds them, for a host embedding a workbook in a document: each sheet an <code>&lt;h2&gt;</code>
                     with its name and a plain table, merged cells as spans, empty rows and columns kept in place, the first row a
-                    header only where the source marks it (a header-styled or all-bold row), with no tabs, letters, numbers or
+                    header only where the source marks it (a header-styled or all-bold row; see <code>sheetHeaderRow</code>), with no tabs, letters, numbers or
                     script, and without the workbook's own font and size (what most of the cells' text has) on every cell; a cell
                     set apart keeps its own. An unknown value is reported (<code>INVALID_CONFIG_VALUE</code>) and the viewer
                     used.</td>
+            </tr>
+            <tr>
+                <td><code>sheetHeaderRow</code></td>
+                <td><code>'marked' | 'first'</code></td>
+                <td><code>'marked'</code></td>
+                <td>Which row of each sheet is its header row (<code>&lt;thead&gt;</code>, <code>&lt;th&gt;</code> cells) under
+                    <code>sheetLayout: 'tables'</code>. <code>'marked'</code>: the first row, only where the source marks it (a
+                    header-styled or all-bold row). <code>'first'</code>: always the first row, as in a sheet whose first row
+                    names its columns, so a Markdown save of it has a real header row; its cells are written as they are. The
+                    viewer ignores it. An unknown value is reported (<code>INVALID_CONFIG_VALUE</code>) and
+                    <code>'marked'</code> used.</td>
             </tr>
         </tbody>
     </table>

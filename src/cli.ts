@@ -82,7 +82,7 @@ const knownGeneratorBooleans = new Set([
     'xlsxConfig.sheetPerTable', 'xlsxConfig.includeText', 'odsConfig.sheetPerTable', 'odsConfig.includeText',
     'texConfig.standalone', 'texConfig.bundle', 'texConfig.embedImages', 'texConfig.numberSections', 'texConfig.landscape',
     'textConfig.preserveLayout', 'textConfig.renderNotes',
-    'htmlConfig.standalone', 'htmlConfig.sourceAttributes', 'htmlConfig.gatedEmbeds',
+    'htmlConfig.standalone', 'htmlConfig.sourceAttributes', 'htmlConfig.gatedEmbeds', 'htmlConfig.footnoteBackLinks',
     'mdConfig.fallbackToHtml', 'mdConfig.fallbackToHtml.inlineFormatting',
 ]);
 

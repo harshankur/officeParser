@@ -4,6 +4,19 @@ All notable changes to `officeParser` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **HTML: `footnoteBackLinks`.** `false` leaves out the `↩` link back to the reference at the end of each footnote and endnote, for a host that keeps a note's markup as its text. On by default.
+- **HTML: `sheetHeaderRow`.** Under `sheetLayout: 'tables'`, `'first'` makes each sheet's first row its header row, whether or not the source marks it as one. `'marked'`, the default, keeps the header only where the source marks it.
+
+### Changed
+- **Markdown: a column aligned paragraph by paragraph is written as the column's alignment.** A table cell holding one centred or right-aligned paragraph was written as a `<div>` in every cell under `| --- |`. A column whose cells each hold one paragraph, all centred or all right-aligned, header included and cells that show nothing passed over, is now `:---:` or `---:`, and the header's left-aligned paragraph makes it `:---`. A column holding any other cell (a picture, a list, several paragraphs) keeps each cell's own alignment.
+- **HTML: under `sheetLayout: 'tables'` a sheet's heading has one id**, from its text, as every heading's is (`<h2 id="visits">`). It had the viewer's `sheet-N` id, with the text's id on an empty anchor before it.
+
+### Fixed
+- **HTML: a header row with empty columns keeps its cells in their columns.** In a table whose cells give their columns (a sheet's), a header row's cells after an empty column were written a column to the left.
+
 ## [8.8.0] - 2026-11-14
 
 ### Added

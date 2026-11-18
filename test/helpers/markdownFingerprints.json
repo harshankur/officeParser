@@ -1,7 +1,7 @@
 {
- "from": "15a4c7ec, and document 138 as 8.8.0 reads Markdown in HTML table cells",
+ "from": "15a4c7ec, document 138 as 8.8.0 reads Markdown in HTML table cells, and documents 0, 212 and 226 with a column aligned paragraph by paragraph written as the column's alignment",
  "fingerprints": [
-  "785177bf1c20290d",
+  "c20a3f9be4e441c4",
   "4e68f02a1673ec1e",
   "2a71f1b769578816",
   "2e6db5dcd0f7f209",
@@ -213,7 +213,7 @@
   "4668152bfda373fe",
   "a7a0d0f55eea0fae",
   "bf2429c374a0d46b",
-  "e5a500daa8c97067",
+  "b2061eaace3fe1aa",
   "7f47f5f558f80845",
   "ad6abfac624ae62f",
   "14e35cec856e113b",
@@ -227,7 +227,7 @@
   "a1e0f8c464c8d6c0",
   "c24c1a19687aea78",
   "03f1a674b1c189de",
-  "9ef51c13432f1c32",
+  "ddf6d688d2aae6ba",
   "4e9a76ff6d475d5b",
   "98e0108cd0986e40",
   "3d5cc7ff32f88342",

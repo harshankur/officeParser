@@ -574,6 +574,7 @@ const GENERATOR_CHOICES: { container: string; key: string; choices: readonly str
     { container: 'texConfig', key: 'documentClass', choices: ['auto', 'article', 'report', 'book', 'beamer'] },
     { container: 'pdfConfig', key: 'engine', choices: ['html', 'native'] },
     { container: 'htmlConfig', key: 'sheetLayout', choices: ['viewer', 'tables'] },
+    { container: 'htmlConfig', key: 'sheetHeaderRow', choices: ['marked', 'first'] },
     { container: 'chunksConfig', key: 'strategy', choices: ['fixed-size', 'document-structure', 'semantic'] },
     { container: 'chunksConfig', key: 'splitBy', choices: ['page', 'slide', 'sheet', 'heading', 'paragraph'] },
     { container: 'chunksConfig', key: 'tableSplitStrategy', choices: ['row', 'flatten'] },

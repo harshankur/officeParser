@@ -1963,13 +1963,78 @@ export class MarkdownGenerator extends BaseGenerator<'md'> {
         appendAll(this.collectedNotes, node.notes.filter(note => !isInlinedFootnote(note)));
     }
 
+    /**
+     * Each column's alignment where its cells give it paragraph by paragraph rather than as the cell's own
+     * (`<td><p style="text-align: right">`, as an editor's alignment button leaves it), by column index as
+     * the table is written (a cell's `col`, else after the cell before it, a span covering its columns).
+     * A cell gives an alignment when it holds one paragraph and nothing else (the paragraph's own; the
+     * cell's own `align` is not counted, as a header cell's is in columnAlign); a cell that shows nothing is
+     * passed over, and any other cell gives none. Centre or right is the column's when every other cell, the header
+     * row's included, has it. Otherwise the header row's cell decides between left and none, since a left
+     * aligned body cell reads as an unaligned one. A column that is neither stays unaligned, and its cells
+     * keep their alignment written in each (see the paragraph case).
+     */
+    private columnAlignFromParagraphs(table: OfficeContentNode): (string | undefined)[] {
+        // Blank: what a cell shows nothing for. Text of whitespace alone, unless it is written whole (code or
+        // keyboard input: see the text case, where other formatting takes no delimiters around whitespace alone)
+        // or something is written in its place (a link, wikilink or citation); a line or other break; a
+        // paragraph holding only those.
+        const writtenAsContent = (n: OfficeContentNode): boolean => {
+            const f = n.formatting, m = n.metadata as TextMetadata | undefined;
+            return (!!this.config.includeFormatting && !!f && (!!f.keyboard || f.font === 'monospace')) || !!(m?.link || m?.wikilink || m?.citationKey);
+        };
+        const isBlankInline = (n: OfficeContentNode): boolean => !n.notes?.length && !n.children?.length
+            && (n.type === 'break' || (n.type === 'text' && !(n.text || '').trim() && !writtenAsContent(n)));
+        const isBlankBlock = (n: OfficeContentNode): boolean => isBlankInline(n)
+            || (n.type === 'paragraph' && !n.notes?.length && (n.children || []).every(isBlankInline));
+        const cellAlign = (cell: OfficeContentNode): string | undefined | null => {
+            const blocks = cell.children || [];
+            if (!cell.notes?.length && blocks.every(isBlankBlock)) return null;
+            if (blocks.length !== 1 || blocks[0].type !== 'paragraph') return undefined;
+            return (blocks[0].metadata as any)?.alignment;
+        };
+        const columns: (string | undefined | null)[][] = [];
+        const header: (string | undefined | null)[] = [];
+        let first = true;
+        for (const row of table.children || []) {
+            if (row.type !== 'row') {
+                // Content among the rows is a row of one cell where it stands (see renderMarkdownTableInternal),
+                // its paragraph's alignment written in it: content, not aligned with the column.
+                if (isBlankBlock(row)) continue;
+                (columns[0] ??= []).push(undefined);
+                if (first) header[0] = undefined;
+                first = false;
+                continue;
+            }
+            let lastCol = -1;
+            for (const cell of (row.children || []).filter(c => c.type === 'cell')) {
+                const meta = cell.metadata as any;
+                const col = typeof meta?.col === 'number' ? meta.col : lastCol + 1;
+                const span = Math.max(1, meta?.colSpan || 1);
+                const align = cellAlign(cell);
+                for (let k = col; k < col + span; k++) {
+                    (columns[k] ??= []).push(align);
+                    if (first) header[k] = align;
+                }
+                lastCol = col + span - 1;
+            }
+            first = false;
+        }
+        return Array.from(columns, (values, k) => {
+            const given = (values || []).filter(v => v !== null);
+            if ((given[0] === 'center' || given[0] === 'right') && given.every(v => v === given[0])) return given[0];
+            return header[k] === 'left' ? 'left' : undefined;
+        });
+    }
+
     private async renderMarkdownTableInternal(node: OfficeContentNode, processor: any): Promise<string> {
         let tableOutput = '';
         let maxCols = 0;
 
-        // A column's alignment: that of its cell in the header row.
+        // A column's alignment: that of its cell in the header row, else the one its cells' paragraphs agree on.
         const headerCells = (node.children?.[0]?.children || []).filter(c => c.type === 'cell');
-        const columnAlign = (i: number): string | undefined => (headerCells[i]?.metadata as any)?.align;
+        const paragraphAligned = this.columnAlignFromParagraphs(node);
+        const columnAlign = (i: number): string | undefined => (headerCells[i]?.metadata as any)?.align ?? paragraphAligned[i];
 
         // First pass: Process rows and determine max columns (accounting for colspans)
         const processedRows: string[][] = [];

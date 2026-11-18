@@ -252,13 +252,24 @@ export async function testSheetsAsTables(): Promise<void> {
         ],
     } as unknown as OfficeParserAST;
     const tables = (await OfficeGenerator.generate(ast, 'html', { htmlConfig: { standalone: { document: false, styles: 'none' }, sheetLayout: 'tables' } })).value;
-    assert.ok(/<h2 id="sheet-0">Data &lt;1&gt;<\/h2>/.test(tables), `Sheets as tables: the sheet's name as a heading: ${tables}`);
+    assert.ok(/<div class="container"><h2 id="data-1">Data &lt;1&gt;<\/h2>/.test(tables), `Sheets as tables: the sheet's name as a heading, with its text's id only: ${tables}`);
     assert.ok(/<thead><tr><th><b>Region<\/b><\/th><th><b>Visits<\/b><\/th><\/tr><\/thead>/.test(tables), 'Sheets as tables: a bold first row is the header');
     assert.ok(tables.includes('<td colspan="2">Both</td>'), 'Sheets as tables: merged cells as spans');
     assert.ok(/<tr><td><\/td><td><\/td><\/tr>/.test(tables), 'Sheets as tables: an empty row kept in its place');
     assert.ok(/<td>North<\/td><td><span style="font-size: 14pt; font-family: Georgia[^"]*">Big<\/span><\/td>/.test(tables), 'Sheets as tables: a cell set apart keeps its own font');
     assert.ok(!/Arial|10pt|excel-|spreadsheet-|<script|sheet-tab/.test(tables), 'Sheets as tables: no viewer, no workbook font on every cell');
-    assert.ok(/<h2 id="sheet-1">Notes<\/h2>\s*<table><tr><td>Plain<\/td><td><\/td><td>Far<\/td><\/tr>/.test(tables), 'Sheets as tables: no header unless marked, cells keep their columns');
+    assert.ok(/<h2 id="notes">Notes<\/h2>\s*<table><tr><td>Plain<\/td><td><\/td><td>Far<\/td><\/tr>/.test(tables), 'Sheets as tables: no header unless marked, cells keep their columns');
+    assert.ok(!/sheet-\d|<a id/.test(tables), 'Sheets as tables: no viewer ids and no empty anchors');
+    // sheetHeaderRow 'first': every sheet's first row is its header row, its cells as they are.
+    const firstRow = (await OfficeGenerator.generate(ast, 'html', { htmlConfig: { standalone: { document: false, styles: 'none' }, sheetLayout: 'tables', sheetHeaderRow: 'first' } })).value;
+    assert.ok(/<h2 id="notes">Notes<\/h2>\s*<table><thead><tr><th>Plain<\/th><th><\/th><th>Far<\/th><\/tr><\/thead>/.test(firstRow), `Sheets as tables: sheetHeaderRow 'first' makes an unmarked first row the header: ${firstRow}`);
+    assert.ok(/<thead><tr><th><b>Region<\/b><\/th><th><b>Visits<\/b><\/th><\/tr><\/thead>/.test(firstRow), "Sheets as tables: sheetHeaderRow 'first' keeps a marked header as it was");
+    const firstRowMarkdown = String((await OfficeGenerator.generate(await OfficeParser.parseOffice(Buffer.from(firstRow), { fileType: 'html' }), 'md', { generateIds: false })).value);
+    assert.ok(firstRowMarkdown.includes('| Plain |  | Far |\n| --- | --- | --- |'), `Sheets as tables: and saved as Markdown, it is the table's header row: ${firstRowMarkdown}`);
+    const viewerFirstRow = (await OfficeGenerator.generate(ast, 'html', { htmlConfig: { standalone: { document: false, styles: 'none' }, sheetHeaderRow: 'first' } })).value;
+    assert.strictEqual(viewerFirstRow, (await OfficeGenerator.generate(ast, 'html', { htmlConfig: { standalone: { document: false, styles: 'none' } } })).value, "Sheets as tables: the viewer ignores sheetHeaderRow");
+    const badRow = await OfficeGenerator.generate(ast, 'html', { htmlConfig: { standalone: { document: false, styles: 'none' }, sheetLayout: 'tables', sheetHeaderRow: 'all' as any } });
+    assert.ok(badRow.messages.some(m => m.code === 'INVALID_CONFIG_VALUE') && badRow.value === tables, 'Sheets as tables: an unknown sheetHeaderRow is reported, and marked used');
     // The default is the viewer, as before.
     const viewer = (await OfficeGenerator.generate(ast, 'html', { htmlConfig: { standalone: { document: false, styles: 'none' } } })).value;
     assert.ok(viewer.includes('excel-col-header') && viewer.includes('spreadsheet-tab'), 'Sheets as tables: the viewer stays the default');

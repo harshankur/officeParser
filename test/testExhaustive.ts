@@ -36,7 +36,7 @@ import { decodePDFRawStream, PDFArray, PDFDict, PDFDocument, PDFHexString, PDFNa
 import * as assert from 'assert';
 import * as path from 'path';
 import * as fs from 'fs';
-import type { ImageMetadata, OfficeContentNode, OfficeParserAST, ShapeMetadata, SheetMetadata, TextMetadata } from '../src/types';
+import type { ImageMetadata, OfficeContentNode, OfficeParserAST, ShapeMetadata, SheetMetadata, TextFormatting, TextMetadata } from '../src/types';
 import { OfficeWarningType } from '../src/types';
 import { parseXmlString } from '../src/utils/xmlUtils';
 import { mathmlToLatex, ommlToLatex } from '../src/utils/mathUtils';
@@ -2344,6 +2344,14 @@ async function testEditorSaveShapes(): Promise<void> {
     // A footnote's back-link, which the editor keeps as the note's content, is not the note's text.
     assert.strictEqual(await toMarkdown('<p>A footnote<sup data-footnote-ref="1"></sup>.</p><section data-footnotes="true"><div data-footnote-id="1"><p>The note text. <a target="_blank" rel="noopener noreferrer nofollow" href="#footnote-ref-1">↩</a></p></div></section>'),
         'A footnote[^1].\n\n[^1]: The note text.', 'Markdown: a footnote\'s back-link is not written into the note');
+    // htmlConfig.footnoteBackLinks: false writes a note with its own content only, and its reference keeps its id.
+    const noteMarkdown = 'A footnote[^1].\n\n[^1]: The note text.\n';
+    const withBackLink = await toEditor(noteMarkdown);
+    assert.ok(withBackLink.includes('The note text. <a href="#footnote-ref-1">↩</a></div>'), `HTML: a note ends in its back-link by default: ${withBackLink}`);
+    const noBackLink = String((await OfficeGenerator.generate(await OfficeParser.parseOffice(Buffer.from(noteMarkdown), { fileType: 'md', ...quiet }), 'html', { htmlConfig: { ...editorHtml.htmlConfig, footnoteBackLinks: false } })).value);
+    assert.ok(noBackLink.includes('<div id="footnote-1" data-footnote-id="1">The note text.</div>') && !noBackLink.includes('↩'), `HTML: footnoteBackLinks false writes no back-link: ${noBackLink}`);
+    assert.ok(noBackLink.includes('id="footnote-ref-1"'), 'HTML: the reference keeps its id without a back-link');
+    assert.strictEqual(await toMarkdown(noBackLink), 'A footnote[^1].\n\n[^1]: The note text.', 'Markdown: a note written without its back-link saves as it was');
 
     // A highlight that names no colour is a plain <mark>, and a mark in that colour is `==text==`
     // however the colour is written and whatever the editor adds (`color: inherit`).
@@ -2384,6 +2392,23 @@ async function testEditorSaveShapes(): Promise<void> {
     // A cell aligned unlike its column still says so.
     assert.strictEqual(await toMarkdown('<table><tbody><tr><th><p>a</p></th><th style="text-align: right;"><p>b</p></th></tr><tr><td style="text-align: center;"><p>1</p></td><td style="text-align: right;"><p>2</p></td></tr></tbody></table>'),
         '| a | b |\n| --- | ---: |\n| <div style="text-align: center">1</div> | 2 |', 'Markdown: a cell aligned unlike its column keeps its own alignment');
+    // A column aligned paragraph by paragraph (an editor's alignment button aligns a cell's paragraph, not
+    // the cell) is the column's alignment: centre or right when every cell with text has it, the header's
+    // cell deciding left or none; a column of mixed alignments keeps each cell's.
+    const paragraphTable = (rows: string[][]) => '<table><tbody>' + rows.map((r, i) => '<tr>' + r.map(c => i === 0 ? `<th>${c}</th>` : `<td>${c}</td>`).join('') + '</tr>').join('') + '</tbody></table>';
+    const aligned = (a: string, x: string) => `<p style="text-align: ${a}">${x}</p>`;
+    assert.strictEqual(await toMarkdown(paragraphTable([[aligned('right', 'Amount'), '<p>Name</p>'], [aligned('right', '10'), '<p>a</p>'], [aligned('right', '200'), '<p>b</p>']])),
+        '| Amount | Name |\n| ---: | --- |\n| 10 | a |\n| 200 | b |', 'Markdown: a column right-aligned paragraph by paragraph is ---:');
+    assert.strictEqual(await toMarkdown(paragraphTable([[aligned('center', 'A')], ['<p></p>'], [aligned('center', '2')]])),
+        '| A |\n| :---: |\n|  |\n| 2 |', 'Markdown: an empty cell does not stop a centred column');
+    assert.strictEqual(await toMarkdown(paragraphTable([[aligned('left', 'A')], ['<p>1</p>']])),
+        '| A |\n| :--- |\n| 1 |', 'Markdown: a left-aligned header cell makes the column :---');
+    assert.strictEqual(await toMarkdown(paragraphTable([['<p>A</p>'], [aligned('right', '1')]])),
+        '| A |\n| --- |\n| <div style="text-align: right">1</div> |', 'Markdown: right needs the header cell too, else each cell keeps its own');
+    assert.strictEqual(await toMarkdown(paragraphTable([[aligned('right', 'A')], [aligned('center', '1')]])),
+        '| <div style="text-align: right">A</div> |\n| --- |\n| <div style="text-align: center">1</div> |', 'Markdown: a column of mixed alignments keeps each cell\'s');
+    const columnBack = await toEditor('| Amount | Name |\n| ---: | --- |\n| 10 | a |\n');
+    assert.strictEqual(await toMarkdown(columnBack.replace(/<(t[hd]) style="text-align: right">([^<]*)</g, '<$1><p style="text-align: right">$2</p><')), '| Amount | Name |\n| ---: | --- |\n| 10 | a |', 'Markdown: ---: round trips through cells aligned paragraph by paragraph');
 
     // A header cell stays one: `<th>`, and any cell of a `<thead>`, whether or not its text is bold.
     const oneLine = (html: string) => html.replace(/\n/g, '');
@@ -13880,6 +13905,85 @@ async function testMarkdownAttributes(): Promise<void> {
 }
 
 /**
+ * A Markdown column's alignment comes from what its cells show: a cell counts as aligned only when it holds one
+ * paragraph and nothing else, aligned so itself (a cell's own `align` is not counted; a header cell's is, as in
+ * 8.8.0). A cell that shows nothing is passed over, and any other cell (a picture, a list, a citation, a link,
+ * several paragraphs, content among the rows) keeps its column unaligned. A column marker never stands over a
+ * cell that does not show that alignment.
+ */
+async function testMarkdownColumnAlignByContent(): Promise<void> {
+    const P = (text: string, alignment?: string) => ({ type: 'paragraph', text, metadata: alignment ? { alignment } : {}, children: text ? [{ type: 'text', text }] : [] });
+    const C = (children: any[], metadata: any = {}) => ({ type: 'cell', metadata, children });
+    const column = (...cells: any[]) => ({ type: 'table', children: cells.map(cell => cell.type === 'cell' ? { type: 'row', children: [cell] } : cell) });
+    const inP = (...children: any[]) => C([{ type: 'paragraph', metadata: {}, children }]);
+    const picture = (alignment?: string) => ({ type: 'paragraph', metadata: alignment ? { alignment } : {}, children: [{ type: 'image', metadata: { url: 'x.png', altText: 'pic' }, children: [] }] });
+    const md = async (table: any, config: any = {}) => String((await OfficeGenerator.generate({ type: 'docx', metadata: {}, content: [table], attachments: [] } as any, 'md', { generateIds: false, ...config } as any)).value).trim();
+    const centred = (x: string) => `<div style="text-align: center">${x}</div>`;
+    const H = C([P('A', 'center')]), B = C([P('2', 'center')]);
+    const unaligned = (cell: string) => `| ${centred('A')} |\n| --- |\n| ${cell} |\n| ${centred('2')} |`;
+    // A picture is content: an unaligned or left-aligned one keeps a centred column from being one.
+    assert.strictEqual(await md(column(C([P('Name', 'center')]), C([P('Alice', 'center')]), C([picture()]), C([picture('left')]))),
+        `| ${centred('Name')} |\n| --- |\n| ${centred('Alice')} |\n| ![pic](x.png) |\n| ![pic](x.png) |`, 'Markdown: a picture cell is not passed over as empty');
+    assert.strictEqual(await md(column(C([P('Name', 'center')]), C([picture('center')]))), '| Name |\n| :---: |\n| ![pic](x.png) |', 'Markdown: a centred picture centres with its column');
+    const embed = { type: 'paragraph', metadata: {}, children: [{ type: 'embed', text: '', metadata: { url: 'https://example.com/v', embedType: 'iframe' }, children: [] }] };
+    assert.strictEqual(await md(column(H, C([embed]), B)), unaligned('[Embed](https://example.com/v)'), 'Markdown: an embed is content');
+    const noteOnly = { type: 'paragraph', metadata: {}, children: [{ type: 'text', text: '', notes: [{ type: 'note', metadata: { noteType: 'footnote', noteId: '1' }, children: [P('The note.')] }] }] };
+    assert.ok((await md(column(H, C([noteOnly]), B))).startsWith(unaligned('[^1]')), 'Markdown: a note reference is content');
+    // Content that renders as Markdown with no text of its own is content too.
+    for (const [label, cell, written, config] of [
+        ['an empty bullet item', C([{ type: 'list', metadata: { listType: 'unordered', indentation: 0 }, children: [] }]), '-'],
+        ['an empty task item', C([{ type: 'list', metadata: { listType: 'unordered', isTask: true, checked: true, indentation: 0 }, children: [] }]), '- [x]'],
+        ['a citation', inP({ type: 'text', text: '', metadata: { citationKey: 'smith2020' } }), '[@smith2020]'],
+        ['a wikilink', inP({ type: 'text', text: '', metadata: { wikilink: true, link: 'Page' } }), '[[Page]]', { mdConfig: { dialect: 'obsidian' } }],
+        ['a link with no text', inP({ type: 'text', text: '', metadata: { link: 'https://x.y', linkType: 'external' } }), '[](https://x.y)'],
+        ['a space as keyboard input', inP({ type: 'text', text: ' ', formatting: { keyboard: true } }), '<kbd> </kbd>'],
+        ['a space as code', inP({ type: 'text', text: ' ', formatting: { font: 'monospace' } }), '` `'],
+    ] as [string, any, string, any?][]) assert.strictEqual(await md(column(H, cell, B), config), unaligned(written), `Markdown: ${label} keeps its column unaligned`);
+    // Cells that show nothing are passed over: whitespace (formatted or not), a line break, a rule, no children.
+    assert.strictEqual(await md(column(H, C([P(' ')]), inP({ type: 'text', text: ' ', formatting: { bold: true, underline: true, color: '#000000' }, metadata: { style: 'P21' } }),
+        inP({ type: 'break', metadata: { breakType: 'textWrapping' } }), inP({ type: 'break', metadata: { breakType: 'thematic' } }), C([]), C([P('')]), C([], { align: 'right' }), B)),
+        '| A |\n| :---: |\n|   |\n| <u> </u> |\n|  |\n|  |\n|  |\n|  |\n|  |\n| 2 |', 'Markdown: cells that show nothing are passed over');
+    // A cell's paragraphs decide, never its own alignment: one left paragraph, two left paragraphs, or an
+    // unaligned paragraph in a centred cell keep the column unaligned, as 8.8.0 wrote them.
+    assert.strictEqual(await md(column(H, C([P('1', 'left')], { align: 'center' }))), `| ${centred('A')} |\n| --- |\n| 1 |`, 'Markdown: a left paragraph in a centred cell is not centred');
+    assert.strictEqual(await md(column(H, C([P('1', 'left'), P('3', 'left')], { align: 'center' }), B)), unaligned('1<br>3'), 'Markdown: two left paragraphs in a centred cell are not centred');
+    assert.strictEqual(await md(column(H, C([P('1')], { align: 'center' }))), `| ${centred('A')} |\n| --- |\n| 1 |`, "Markdown: a body cell's own alignment is not counted");
+    assert.strictEqual(await md(column(H, C([P('1', 'right')], { align: 'center' }))), `| ${centred('A')} |\n| --- |\n| <div style="text-align: right">1</div> |`, 'Markdown: a right paragraph keeps its own alignment');
+    assert.strictEqual(await md(column(H, C([P('1', 'justify')], { align: 'center' }))), `| ${centred('A')} |\n| --- |\n| <div style="text-align: justify">1</div> |`, 'Markdown: a justified paragraph keeps its own alignment');
+    assert.strictEqual(await md(column(H, C([P('1', 'center')], { align: 'right' }))), '| A |\n| :---: |\n| 1 |', 'Markdown: a centred paragraph in a right-aligned cell is centred');
+    const html = '<table><tr><th><p style="text-align:center">Name</p></th></tr><tr><td style="text-align:center"><p style="text-align:left">left one</p><p style="text-align:left">left two</p></td></tr><tr><td><p style="text-align:center">two</p></td></tr></table>';
+    assert.strictEqual(String((await OfficeGenerator.generate(await OfficeParser.parseOffice(Buffer.from(html), { fileType: 'html' } as any), 'md', { generateIds: false })).value).trim(),
+        `| ${centred('Name')} |\n| --- |\n| left one<br>left two |\n| ${centred('two')} |`, 'Markdown: an HTML cell centred around two left paragraphs is not centred');
+    // A header cell's own alignment still makes the column, as in 8.8.0 (a Markdown table read back gives it).
+    assert.strictEqual(await md(column(C([P('A')], { align: 'center' }), C([P('1')], { align: 'center' }))), '| A |\n| :---: |\n| 1 |', "Markdown: a header cell's own alignment makes the column");
+    assert.strictEqual(await md(column(C([P('A', 'center')], { align: 'right' }), C([P('1', 'center')]))), `| ${centred('A')} |\n| ---: |\n| ${centred('1')} |`, "Markdown: a header cell's own alignment wins");
+    // Content among the rows is a row of its own: unaligned content keeps the column unaligned, a blank one is passed over.
+    assert.strictEqual(await md(column(H, P('loose'), B)), unaligned('loose'), 'Markdown: content among the rows keeps its column unaligned');
+    assert.strictEqual(await md(column(H, P(' '), B)), '| A |\n| :---: |\n| 2 |', 'Markdown: a blank paragraph among the rows is passed over');
+    // Every formatting and text metadata key, on empty, space and no-break-space text, in every dialect: wherever a
+    // column marker is written, the cell between shows nothing. (Typed as Required<...>: a new key must be added.)
+    const everyFormat: Required<TextFormatting> = { bold: true, italic: true, underline: true, strikethrough: true, color: '#ff0000', backgroundColor: '#00ff00', size: '14pt', font: 'monospace', subscript: true, superscript: true, alignment: 'center', keyboard: true } as any;
+    const everyMeta: Required<TextMetadata> = { style: 'S', link: 'https://x.y', linkType: 'external', abbreviationTitle: 'T', citationKey: 'k', wikilink: true, title: 'tt', field: 'page', fieldFormat: 'decimal' as any, placeholder: true };
+    const shapes: [string, any][] = [];
+    for (const text of ['', ' ', ' ']) {
+        for (const [key, value] of Object.entries(everyFormat)) shapes.push([`formatting ${key} ${JSON.stringify(text)}`, inP({ type: 'text', text, formatting: { [key]: value } })]);
+        for (const [key, value] of Object.entries(everyMeta)) shapes.push([`metadata ${key} ${JSON.stringify(text)}`, inP({ type: 'text', text, metadata: { [key]: value, ...(key === 'wikilink' ? { link: 'Page' } : {}), ...(key === 'linkType' ? { link: '#x' } : {}) } })]);
+    }
+    for (const type of ['list', 'heading', 'image', 'code', 'math', 'embed', 'comment', 'chart', 'drawing', 'table', 'definitionList', 'disclosure', 'admonition']) shapes.push([`node ${type}`, C([{ type, metadata: type === 'list' ? { listType: 'unordered', indentation: 0 } : type === 'image' ? { url: 'x.png' } : {}, children: [] }])]);
+    const visible = (cell: string) => cell.replace(/<br>/g, '').replace(/<a (?:id|name)="[^"]*"><\/a>/g, '').replace(/<\/?(?:u|sub|sup|span)\b[^>]*>/g, '').replace(/\s/g, '');
+    for (const [configName, config] of [['default', {}], ['editor', { mdConfig: { dialect: 'extended', fallbackToHtml: { inlineFormatting: true } } }], ['obsidian', { mdConfig: { dialect: 'obsidian' } }],
+        ['gfm', { mdConfig: { dialect: 'gfm' } }], ['no formatting', { includeFormatting: false }], ['no text fallback', { mdConfig: { fallbackToHtml: { textFormatting: false } } }]] as [string, any][]) {
+        for (const [shapeName, cell] of shapes) {
+            const lines = (await md(column(C([P('Name', 'center')]), cell, C([P('two', 'center')])), config)).split('\n');
+            if (lines[1] !== '| :---: |') continue;
+            // The cell under test is the table's third line (the row after the delimiter row).
+            assert.strictEqual(visible(lines[2].replace(/^\|\s?|\s?\|$/g, '')), '', `Markdown (${configName}): a column is centred over ${shapeName}, which shows ${JSON.stringify(lines[2])}`);
+        }
+    }
+    console.log('  Markdown column alignment by content: All assertions passed ✓');
+}
+
+/**
  * Configuration consistency: every option means the same on every surface, a mistake in a config is
  * reported rather than silently ignored, and a value an option does not accept falls back visibly.
  */
@@ -17007,6 +17111,7 @@ async function runTests(): Promise<void> {
         ['LaTeX', testLatexGeneration],
         ['LaTeX parsing', testLatexParsing],
         ['Config consistency', testConfigConsistency],
+        ['Markdown column alignment by content', testMarkdownColumnAlignByContent],
         ['OfficeGenUtils', testOfficeGenUtils],
         ['NativePdfEngine', testNativePdfEngine],
         ['Template', testTemplate],

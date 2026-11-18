@@ -1680,17 +1680,35 @@ export interface HtmlGeneratorConfig {
      */
     omitDefaultTextColor?: boolean;
     /**
+     * Write a link back to the reference at the end of each footnote and endnote
+     * (` <a href="#footnote-ref-KEY">↩</a>`). On by default. Off, a note holds only its own content,
+     * for a host that keeps the note's markup as the note's text (a rich-text editor shows the link as
+     * part of the note, and writes it into the note's text when saving). The reference keeps its id
+     * either way, and `HtmlParser` drops a back-link when reading, so output round-trips with or without it.
+     */
+    footnoteBackLinks?: boolean;
+    /**
      * How a spreadsheet's sheets (XLSX, ODS, CSV) are written:
      * - `'viewer'` (default): a spreadsheet viewer, each sheet a grid with column letters and row
      *   numbers, the sheets switched by tabs (a script resizes columns where scripts are written).
      * - `'tables'`: as a document holds them, for a host that embeds a workbook in a document: each
      *   sheet a heading with its name (`<h2>`) and a plain table of its cells, merged cells as spans,
      *   its empty rows and columns kept in place, its first row a header only where the source marks
-     *   it so (a header-styled or all-bold row); no tabs, column letters, row numbers or script, and
+     *   it so (a header-styled or all-bold row; see `sheetHeaderRow`); no tabs, column letters, row numbers or script, and
      *   not the workbook's own font and size on every cell (the font and size most of the cells' text
      *   has is the workbook's, and is left to the page; a cell set apart keeps its own).
      */
     sheetLayout?: 'viewer' | 'tables';
+    /**
+     * Which row of each sheet is its header row (`<thead>` with `<th>` cells) under `sheetLayout: 'tables'`:
+     * - `'marked'` (default): the first row, only where the source marks it as a header (a header-styled
+     *   or all-bold row); otherwise every row is a body row.
+     * - `'first'`: always the sheet's first row, as in a sheet whose first row names its columns. Its
+     *   cells' content and formatting are unchanged.
+     *
+     * The `'viewer'` layout has column letters for headers and ignores this.
+     */
+    sheetHeaderRow?: 'marked' | 'first';
 }
 
 /**

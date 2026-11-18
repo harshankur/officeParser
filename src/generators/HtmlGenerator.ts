@@ -280,6 +280,8 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
     private isSpreadsheetMode = false;
     /** Sheets are written as headings and plain tables (htmlConfig.sheetLayout 'tables'). */
     private sheetsAsTables = false;
+    /** Rows written as a table's header row whatever they are marked (a sheet's first row under `sheetHeaderRow: 'first'`). */
+    private readonly headerRows = new WeakSet<OfficeContentNode>();
     /** The font and size most of the sheets' text has (the workbook's own), left to the page with sheets as tables. */
     private workbookText: { font?: string; size?: string } = {};
     /**
@@ -1024,6 +1026,7 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
     private firstRowIsHeader(node: OfficeContentNode): boolean {
         const rows = node.children || [];
         if (!rows.length || rows[0].type !== 'row') return false;
+        if (this.headerRows.has(rows[0])) return true;
         // Use the heuristic every other generator shares, so a header row survives into <thead> the
         // same way it does in DOCX/ODT/native-PDF output. It adds the cell-level `style: 'header'` /
         // `isHeader` convention that the Word, ODF and tagged-PDF parsers write (a repeating header row
@@ -1362,7 +1365,9 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                 // same text is `-1` after it, as GitHub numbers it (two headings had one id).
                 const slug = this.uniqueHeadingSlug(this.slugify(node.text || this.getNodeText(node)));
                 if (slug && !anchorIds.includes(slug)) anchorIds.push(slug);
-            } else if (node.type === 'sheet') {
+            } else if (node.type === 'sheet' && !this.sheetsAsTables) {
+                // The viewer's tabs show a sheet by this id. As a document's tables a sheet is its
+                // heading, whose id is its text's, as every heading's is.
                 const sheetId = `sheet-${Math.max(0, this.sheetIndex(node))}`;
                 if (!anchorIds.includes(sheetId)) anchorIds.push(sheetId);
             }
@@ -1831,12 +1836,21 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                             } else {
                                 // Promote each TOP-LEVEL cell's own <td> to <th> with the anchored replace
                                 // the rowspan path uses (first `<td`, last `</td>`), so a table nested
-                                // inside a header cell keeps its own <td> body cells as <td>.
+                                // inside a header cell keeps its own <td> body cells as <td>. Where the
+                                // cells give their columns (a sheet's), the columns between them are
+                                // empty header cells, as a body row's are (see the row case): written
+                                // without them, the cells after a gap stood a column to the left.
                                 let tr = '';
-                                for (const cell of (firstRow.children || []).filter(c => c.type === 'cell')) {
+                                const headerCells = (firstRow.children || []).filter(c => c.type === 'cell');
+                                const placed = headerCells.some(c => (c.metadata as any)?.col !== undefined);
+                                let lastCol = -1;
+                                for (const cell of headerCells) {
+                                    const currentCol = (cell.metadata as any)?.col ?? (lastCol + 1);
+                                    if (placed) for (; lastCol < currentCol - 1; lastCol++) tr += '<th></th>';
                                     let cellHtml = await this.processNodeRecursive(cell, this.boundNodeProcessor);
                                     cellHtml = cellHtml.replace(/<td/, '<th').replace(/<\/td>$/, '</th>');
                                     tr += cellHtml;
+                                    lastCol = currentCol + ((cell.metadata as any)?.colSpan || 1) - 1;
                                 }
                                 headInner = `<tr>${tr}${this.rowPaddingCells(firstRow, 'th')}</tr>`;
                             }
@@ -1909,6 +1923,8 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                     const name = (node.metadata as SheetMetadata | undefined)?.sheetName || `Sheet ${Math.max(0, this.sheetIndex(node)) + 1}`;
                     const heading = { type: 'heading', text: name, metadata: { level: 2, ...(anchorIds.length ? { anchorIds } : {}) }, children: [{ type: 'text', text: name }] } as OfficeContentNode;
                     const table = { type: 'table', children: fillSheetRowGaps(rows.filter(c => c.type === 'row'), n => this.takeGridPositions(n)) } as OfficeContentNode;
+                    // `sheetHeaderRow: 'first'`: the first row is the header row whatever it is marked.
+                    if (this.config.htmlConfig.sheetHeaderRow === 'first' && table.children![0]?.type === 'row') this.headerRows.add(table.children![0]);
                     return this.processNodeArray([heading, ...(table.children!.length ? [table] : []), ...rows.filter(c => c.type !== 'row')]);
                 }
 
@@ -2129,8 +2145,8 @@ export class HtmlGenerator extends BaseGenerator<'html'> {
                     // and attribute-driven editors match `div[data-footnote-id]`. This changes the
                     // default footnote-definition markup, which was broken-by-construction before.
                     // An unreferenced (orphan) note has no citation anchor, so the back-link would
-                    // dangle - omit it.
-                    const backLink = meta?.unreferenced ? '' : ` <a href="#footnote-ref-${key}">↩</a>`;
+                    // dangle - omit it. Under `footnoteBackLinks: false` none is written.
+                    const backLink = meta?.unreferenced || this.config.htmlConfig.footnoteBackLinks === false ? '' : ` <a href="#footnote-ref-${key}">↩</a>`;
                     // The note's own ids (a bookmark in it) start it, where the parser gives them back.
                     const noteAnchors = anchorIds.map(aid => `<a id="${this.escape(aid)}" name="${this.escape(aid)}"></a>`).join('');
                     return `<div id="footnote-${key}" data-footnote-id="${key}">${noteAnchors}${childrenOutput}${backLink}</div>`;
