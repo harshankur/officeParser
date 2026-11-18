@@ -605,7 +605,8 @@ export interface CommonOfficeParserConfig {
      * This is authoritative and is used to determine the file type, so it should be accurate.
      * If provided, this bypasses the magic bytes detection and the file extension-based detection either way.
      * Besides the formats' own names it accepts the {@link FileTypeAlias} names (`latex`, `ltx`, the
-     * ODF template extensions, and `zip`).
+     * ODF template extensions, Word's, Excel's and PowerPoint's macro-enabled, template and slideshow
+     * extensions, and `zip`).
      * 
      * Default is null.
      */
@@ -3078,10 +3079,14 @@ export type SupportedFileType = 'docx' | 'pptx' | 'xlsx' | 'odt' | 'odp' | 'ods'
 /**
  * Other names the `fileType` option accepts, as the matching file extensions do: `latex` and `ltx`
  * for `tex`; the ODF template packages `ott`, `ots`, `otp` and `otg` for `odt`, `ods`, `odp` and
- * `odg`; and `zip`, which is parsed as whatever the archive holds (a LaTeX project, an office
- * document).
+ * `odg`; Word's macro-enabled documents and templates `docm`, `dotx` and `dotm` for `docx`, Excel's
+ * `xlsm`, `xltx` and `xltm` for `xlsx`, and PowerPoint's `pptm`, `potx`, `potm`, `ppsx` and `ppsm`
+ * for `pptx` (their macros are not read); and `zip`, which is parsed as whatever the archive holds
+ * (a LaTeX project, an office document).
  */
-export type FileTypeAlias = 'latex' | 'ltx' | 'ott' | 'ots' | 'otp' | 'otg' | 'zip';
+export type FileTypeAlias = 'latex' | 'ltx' | 'ott' | 'ots' | 'otp' | 'otg'
+    | 'docm' | 'dotx' | 'dotm' | 'xlsm' | 'xltx' | 'xltm' | 'pptm' | 'potx' | 'potm' | 'ppsx' | 'ppsm'
+    | 'zip';
 
 /**
  * A structural stand-in for the web `Blob`/`File` so `parseOffice`/`convert` accept them in the

@@ -65,6 +65,22 @@ const GENERIC_ZIP_EXTENSION = 'zip';
 /** The formats that are ZIP archives, and so cannot be contradicted by a bare `zip` result. */
 const ZIP_BACKED_FILE_TYPES: ReadonlySet<string> = new Set(['docx', 'xlsx', 'pptx', 'odt', 'ods', 'odp', 'odg', 'epub', 'tex']);
 
+/**
+ * The other extensions of a format, each read by its format's parser: the ODF templates, Word's, Excel's
+ * and PowerPoint's macro-enabled files, templates and slideshows (packaged as their document is, their
+ * macros left unread), and LaTeX's other extensions. The `fileType` option takes them too.
+ */
+const FILE_TYPE_ALIASES: Readonly<Record<string, SupportedFileType>> = Object.assign(Object.create(null), {
+    ott: 'odt', ots: 'ods', otp: 'odp', otg: 'odg',
+    docm: 'docx', dotx: 'docx', dotm: 'docx',
+    xlsm: 'xlsx', xltx: 'xlsx', xltm: 'xlsx',
+    pptm: 'pptx', potx: 'pptx', potm: 'pptx', ppsx: 'pptx', ppsm: 'pptx',
+    latex: 'tex', ltx: 'tex',
+});
+
+/** The format an extension or detected type names, lower-cased, its aliases resolved. */
+const formatOf = (ext: string): string => FILE_TYPE_ALIASES[ext.toLowerCase()] ?? ext.toLowerCase();
+
 /** What magic-byte sniffing reports for any document that starts with an XML declaration. */
 const XML_EXTENSION = 'xml';
 
@@ -192,9 +208,9 @@ export class OfficeParser {
      * - If a Buffer is provided, uses magic bytes detection (file-type library)
      * 
      * **Supported Formats and Routes:**
-     * - `.docx` → WordParser (OOXML)
-     * - `.xlsx` → ExcelParser (OOXML)
-     * - `.pptx` → PowerPointParser (OOXML)
+     * - `.docx` (and `.docm`, `.dotx`, `.dotm`) → WordParser (OOXML)
+     * - `.xlsx` (and `.xlsm`, `.xltx`, `.xltm`) → ExcelParser (OOXML)
+     * - `.pptx` (and `.pptm`, `.potx`, `.potm`, `.ppsx`, `.ppsm`) → PowerPointParser (OOXML)
      * - `.odt`, `.odp`, `.ods` → OpenOfficeParser (ODF)
      * - `.pdf` → PdfParser (PDF.js)
      * - `.rtf` → RtfParser (custom RTF parser)
@@ -345,7 +361,7 @@ export class OfficeParser {
                     // docx", so there is nothing a closer look could add. Skipping it keeps an
                     // explicit fileType the cheapest route, rather than making it pay for an
                     // archive scan that exists only to decide whether to warn.
-                    const worthResolving = !(type?.ext === GENERIC_ZIP_EXTENSION && ZIP_BACKED_FILE_TYPES.has(ext.toLowerCase()));
+                    const worthResolving = !(type?.ext === GENERIC_ZIP_EXTENSION && ZIP_BACKED_FILE_TYPES.has(formatOf(ext)));
                     const detected = worthResolving
                         ? await resolveZipBackedType(type?.ext, buffer, internalConfig)
                         : type?.ext;
@@ -357,7 +373,8 @@ export class OfficeParser {
                     // own extension is noise, so only a resolved format is worth comparing.
                     // Nor is an archive named `.zip`: that extension names no format, and routing below
                     // reads the archive for what it actually holds.
-                    if (detected && detected !== GENERIC_ZIP_EXTENSION && ext.toLowerCase() !== GENERIC_ZIP_EXTENSION && detected.toLowerCase() !== ext.toLowerCase()) {
+                    // A format's other extensions are that format (a `.dotx` detected as `docx`, or the reverse).
+                    if (detected && detected !== GENERIC_ZIP_EXTENSION && ext.toLowerCase() !== GENERIC_ZIP_EXTENSION && formatOf(detected) !== formatOf(ext)) {
                         // Mismatch found between authoritative extension and detected content
                         logWarning(OfficeWarningType.BUFFER_TYPE_MISMATCH, internalConfig, { detected, expected: ext });
                     }
@@ -372,12 +389,9 @@ export class OfficeParser {
                 throw getOfficeError(OfficeErrorType.IMPROPER_BUFFERS, internalConfig);
             }
 
-            // ODF template packages (.ott/.ots/.otp/.otg) are the same format as their document
-            // counterparts and share one parser; normalize them so a file routed by its filename
-            // extension dispatches correctly, matching how buffer detection resolves the mimetype.
-            // `.latex`/`.ltx` are the other LaTeX source extensions.
-            const ODF_TEMPLATE_EXT: Record<string, string> = { ott: 'odt', ots: 'ods', otp: 'odp', otg: 'odg', latex: 'tex', ltx: 'tex' };
-            let routedExt = ODF_TEMPLATE_EXT[ext.toLowerCase()] || ext.toLowerCase();
+            // A format's other extensions (an ODF or OOXML template, a macro-enabled file, a slideshow,
+            // `.latex`) share its parser, whether the name came from the file or from byte detection.
+            let routedExt = formatOf(ext);
             // A file named `.zip` is routed by what the archive holds (a LaTeX project, a renamed
             // office package), since `zip` itself is not a format.
             if (routedExt === GENERIC_ZIP_EXTENSION) {

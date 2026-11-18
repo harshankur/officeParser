@@ -38,7 +38,7 @@ import { decodePDFRawStream, PDFArray, PDFDict, PDFDocument, PDFHexString, PDFNa
 import * as assert from 'assert';
 import * as path from 'path';
 import * as fs from 'fs';
-import type { ImageMetadata, OfficeContentNode, OfficeParserAST, ShapeMetadata, SheetMetadata, TextFormatting, TextMetadata } from '../src/types';
+import type { ImageMetadata, OfficeContentNode, OfficeIssue, OfficeParserAST, ShapeMetadata, SheetMetadata, TextFormatting, TextMetadata } from '../src/types';
 import { OfficeWarningType } from '../src/types';
 import { parseXmlString } from '../src/utils/xmlUtils';
 import { mathmlToLatex, ommlToLatex } from '../src/utils/mathUtils';
@@ -14168,6 +14168,26 @@ async function testMarkdownColumnAlignByContent(): Promise<void> {
 }
 
 /**
+ * The main part's content type is matched without regard to case (OPC content types are case-insensitive), so a
+ * package that file-type reports only as `zip` is read by what it declares, however it writes it.
+ */
+async function testOoxmlContentTypesAnyCase(): Promise<void> {
+    const { detectOfficeTypeFromZip } = await import('../src/utils/zipUtils');
+    const docx = unzipSync(fs.readFileSync(path.join(__dirname, 'files', 'test.docx')));
+    const types = strFromU8(docx['[Content_Types].xml']);
+    for (const [declared, format] of [
+        ['application/vnd.ms-excel.sheet.macroEnabled.main+xml', 'xlsx'], ['application/vnd.ms-word.document.macroEnabled.main+xml', 'docx'],
+        ['application/vnd.ms-powerpoint.slideshow.macroEnabled.main+xml', 'pptx'], ['application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml', 'docx'],
+    ] as const) {
+        for (const written of [declared.toLowerCase(), declared.toUpperCase()]) {
+            const archive = Buffer.from(zipSync({ ...docx, '[Content_Types].xml': strToU8(types.replace(/application\/vnd\.openxmlformats-officedocument\.wordprocessingml\.document\.main\+xml/, written)) }));
+            assert.strictEqual(await detectOfficeTypeFromZip(archive, {}), format, `OOXML: ${written} is ${format}`);
+        }
+    }
+    console.log('  OOXML content types in any case: All assertions passed ✓');
+}
+
+/**
  * A DOCX note's separators are marked by their `w:type`, not their ids: a writer that gives its separators
  * high ids and the first real footnote and endnote id 0 (WPS Office) keeps that note (#160).
  */
@@ -14196,6 +14216,71 @@ async function testDocxNoteAtIdZero(): Promise<void> {
     const word = String((await (await OfficeParser.parseOffice(source, { fileType: 'docx' } as any)).to('md')).value);
     assert.ok(Object.values(noteText).every(text => word.split(text).length - 1 === 1), `DOCX: Word's footnote and endnote are each read once`);
     console.log('  DOCX note at id 0: All assertions passed ✓');
+}
+
+/**
+ * Word's, Excel's and PowerPoint's macro-enabled files, templates and slideshows are packaged as their documents
+ * are, with only the main part's content type changed: each is read by its format's parser from a buffer (where
+ * byte detection names the variant, or only `zip`), by its file name, and by `fileType`, and a `fileType` of the
+ * document's own format raises no mismatch (#161).
+ */
+async function testOoxmlVariants(): Promise<void> {
+    const os = await import('os');
+    const variants: [string, 'docx' | 'xlsx' | 'pptx', string][] = [
+        ['docm', 'docx', 'application/vnd.ms-word.document.macroEnabled.main+xml'],
+        ['dotx', 'docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.template.main+xml'],
+        ['dotm', 'docx', 'application/vnd.ms-word.template.macroEnabledTemplate.main+xml'],
+        ['xlsm', 'xlsx', 'application/vnd.ms-excel.sheet.macroEnabled.main+xml'],
+        ['xltx', 'xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.template.main+xml'],
+        ['xltm', 'xlsx', 'application/vnd.ms-excel.template.macroEnabled.main+xml'],
+        ['pptm', 'pptx', 'application/vnd.ms-powerpoint.presentation.macroEnabled.main+xml'],
+        ['potx', 'pptx', 'application/vnd.openxmlformats-officedocument.presentationml.template.main+xml'],
+        ['potm', 'pptx', 'application/vnd.ms-powerpoint.template.macroEnabled.main+xml'],
+        ['ppsx', 'pptx', 'application/vnd.openxmlformats-officedocument.presentationml.slideshow.main+xml'],
+        ['ppsm', 'pptx', 'application/vnd.ms-powerpoint.slideshow.macroEnabled.main+xml'],
+    ];
+    const mainType: Record<string, string> = {
+        docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml',
+        xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml',
+        pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml',
+    };
+    const textOf = async (ast: OfficeParserAST) => String((await ast.to('text')).value);
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'officeparser-variants-'));
+    try {
+        for (const [ext, format, contentType] of variants) {
+            const source = fs.readFileSync(path.join(__dirname, 'files', `test.${format}`));
+            const parts = unzipSync(source);
+            const types = strFromU8(parts['[Content_Types].xml']);
+            assert.ok(types.includes(mainType[format]), `${ext}: the ${format} fixture declares its main part`);
+            const bytes = Buffer.from(zipSync({ ...parts, '[Content_Types].xml': strToU8(types.replace(mainType[format], contentType)) }));
+            const expected = await textOf(await OfficeParser.parseOffice(source, { fileType: format } as any));
+            const warnings: string[] = [];
+            const onWarning = (w: OfficeIssue) => warnings.push(w.code);
+            const fromBuffer = await OfficeParser.parseOffice(bytes, { onWarning } as any);
+            assert.strictEqual(fromBuffer.type, format, `${ext}: a buffer is read as ${format}`);
+            assert.strictEqual(await textOf(fromBuffer), expected, `${ext}: a buffer reads as its ${format} does`);
+            const file = path.join(dir, `variant.${ext}`);
+            fs.writeFileSync(file, bytes);
+            const fromPath = await OfficeParser.parseOffice(file, { onWarning } as any);
+            assert.strictEqual(fromPath.type, format, `${ext}: a file named .${ext} is read as ${format}`);
+            assert.strictEqual(await textOf(fromPath), expected, `${ext}: a file named .${ext} reads as its ${format} does`);
+            assert.strictEqual((await OfficeParser.parseOffice(bytes, { fileType: ext, onWarning } as any)).type, format, `${ext}: fileType '${ext}'`);
+            assert.strictEqual((await OfficeParser.parseOffice(bytes, { fileType: format, onWarning } as any)).type, format, `${ext}: fileType '${format}'`);
+            assert.strictEqual((await OfficeParser.parseOffice(source, { fileType: ext, onWarning } as any)).type, format, `${ext}: a ${format} given as '${ext}'`);
+            assert.deepStrictEqual(warnings.filter(code => code === 'BUFFER_TYPE_MISMATCH'), [], `${ext}: no mismatch between a format and its other extensions: ${warnings}`);
+        }
+        // Another format's bytes under a variant's name still warn.
+        const mismatched: string[] = [];
+        await OfficeParser.parseOffice(fs.readFileSync(path.join(__dirname, 'files', 'test.pptx')), { fileType: 'docm', onWarning: (w: OfficeIssue) => mismatched.push(w.code) } as any).catch(() => undefined);
+        assert.ok(mismatched.includes('BUFFER_TYPE_MISMATCH'), `a PowerPoint deck given as 'docm' is a mismatch: ${mismatched}`);
+        // A name that is no extension (a prototype key) is still unsupported.
+        let refused = '';
+        await OfficeParser.parseOffice(fs.readFileSync(path.join(__dirname, 'files', 'test.docx')), { fileType: 'constructor', onWarning: () => {} } as any).catch((e: any) => { refused = e?.officeIssue?.code ?? e?.message; });
+        assert.ok(/EXTENSION_UNSUPPORTED|currently supports/.test(refused), `fileType 'constructor' is refused: ${refused}`);
+    } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+    }
+    console.log('  OOXML variants: All assertions passed ✓');
 }
 
 /**
@@ -17327,7 +17412,9 @@ async function runTests(): Promise<void> {
         ['LaTeX parsing', testLatexParsing],
         ['Config consistency', testConfigConsistency],
         ['Markdown column alignment by content', testMarkdownColumnAlignByContent],
+        ['OOXML content types in any case', testOoxmlContentTypesAnyCase],
         ['DOCX note at id 0', testDocxNoteAtIdZero],
+        ['OOXML variants', testOoxmlVariants],
         ['OfficeGenUtils', testOfficeGenUtils],
         ['NativePdfEngine', testNativePdfEngine],
         ['Template', testTemplate],

@@ -408,12 +408,28 @@ const ODF_MIMETYPE_PATH = 'mimetype';
 
 /**
  * Substrings of the main-part content type each OOXML format declares in
- * `[Content_Types].xml`, matched as plain text because only this one value is needed.
+ * `[Content_Types].xml`, matched as plain text because only this one value is needed. A macro-enabled
+ * file, a template and a slideshow are packaged as their document is, with only this content type
+ * changed (their macros are a part of their own, left unread), so each resolves to its document's type.
  */
 const OOXML_MAIN_CONTENT_TYPES: ReadonlyArray<readonly [string, SupportedFileType]> = [
     ['wordprocessingml.document.main+xml', 'docx'],
     ['spreadsheetml.sheet.main+xml', 'xlsx'],
     ['presentationml.presentation.main+xml', 'pptx'],
+    // .docm, .dotx, .dotm
+    ['ms-word.document.macroEnabled.main+xml', 'docx'],
+    ['wordprocessingml.template.main+xml', 'docx'],
+    ['ms-word.template.macroEnabledTemplate.main+xml', 'docx'],
+    // .xlsm, .xltx, .xltm
+    ['ms-excel.sheet.macroEnabled.main+xml', 'xlsx'],
+    ['spreadsheetml.template.main+xml', 'xlsx'],
+    ['ms-excel.template.macroEnabled.main+xml', 'xlsx'],
+    // .pptm, .potx, .potm, .ppsx, .ppsm
+    ['ms-powerpoint.presentation.macroEnabled.main+xml', 'pptx'],
+    ['presentationml.template.main+xml', 'pptx'],
+    ['ms-powerpoint.template.macroEnabled.main+xml', 'pptx'],
+    ['presentationml.slideshow.main+xml', 'pptx'],
+    ['ms-powerpoint.slideshow.macroEnabled.main+xml', 'pptx'],
 ];
 
 /** Exact `mimetype` entry contents for the packages that carry one. */
@@ -532,8 +548,8 @@ export const detectOfficeTypeFromZip = async (
 
     const contentTypesEntry = files.find(file => file.path === OOXML_CONTENT_TYPES_PATH);
     if (contentTypesEntry) {
-        const contentTypes = contentTypesEntry.content.toString();
-        const match = OOXML_MAIN_CONTENT_TYPES.find(([marker]) => contentTypes.includes(marker));
+        const contentTypes = contentTypesEntry.content.toString().toLowerCase();
+        const match = OOXML_MAIN_CONTENT_TYPES.find(([marker]) => contentTypes.includes(marker.toLowerCase()));
         if (match) return match[1];
     }
 

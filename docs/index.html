@@ -4548,7 +4548,7 @@
                         </div>
                     </div>
                     <input type="file" id="file-input" class="hidden-input"
-                        accept=".docx,.pptx,.xlsx,.odt,.odp,.ods,.odg,.ott,.ots,.otp,.otg,.pdf,.rtf,.csv,.md,.markdown,.html,.htm,.xhtml,.epub,.tex,.latex,.ltx,.zip">
+                        accept=".docx,.pptx,.xlsx,.docm,.dotx,.dotm,.xlsm,.xltx,.xltm,.pptm,.potx,.potm,.ppsx,.ppsm,.odt,.odp,.ods,.odg,.ott,.ots,.otp,.otg,.pdf,.rtf,.csv,.md,.markdown,.html,.htm,.xhtml,.epub,.tex,.latex,.ltx,.zip">
                 </div>
 
                 <!-- Sample Document Picker -->
@@ -6294,12 +6294,16 @@
             }
 
             // Normalize a file extension / hint value to the canonical parser format used in the
-            // schema `formats` arrays. Template extensions collapse onto their ODF base type;
-            // anything unrecognized returns null so the filter falls back to showing everything.
+            // schema `formats` arrays. Template, macro-enabled and slideshow extensions collapse onto
+            // their base type; anything unrecognized returns null so the filter falls back to showing everything.
             function normalizeParserFormat(ext) {
                 if (!ext) return null;
                 ext = String(ext).toLowerCase();
-                const map = { ott: 'odt', ots: 'ods', otp: 'odp', otg: 'odg', htm: 'html', markdown: 'md', latex: 'tex', ltx: 'tex' };
+                const map = {
+                    ott: 'odt', ots: 'ods', otp: 'odp', otg: 'odg', htm: 'html', markdown: 'md', latex: 'tex', ltx: 'tex',
+                    docm: 'docx', dotx: 'docx', dotm: 'docx', xlsm: 'xlsx', xltx: 'xlsx', xltm: 'xlsx',
+                    pptm: 'pptx', potx: 'pptx', potm: 'pptx', ppsx: 'pptx', ppsm: 'pptx'
+                };
                 if (map[ext]) return map[ext];
                 const known = ['docx', 'xlsx', 'pptx', 'pdf', 'rtf', 'csv', 'md', 'html', 'odt', 'ods', 'odp', 'odg', 'epub', 'tex'];
                 return known.includes(ext) ? ext : null;

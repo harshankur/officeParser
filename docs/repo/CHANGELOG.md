@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **HTML: under `sheetLayout: 'tables'` a sheet's heading has one id**, from its text, as every heading's is (`<h2 id="visits">`). It had the viewer's `sheet-N` id, with the text's id on an empty anchor before it.
 
 ### Fixed
+- **Word's, Excel's and PowerPoint's macro-enabled files, templates and slideshows are read** (`.docm`, `.dotx`, `.dotm`, `.xlsm`, `.xltx`, `.xltm`, `.pptm`, `.potx`, `.potm`, `.ppsx`, `.ppsm`). They were refused as unsupported, by file name and from a buffer, though only their main part's content type differs from a DOCX's, XLSX's or PPTX's. Each is read as its document is, and `fileType` takes their names; their macros are not read.
 - **DOCX: a footnote or endnote with id 0 is kept.** Separator notes were told apart by their ids, -1 and 0, as Word gives them; they are now told apart by their type, so a file whose first note has id 0 (as WPS Office writes) keeps it.
 - **HTML: a header row with empty columns keeps its cells in their columns.** In a table whose cells give their columns (a sheet's), a header row's cells after an empty column were written a column to the left.
 
