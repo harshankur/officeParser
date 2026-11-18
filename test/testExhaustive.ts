@@ -14168,6 +14168,37 @@ async function testMarkdownColumnAlignByContent(): Promise<void> {
 }
 
 /**
+ * A DOCX note's separators are marked by their `w:type`, not their ids: a writer that gives its separators
+ * high ids and the first real footnote and endnote id 0 (WPS Office) keeps that note (#160).
+ */
+async function testDocxNoteAtIdZero(): Promise<void> {
+    const source = fs.readFileSync(path.join(__dirname, 'files', 'test.docx'));
+    const parts = unzipSync(source);
+    const noteText = { footnote: 'clickable endnotes that the user can browse', endnote: 'they remain endnotes when converted' };
+    for (const kind of ['footnote', 'endnote'] as const) {
+        const notesPart = `word/${kind}s.xml`;
+        const notes = strFromU8(parts[notesPart]);
+        assert.ok(notes.includes(`<w:${kind} w:type="separator" w:id="0">`) && notes.includes(`<w:${kind} w:id="2">`), `DOCX ${kind}s: the fixture's separators are ids 0 and 1, its note id 2`);
+        const swapped = notes
+            .replace(`<w:${kind} w:type="separator" w:id="0">`, `<w:${kind} w:type="separator" w:id="188">`)
+            .replace(`<w:${kind} w:type="continuationSeparator" w:id="1">`, `<w:${kind} w:type="continuationSeparator" w:id="189">`)
+            .replace(`<w:${kind} w:id="2">`, `<w:${kind} w:id="0">`);
+        const reference = `<w:${kind}Reference w:id="2" />`;
+        const body = strFromU8(parts['word/document.xml']);
+        assert.ok(body.includes(reference), `DOCX ${kind}s: the fixture's reference is id 2`);
+        const docx = Buffer.from(zipSync({ ...parts, [notesPart]: strToU8(swapped), 'word/document.xml': strToU8(body.replace(reference, `<w:${kind}Reference w:id="0" />`)) }));
+        const ast = await OfficeParser.parseOffice(docx, { fileType: 'docx' } as any);
+        const markdown = String((await ast.to('md')).value);
+        assert.ok(markdown.includes(noteText[kind]), `DOCX ${kind}s: a ${kind} at id 0 is kept: ${markdown.slice(-600)}`);
+        assert.ok(!/\[\^[^\]]*\]:\s*$/m.test(markdown), `DOCX ${kind}s: no separator is written as a note`);
+    }
+    // Word's own shape is read as before: the note is there once, and no separator becomes one.
+    const word = String((await (await OfficeParser.parseOffice(source, { fileType: 'docx' } as any)).to('md')).value);
+    assert.ok(Object.values(noteText).every(text => word.split(text).length - 1 === 1), `DOCX: Word's footnote and endnote are each read once`);
+    console.log('  DOCX note at id 0: All assertions passed ✓');
+}
+
+/**
  * Configuration consistency: every option means the same on every surface, a mistake in a config is
  * reported rather than silently ignored, and a value an option does not accept falls back visibly.
  */
@@ -17296,6 +17327,7 @@ async function runTests(): Promise<void> {
         ['LaTeX parsing', testLatexParsing],
         ['Config consistency', testConfigConsistency],
         ['Markdown column alignment by content', testMarkdownColumnAlignByContent],
+        ['DOCX note at id 0', testDocxNoteAtIdZero],
         ['OfficeGenUtils', testOfficeGenUtils],
         ['NativePdfEngine', testNativePdfEngine],
         ['Template', testTemplate],

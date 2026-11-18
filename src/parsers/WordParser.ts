@@ -2149,6 +2149,16 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
         withPartRels(path, read);
     };
 
+    /**
+     * A separator note (the line above the notes, its continuation, the continuation notice) is marked by its
+     * `w:type`, not its id: Word gives its separators ids -1 and 0, but other writers (WPS Office) give theirs
+     * high ids and the first real note id 0. A note with no type, or `normal`, is a note.
+     */
+    const isSeparatorNote = (node: Element): boolean => {
+        const type = node.getAttribute("w:type");
+        return type === "separator" || type === "continuationSeparator" || type === "continuationNotice";
+    };
+
     // Pre-process footnotes and endnotes to be inserted inline later
     if (!config.ignoreNotes) {
         const footnotesFile = files.find(f => f.path.match(footnotesFileRegex));
@@ -2158,7 +2168,7 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
             await readPart(footnotesFile.path, footnotesDoc.documentElement, () => {
                 for (const node of getElementsByTagName(footnotesDoc, "w:footnote")) {
                     const id = node.getAttribute("w:id");
-                    if (!id || id === "-1" || id === "0") continue;
+                    if (!id || isSeparatorNote(node)) continue;
                     const blocks: OfficeContentNode[] = [];
                     readBlocks(node, footnoteXml, blocks);
                     footnoteMap.set(id, blocks);
@@ -2173,7 +2183,7 @@ export const parseWord = async (buffer: Buffer, config: FullOfficeParserConfig, 
             await readPart(endnotesFile.path, endnotesDoc.documentElement, () => {
                 for (const node of getElementsByTagName(endnotesDoc, "w:endnote")) {
                     const id = node.getAttribute("w:id");
-                    if (!id || id === "-1" || id === "0") continue;
+                    if (!id || isSeparatorNote(node)) continue;
                     const blocks: OfficeContentNode[] = [];
                     readBlocks(node, endnoteXml, blocks);
                     endnoteMap.set(id, blocks);
