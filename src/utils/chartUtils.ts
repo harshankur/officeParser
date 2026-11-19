@@ -454,8 +454,9 @@ const extractOpenXmlChartData = (xmlBuffer: Buffer, config?: OfficeParserConfig)
     for (let i = 0; i < seriesNodes.length; i++) {
         const ser = seriesNodes[i] as Element;
 
-        // DataSet Name (c:tx)
-        const name = extractOpenXmlRichText(ser, "c:tx");
+        // The name is the series' direct c:tx; a data label or trendline label inside it holds a c:tx too.
+        const txEl = getDirectChildren(ser, "c:tx")[0];
+        const name = txEl ? extractOpenXmlRichText(txEl, "c:tx") : undefined;
 
         // Values (c:val)
         const valNode = getChildElements(ser, "c:val")[0] || getChildElements(ser, "c:yVal")[0];

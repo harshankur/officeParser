@@ -17292,6 +17292,36 @@ async function testChartListsOwn(): Promise<void> {
 }
 
 /**
+ * A series' name comes from its direct `c:tx`. A series without one has no name, even when a custom data
+ * label or trendline label inside it holds a `c:tx`. Such a series took the first of those as its name, and
+ * the chart's text and tables showed it.
+ */
+async function testChartSeriesName(): Promise<void> {
+    const { strCache, numCache, tx, chartPart, read, astOf, tableRows } = chartHelpers();
+    const rich = (text: string) => `<c:tx><c:rich><a:bodyPr/><a:p><a:r><a:t>${text}</a:t></a:r></a:p></c:rich></c:tx>`;
+    const points = `<c:cat>${strCache(['Jan', 'Feb'])}</c:cat><c:val>${numCache(['10', '20'])}</c:val>`;
+    const dataLabel = `<c:dLbls><c:dLbl><c:idx val="1"/>${rich('Record month')}<c:showVal val="1"/></c:dLbl></c:dLbls>`;
+    const trendline = `<c:trendline><c:trendlineType val="linear"/><c:trendlineLbl>${rich('Trend fit')}</c:trendlineLbl></c:trendline>`;
+    const chart = (series: string) => chartPart(`<c:barChart><c:ser><c:idx val="0"/><c:order val="0"/>${series}</c:ser></c:barChart>`);
+
+    let labelled: any;
+    for (const fileType of ['xlsx', 'pptx', 'docx'] as const) {
+        ({ data: labelled } = await read(chart(`${dataLabel}${points}`), fileType));
+        const [series] = labelled.dataSets;
+        assert.deepStrictEqual([series.name, series.pointLabels, series.pointLabelIndexes], [undefined, ['Record month'], [1]], `${fileType}: a series without c:tx has no name, and its data label stays a point label`);
+        assert.deepStrictEqual(labelled.rawTexts, ['Jan', 'Feb', '10', '20'], `${fileType}: the chart's text holds no data label as a series name`);
+    }
+    const header = (await tableRows(astOf(labelled), 'md'))?.[0] ?? [];
+    assert.ok(!header.includes('Record month'), `md: the chart table's header does not use the data label as a series name; got ${JSON.stringify(header)}`);
+
+    const trended = (await read(chart(`${trendline}${points}`))).data;
+    assert.deepStrictEqual([trended.dataSets[0].name, trended.dataSets[0].pointLabels], [undefined, []], 'a series without c:tx takes no name from its trendline label');
+
+    const named = (await read(chart(`${tx('Sales')}${dataLabel}${points}`))).data;
+    assert.deepStrictEqual([named.dataSets[0].name, named.dataSets[0].pointLabels], ['Sales', ['Record month']], 'a series with its own c:tx keeps its name next to a data label');
+}
+
+/**
  * Markdown and RTF output write a chart as its data's table (as DOCX writes one), under its title: they wrote
  * no chart at all, with no word. A chart standing in a paragraph (Word, ODF) is a table between the
  * paragraph's parts. Every label and value of a chart from XLSX, PPTX, DOCX and ODT reads back.
@@ -17579,6 +17609,7 @@ async function runTests(): Promise<void> {
         ['Chart XY series', testChartXYSeries],
         ['Chart lists of no entries left out, read and normalized alike', testChartEmptyListsLeftOut],
         ['Chart lists each their own', testChartListsOwn],
+        ['Chart series name from its own c:tx', testChartSeriesName],
         ['Charts in Markdown and RTF', testChartsInMarkdownAndRtf],
         ['Metafiles typed', testMetafileTyping],
         ['Metafiles written into DOCX and ODT', testMetafileWriters],
