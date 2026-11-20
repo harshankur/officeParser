@@ -16776,7 +16776,7 @@ function chartHelpers() {
     const tx = (name: string) => `<c:tx>${strCache([name])}</c:tx>`;
     const ser = (name: string, cat: string, val: string, extra = '') => `<c:ser><c:idx val="0"/>${tx(name)}<c:cat>${cat}</c:cat><c:val>${val}</c:val>${extra}</c:ser>`;
     const title = (text: string) => `<c:title><c:tx><c:rich><a:p><a:r><a:t>${text}</a:t></a:r></a:p></c:rich></c:tx></c:title>`;
-    const chartPart = (plotArea: string, before = '', chartTitle = '') => `<?xml version="1.0"?><c:chartSpace ${C}>${before}<c:chart>${chartTitle}<c:plotArea>${plotArea}</c:plotArea></c:chart></c:chartSpace>`;
+    const chartPart = (plotArea: string, before = '', chartTitle = '', after = '') => `<?xml version="1.0"?><c:chartSpace ${C}>${before}<c:chart>${chartTitle}<c:plotArea>${plotArea}</c:plotArea>${after}</c:chart></c:chartSpace>`;
     const zip = (parts: Record<string, string>) => Buffer.from(zipSync(Object.fromEntries(Object.entries(parts).map(([name, value]) => [name, strToU8(value)]))));
     const S = 'xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"';
     const P = 'xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"';
@@ -17237,6 +17237,66 @@ async function testChartXYSeries(): Promise<void> {
 }
 
 /**
+ * A chart says how it draws a blank point (`displayBlanksAs`): OpenXML's `c:dispBlanksAs`, ODF's
+ * `chart:treat-empty-cells` on its plot area's style (`ignore` read as `span`) (#166). Where the chart does not
+ * say, or gives an unknown value, the field is absent.
+ */
+async function testChartBlanks(): Promise<void> {
+    const { numCache, tx, chartPart, read, astOf, scriptData } = chartHelpers();
+    const xySer = (name: string, xs: (string | undefined)[], ys: (string | undefined)[], sizes?: (string | undefined)[]) =>
+        `<c:ser><c:idx val="0"/>${tx(name)}<c:xVal>${numCache(xs)}</c:xVal><c:yVal>${numCache(ys)}</c:yVal>${sizes ? `<c:bubbleSize>${numCache(sizes)}</c:bubbleSize>` : ''}</c:ser>`;
+    const axes = '<c:axId val="1"/><c:axId val="2"/>';
+    // A scatter chart with a blank Y and a blank X, and a bubble chart with one blank X, Y or size per point.
+    const scatter = `<c:scatterChart><c:scatterStyle val="lineMarker"/>${xySer('Series A', ['1', '2'], [undefined, '20'])}${xySer('Series B', ['100', undefined], ['30', '40'])}${axes}</c:scatterChart>`;
+    const bubble = `<c:bubbleChart>${xySer('Series C', [undefined, '2', '3'], ['10', undefined, '30'], ['5', '15', undefined])}${axes}</c:bubbleChart>`;
+    const blanks = (attributes: string) => `<c:plotVisOnly val="1"/><c:dispBlanksAs${attributes}/>`;
+    for (const fileType of ['xlsx', 'pptx', 'docx'] as const) {
+        for (const [kind, plot] of [['scatter', scatter], ['bubble', bubble]]) {
+            for (const value of ['gap', 'span', 'zero']) {
+                const { data } = await read(chartPart(plot, '', '', blanks(` val="${value}"`)), fileType);
+                assert.strictEqual(data.displayBlanksAs, value, `${fileType}: a ${kind} chart's ${value} is read`);
+            }
+        }
+    }
+    for (const [label, after] of [['no c:dispBlanksAs', ''], ['no val', blanks('')], ['an unknown val', blanks(' val="bogus"')], ['val __proto__', blanks(' val="__proto__"')], ['val constructor', blanks(' val="constructor"')]]) {
+        const { data } = await read(chartPart(scatter, '', '', after));
+        assert.ok(!('displayBlanksAs' in data), `${label}: no displayBlanksAs; got ${JSON.stringify(data.displayBlanksAs)}`);
+    }
+
+    // Fixtures
+    const fixture = async (...parts: string[]) => {
+        const ast = await OfficeParser.parseOffice(fs.readFileSync(path.join(__dirname, 'files', ...parts)), { extractAttachments: true, onWarning: () => { } } as any) as OfficeParserAST;
+        return ast.attachments.filter(a => a.chartData).map(a => a.chartData!.displayBlanksAs);
+    };
+    assert.deepStrictEqual(await fixture('charts', 'word-charts.docx'), Array(5).fill('zero'), 'word-charts.docx: every chart says zero');
+    assert.deepStrictEqual([...new Set(await fixture('charts', 'inline-chart.odt'))], ['zero'], 'inline-chart.odt: its chart says zero');
+    for (const file of ['test.xlsx', 'test.pptx']) {
+        assert.deepStrictEqual([...new Set(await fixture(file))], ['gap'], `${file}: its chart says gap`);
+    }
+    for (const file of ['test.ods', 'test.odp']) {
+        assert.deepStrictEqual([...new Set(await fixture(file))], [undefined], `${file}: a setting on the chart's own style is not read`);
+    }
+
+    // ODF values on the plot area's style
+    const odsChart = strFromU8(unzipSync(new Uint8Array(fs.readFileSync(path.join(__dirname, 'files', 'test.ods'))))['Object 1/content.xml']);
+    const plotProperties = 'style:name="Plt0"><style:chart-properties ';
+    const plotStyleRef = '<chart:plot-area chart:style-name="Plt0"';
+    assert.ok(odsChart.includes(plotProperties) && odsChart.includes(plotStyleRef), 'test.ods\'s chart has its plot area\'s style');
+    const odf = (value: string, styleRef = plotStyleRef) =>
+        extractChartData(Buffer.from(odsChart.replace(plotProperties, `${plotProperties}chart:treat-empty-cells="${value}" `).replace(plotStyleRef, styleRef))).displayBlanksAs;
+    assert.deepStrictEqual([odf('ignore'), odf('use-zero'), odf('leave-gap')], ['span', 'zero', 'gap'], 'ODF: ignore, use-zero and leave-gap read as span, zero and gap');
+    assert.deepStrictEqual([odf('bogus'), odf('__proto__'), odf('use-zero', '<chart:plot-area chart:style-name="none"')], [undefined, undefined, undefined], 'ODF: an unknown value, or a plot area of a style not found: absent');
+
+    // Hand-built AST
+    const handBuilt = (displayBlanksAs: unknown) => astOf({ labels: ['a'], dataSets: [{ values: ['1'], pointLabels: [] }], displayBlanksAs, rawTexts: [] });
+    assert.strictEqual((await scriptData(handBuilt('span'))).data.displayBlanksAs, 'span', 'a hand-built chart keeps span');
+    for (const odd of ['bogus', 42, '__proto__']) {
+        const { data } = await scriptData(handBuilt(odd));
+        assert.ok(!('displayBlanksAs' in data), `a hand-built chart's ${JSON.stringify(odd)} is dropped`);
+    }
+}
+
+/**
  * A chart's optional lists (X values, bubble sizes, shown texts, point indexes) are given only with entries,
  * by the parser as by the normalizer (withWellTypedValues): a chart read and the same chart normalized are
  * alike. An empty `c:xVal` or `c:bubbleSize`, a cache with a number format and no points, and an ODF series
@@ -17577,6 +17637,7 @@ async function runTests(): Promise<void> {
         ['Chart label levels', testChartLabelLevels],
         ['Chart axes', testChartAxes],
         ['Chart XY series', testChartXYSeries],
+        ['Chart blank points drawn as the chart says', testChartBlanks],
         ['Chart lists of no entries left out, read and normalized alike', testChartEmptyListsLeftOut],
         ['Chart lists each their own', testChartListsOwn],
         ['Charts in Markdown and RTF', testChartsInMarkdownAndRtf],

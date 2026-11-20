@@ -8824,6 +8824,7 @@
           3
         ],
         "pointCount": 4,
+        "displayBlanksAs": "gap",
         "axes": [
           {
             "id": "1402597383",

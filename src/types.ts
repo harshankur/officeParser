@@ -4338,6 +4338,16 @@ export interface ChartData {
      */
     pointCount?: number;
 
+    /**
+     * How the chart draws a blank point: left out (`gap`), joined across (`span`), or as 0 (`zero`). OpenXML's
+     * `c:dispBlanksAs`; ODF's `chart:treat-empty-cells` on the plot area's style (`leave-gap`, `ignore`,
+     * `use-zero`). Absent where the chart does not say. The defaults differ: the OpenXML schema means `zero`;
+     * Office draws `gap`, or `zero` for a 3D area chart and an area or line chart of non-standard grouping; ODF
+     * means `ignore` (`span`) for a scatter chart and `leave-gap` for the rest. Where the chart's type cannot draw
+     * the setting given (`span` on a bar chart), Office draws its default.
+     */
+    displayBlanksAs?: 'gap' | 'span' | 'zero';
+
     /** The category cache's Excel number format (e.g. `mmm\-yy`), read as a series' `formatCode` is. */
     labelFormatCode?: string;
 

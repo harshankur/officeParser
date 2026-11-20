@@ -1,4 +1,4 @@
-import { CHART_AXIS_KINDS, CHART_AXIS_POSITIONS, CHART_TYPES, isPointIndexList, MAX_CHART_AXES, MAX_CHART_LEVELS, MAX_SERIES_AXES } from './chartUtils.js';
+import { CHART_AXIS_KINDS, CHART_AXIS_POSITIONS, CHART_BLANKS, CHART_TYPES, isPointIndexList, MAX_CHART_AXES, MAX_CHART_LEVELS, MAX_SERIES_AXES } from './chartUtils.js';
 import { mapNodeLists, NodeMemo, nodeMemo } from './nodeListUtils.js';
 import { OfficeContentNode, OfficeParserAST } from '../types.js';
 
@@ -374,6 +374,7 @@ function normalizeAttachments(attachments: OfficeParserAST['attachments']): Offi
                     labels,
                     ...(labelIndexes && { labelIndexes }),
                     ...(Number.isSafeInteger(chart.pointCount) && chart.pointCount >= 0 && { pointCount: chart.pointCount }),
+                    ...(typeof chart.displayBlanksAs === 'string' && CHART_BLANKS.has(chart.displayBlanksAs) && { displayBlanksAs: chart.displayBlanksAs }),
                     ...(isFormatCode(chart.labelFormatCode) && { labelFormatCode: chart.labelFormatCode }),
                     ...(shownLabels && { shownLabels }),
                     ...(levels.length > 0 && { labelLevels: levels }),

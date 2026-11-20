@@ -1065,6 +1065,7 @@ Chart Node (type: 'chart')
     ├── title?, xAxisTitle?, yAxisTitle?
     ├── labels: string[]            (categories; a scatter chart's first series' X values)
     ├── labelIndexes?, pointCount?  (point positions)
+    ├── displayBlanksAs?            (how the chart draws blank points)
     ├── labelFormatCode?, shownLabels?
     ├── labelLevels?: [{ labels, labelIndexes? }]   (categories of several levels, innermost first)
     ├── axes?: [{ id, kind, position?, title?, deleted? }]
@@ -1081,6 +1082,7 @@ Chart Node (type: 'chart')
 | `labels` | The category labels: the innermost level of a chart of several; a scatter or bubble chart's first series' X values | `c:cat` (or `c:xVal`) / the chart's table's first column |
 | `labelIndexes`, `valueIndexes`, `pointLabelIndexes` | The point index of each label, value and point label, ascending | `c:pt idx`, `c:dLbl/c:idx` / the row of the chart's table |
 | `pointCount` | How many points the categories span, blank ones included | `c:ptCount` / the chart's table's data rows |
+| `displayBlanksAs` | How the chart draws a blank point: left out (`gap`), joined across (`span`), or as 0 (`zero`). Absent where the chart does not say: the OpenXML schema then means `zero`, Office draws `gap` (`zero` for 3D area charts and area or line charts of non-standard grouping), and ODF means `span` for scatter charts and `gap` for the rest | `c:dispBlanksAs` / the plot area style's `chart:treat-empty-cells` (`ignore` as `span`) |
 | `formatCode`, `labelFormatCode` | A series' and the categories' number format (none for General) | `c:formatCode` |
 | `shownValues`, `shownLabels` | Each value and label as the chart shows it (`£1,250,000`, `12%`, `Jan-25`), in the chart's date system | `c:formatCode`, a point's own `formatCode`, `c:date1904` |
 | `labelLevels` | Every level of a chart's categories when it has more than one (quarters under years), innermost first; an outer label covers the points from its index to the next label's | `c:multiLvlStrCache/c:lvl` |

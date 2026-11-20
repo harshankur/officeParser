@@ -325,6 +325,11 @@ export const CHART_AXIS_KINDS: ReadonlySet<string> = new Set(['category', 'date'
 export const CHART_AXIS_POSITIONS: ReadonlySet<string> = new Set(['bottom', 'left', 'right', 'top']);
 /** The kinds of plot group a series is drawn as (ChartType). */
 export const CHART_TYPES: ReadonlySet<string> = new Set(['area', 'bar', 'bubble', 'doughnut', 'line', 'ofPie', 'pie', 'radar', 'scatter', 'stock', 'surface']);
+/** The ways a chart draws a blank point (ChartData.displayBlanksAs). */
+export const CHART_BLANKS: ReadonlySet<string> = new Set(['gap', 'span', 'zero']);
+
+/** Each OpenXML `c:dispBlanksAs`'s way of drawing a blank point. */
+const OPENXML_BLANKS: Record<string, NonNullable<ChartData['displayBlanksAs']>> = lookupTable({ gap: 'gap', span: 'span', zero: 'zero' });
 
 /** Each OpenXML axis element's kind. */
 const OPENXML_AXIS_KINDS: Record<string, ChartAxis['kind']> = lookupTable({ catAx: 'category', dateAx: 'date', valAx: 'value', serAx: 'series' });
@@ -393,6 +398,7 @@ const extractOpenXmlChartData = (xmlBuffer: Buffer, config?: OfficeParserConfig)
 
     // Every axis, and each plot group's chart type and axes (#143).
     const { axes, groups } = readOpenXmlPlotArea(getDirectChildren(chartEl, "c:plotArea")[0]);
+    const displayBlanksAs = OPENXML_BLANKS[getDirectChildren(chartEl, "c:dispBlanksAs")[0]?.getAttribute("val") ?? ''];
     const axisById = new Map<string, ChartAxis>();
     for (const axis of axes) if (axis.id && !axisById.has(axis.id)) axisById.set(axis.id, axis);
 
@@ -534,6 +540,7 @@ const extractOpenXmlChartData = (xmlBuffer: Buffer, config?: OfficeParserConfig)
         labels: labelsShared ? [...sharedLabels.texts] : sharedLabels.texts,
         ...(labelIndexes && { labelIndexes }),
         ...(pointCount !== undefined && { pointCount }),
+        ...(displayBlanksAs && { displayBlanksAs }),
         ...(sharedLabels.formatCode && { labelFormatCode: sharedLabels.formatCode, ...(sharedLabels.shown && { shownLabels: sharedLabels.shown }) }),
         ...(labelLevels && { labelLevels: labelLevels.map(level => ({ labels: level.texts, ...(level.indexes && { labelIndexes: level.indexes }) })) }),
         ...(axes.length > 0 && { axes }),
@@ -580,6 +587,8 @@ const ODF_CHART_TYPES: Record<string, ChartType> = lookupTable({
     bar: 'bar', line: 'line', area: 'area', circle: 'pie', ring: 'doughnut', scatter: 'scatter', bubble: 'bubble',
     radar: 'radar', 'filled-radar': 'radar', stock: 'stock', surface: 'surface',
 });
+/** Each ODF `chart:treat-empty-cells`'s way of drawing a blank point (`ignore` continues the plot past it). */
+const ODF_BLANKS: Record<string, NonNullable<ChartData['displayBlanksAs']>> = lookupTable({ 'leave-gap': 'gap', ignore: 'span', 'use-zero': 'zero' });
 
 const extractOdfChartData = (xmlBuffer: Buffer, config?: OfficeParserConfig): ChartData => {
     const xml = xmlBuffer.toString("utf8");
@@ -733,6 +742,13 @@ const extractOdfChartData = (xmlBuffer: Buffer, config?: OfficeParserConfig): Ch
         }
     });
 
+    // From the plot area's style only, as ODF and LibreOffice read it. Microsoft Office writes it on the chart's
+    // own style, and LibreOffice ignores it there.
+    const plotStyle = getElementsByTagName(chart, "chart:plot-area")[0]?.getAttribute("chart:style-name");
+    const plotStyleEl = plotStyle ? getElementsByTagName(dom, "style:style").find(style => style.getAttribute("style:name") === plotStyle) : undefined;
+    const treatEmpty = plotStyleEl ? getDirectChildren(plotStyleEl, "style:chart-properties")[0]?.getAttribute("chart:treat-empty-cells") : undefined;
+    const displayBlanksAs = ODF_BLANKS[treatEmpty ?? ''];
+
     const rawTexts = chartRawTexts(title, dataSets, labels);
 
     return {
@@ -742,6 +758,7 @@ const extractOdfChartData = (xmlBuffer: Buffer, config?: OfficeParserConfig): Ch
         dataSets,
         labels,
         ...(pointCount !== undefined && { ...(labelIndexes.length > 0 && { labelIndexes }), pointCount }),
+        ...(displayBlanksAs && { displayBlanksAs }),
         ...(axes.length > 0 && { axes }),
         rawTexts
     };
